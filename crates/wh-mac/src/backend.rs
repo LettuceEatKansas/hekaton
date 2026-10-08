@@ -299,6 +299,9 @@ impl Backend for MacBackend {
     }
 
     fn mouse_button(&self, button: MouseButton, down: bool) -> BackendResult<()> {
+        if down {
+            perm::check_protected_at(self.input.cursor()?)?;
+        }
         self.input.mouse_button(button, down)
     }
 
@@ -309,6 +312,7 @@ impl Backend for MacBackend {
         count: u8,
         guard: InputGuard<'_>,
     ) -> BackendResult<()> {
+        perm::check_protected_at(at)?;
         self.input.click(at, button, count, guard)
     }
 

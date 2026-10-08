@@ -104,11 +104,36 @@ pub(crate) fn report() -> Vec<PermissionStatus> {
     ]
 }
 
+/// The error for a click or keystroke aimed at a system prompt that ignores software input.
+pub(crate) fn protected_prompt_error(app: &str) -> BackendError {
+    BackendError::Denied(format!(
+        "{app} is a macOS authorization or privacy prompt, which ignores clicks and keystrokes          from software by design. Answer it yourself"
+    ))
+}
+
+/// Refuse to click on a system prompt (an admin password sheet, a privacy consent dialog).
+pub(crate) fn check_protected_at(p: wh_core::backend::Point) -> BackendResult<()> {
+    let Some(window) = crate::winlist::at_point(p) else {
+        return Ok(());
+    };
+    let (pid, _) = crate::wininfo::window_parts(window);
+    let bundle = crate::apps::bundle_id(pid);
+    if crate::roles::is_protected_prompt(&bundle) {
+        return Err(protected_prompt_error(&crate::apps::name(pid)));
+    }
+    Ok(())
+}
+
 /// Refuse to type when Secure Input is on and the focused control is a password field: the
 /// keystrokes would be dropped without a word. Anything that cannot be checked is let through.
 pub(crate) fn check_secure_typing() -> BackendResult<()> {
     if !secure_input_enabled() || !accessibility_granted() {
         return Ok(());
+    }
+    if let Some(pid) = crate::apps::frontmost_pid()
+        && crate::roles::is_protected_prompt(&crate::apps::bundle_id(pid))
+    {
+        return Err(protected_prompt_error(&crate::apps::name(pid)));
     }
     let focused = ax::Ax::system_wide().element("AXFocusedUIElement");
     if let Some(el) = focused {

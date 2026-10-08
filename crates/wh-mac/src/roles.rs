@@ -94,6 +94,19 @@ pub(crate) fn window_kind(subrole: Option<&str>, layer: i32, bundle_id: &str) ->
     }
 }
 
+/// Bundle ids of system surfaces that ignore synthetic input on purpose: authorization prompts
+/// (the admin password sheet), privacy consent prompts and Gatekeeper's first-launch question.
+const PROTECTED_PROMPTS: [&str; 3] = [
+    "com.apple.SecurityAgent",
+    "com.apple.UserNotificationCenter",
+    "com.apple.coreservices.uiagent",
+];
+
+/// Is this app one of the system surfaces software cannot operate?
+pub(crate) fn is_protected_prompt(bundle_id: &str) -> bool {
+    PROTECTED_PROMPTS.contains(&bundle_id)
+}
+
 /// Actions that mean "do the primary thing", best first.
 pub(crate) const PRESS_ACTIONS: [&str; 3] = ["AXPress", "AXPick", "AXConfirm"];
 
@@ -189,6 +202,14 @@ mod tests {
         assert!(has_toggle_value("AXCheckBox", None));
         assert!(has_toggle_value("AXButton", Some("AXSwitch")));
         assert!(!has_toggle_value("AXButton", None));
+    }
+
+    #[test]
+    fn protected_system_prompts() {
+        assert!(is_protected_prompt("com.apple.SecurityAgent"));
+        assert!(is_protected_prompt("com.apple.UserNotificationCenter"));
+        assert!(!is_protected_prompt("com.apple.finder"));
+        assert!(!is_protected_prompt(""));
     }
 
     #[test]
