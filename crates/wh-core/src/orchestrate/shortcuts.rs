@@ -109,10 +109,13 @@ impl Target {
 /// Anything else keeps going through `open_app`'s old route.
 pub(crate) fn is_url(text: &str) -> bool {
     let t = text.trim();
-    let lower = t.to_lowercase();
-    let rest = if lower.starts_with("https://") {
+    let starts = |n: usize, scheme: &str| {
+        t.get(..n)
+            .is_some_and(|head| head.eq_ignore_ascii_case(scheme))
+    };
+    let rest = if starts(8, "https://") {
         &t[8..]
-    } else if lower.starts_with("http://") {
+    } else if starts(7, "http://") {
         &t[7..]
     } else {
         return false;

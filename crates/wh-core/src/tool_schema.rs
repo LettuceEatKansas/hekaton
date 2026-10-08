@@ -10,6 +10,10 @@
 //!
 //! `winhands mcp` (the `winhands` binary crate) serves [`tool_definition`]; the tests here pin the
 //! text and the size budget (`test_20261008_speed_fixes.py`, `test_20261008b_cli_shim.py`).
+//!
+//! To refresh after the Python shim changes: `python -c "import asyncio, json; from winhands import
+//! shim; t = asyncio.run(shim.mcp.list_tools())[0]; print(t.description); print(json.dumps(
+//! t.inputSchema, separators=(',', ':')))"` and paste the two outputs into the constants below.
 
 use std::sync::LazyLock;
 

@@ -1685,6 +1685,37 @@ mod tests {
         assert_eq!(steps[1]["expect"], json!({"title": "Untitled"}));
     }
 
+    // The PLAN.md gate for R1c: recipes from the Python build load unchanged. When the Python
+    // repository is checked out next to this one (or `WINHANDS_PY_RECIPES` names its recipes folder),
+    // read its real bundled files through the user-folder loader; otherwise there is nothing to compare.
+    #[test]
+    fn the_python_builds_bundled_recipe_files_load_unchanged() {
+        let dir = std::env::var("WINHANDS_PY_RECIPES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(r"C:\Users\ikill\tools\winhands\winhands\recipes"));
+        if !dir.is_dir() {
+            eprintln!("skipped: no Python recipes folder at {}", dir.display());
+            return;
+        }
+        let store = RecipeStore::with_bundled(&dir, vec![]);
+        let (found, bad) = store.all();
+        assert!(bad.is_empty(), "{bad:?}");
+        assert!(found.len() >= 6, "{:?}", found.keys().collect::<Vec<_>>());
+        for name in [
+            "capture_page",
+            "close_app",
+            "explorer_newest",
+            "open_url",
+            "save_as",
+        ] {
+            let py = &found[name];
+            // the same steps the compiled-in copy has: the two builds share these five files
+            let ours = get(&shipped().1, name).unwrap();
+            assert_eq!(py.steps, ours.steps, "{name}");
+            assert_eq!(py.params, ours.params, "{name}");
+        }
+    }
+
     // ---------------------------------------------------------------- expansion
 
     #[test]

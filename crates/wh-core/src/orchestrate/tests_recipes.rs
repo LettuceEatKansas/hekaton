@@ -426,6 +426,20 @@ fn a_users_own_recipe_wins_when_the_name_is_run() {
     );
 }
 
+// Ported from test_a_text_answer_ends_without_a_screenshot_and_a_window_op_keeps_it (the window half):
+// an acting step last means the caller gets the picture of what it did.
+#[test]
+fn a_window_op_as_the_last_step_keeps_the_screenshot() {
+    let mut kit = kit();
+    kit.front("x - Notepad", "notepad.exe", 7);
+    kit.put_bundled(&good(json!({
+        "name": "act", "params": {},
+        "steps": [{"action": "window", "op": "focus", "window": "notepad.exe"}]
+    })));
+    let out = kit.run(json!({"action": "recipe", "name": "act"})).unwrap();
+    assert_eq!(out.images.len(), 1, "{}", out.text);
+}
+
 // ---------------------------------------------------------------------------- the safety layer
 
 // Ported from test_a_refusal_inside_a_recipe_stops_it_like_any_batch.

@@ -1623,6 +1623,62 @@ fn the_shell_sets_the_view_and_a_failing_sort_alone_falls_back_to_the_header() {
     assert!(pressed(&d).is_empty());
 }
 
+// ---------------------------------------------------------------------------- the bundled recipes that use them
+
+#[test]
+fn the_bundled_close_app_recipe_closes_every_window_of_the_app() {
+    let d = Desk::new();
+    let a = d.add("a - Notepad", "notepad.exe", "Notepad");
+    let b = d.add("b - Notepad", "notepad.exe", "Notepad");
+    let mail = d.add("Mail", "olk.exe", "x");
+    let out = d
+        .kit
+        .run(json!({"action": "recipe", "name": "close_app", "params": {"app": "notepad.exe"}, "shot": false}))
+        .unwrap();
+    assert!(
+        out.text.starts_with("recipe close_app(app): 1 steps"),
+        "{}",
+        out.text
+    );
+    assert!(!d.kit.fake.window_exists(a) && !d.kit.fake.window_exists(b));
+    assert!(d.kit.fake.window_exists(mail));
+}
+
+#[test]
+fn the_bundled_explorer_newest_recipe_answers_in_text() {
+    let (d, folder) = folder_desk();
+    let out = d
+        .kit
+        .run(json!({"action": "recipe", "name": "explorer_newest", "params": {"path": folder, "n": 2}}))
+        .unwrap();
+    let lines: Vec<&str> = out.text.lines().collect();
+    assert_eq!(lines[0], "recipe explorer_newest(path, n=3): 1 steps");
+    assert!(
+        lines[1].contains("view details (shell); sort date_modified desc (shell)"),
+        "{}",
+        out.text
+    );
+    assert_eq!(name_of(lines[3]), "new.txt");
+    assert!(out.images.is_empty(), "a text answer needs no picture");
+}
+
+#[test]
+fn the_bundled_open_url_recipe_waits_for_the_browser() {
+    let d = Desk::new();
+    let t = d.add("terminal", "terminal.exe", "t");
+    d.kit.fake.set_foreground(Some(t));
+    browser_hook(&d, "Example Domain - Brave");
+    let out = d
+        .kit
+        .run(json!({"action": "recipe", "name": "open_url", "params": {"url": "https://example.com"}, "shot": false}))
+        .unwrap();
+    assert!(
+        out.text.contains("opened https://example.com in w"),
+        "{}",
+        out.text
+    );
+}
+
 // ---------------------------------------------------------------------------- folder: opening the window
 
 // Ported from test_a_new_window_is_found_from_do_opens_reply.
