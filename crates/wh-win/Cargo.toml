@@ -1,0 +1,21 @@
+[package]
+name = "wh-win"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "winhands Windows backend (UI Automation, SendInput, GDI/DXGI capture, WinRT OCR). Empty on other OSes."
+
+[dependencies]
+wh-core = { workspace = true }
+
+# Everything below is compiled on Windows only; on macOS and Linux this crate is an empty lib.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation"] }
+
+[lints.rust]
+# The Windows backend needs FFI. Every unsafe block carries a one-line reason (PLAN ground rule 4).
+unsafe_code = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

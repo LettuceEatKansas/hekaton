@@ -1,0 +1,25 @@
+[package]
+name = "wh-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "winhands macOS backend (CGEvent, ScreenCaptureKit, AX, Vision). Empty on other OSes."
+
+[dependencies]
+wh-core = { workspace = true }
+
+# Everything below is compiled on macOS only; on Windows and Linux this crate is an empty lib.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-graphics = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-screen-capture-kit = { workspace = true }
+objc2-application-services = { workspace = true }
+objc2-vision = { workspace = true }
+
+[lints.rust]
+# The macOS backend needs FFI. Every unsafe block carries a one-line reason (PLAN ground rule 4).
+unsafe_code = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
