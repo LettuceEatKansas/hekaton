@@ -13,6 +13,7 @@
 pub mod clock;
 pub mod config;
 pub mod env;
+pub mod keys;
 pub mod paths;
 pub mod textutil;
 pub mod token;
