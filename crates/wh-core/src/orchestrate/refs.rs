@@ -186,8 +186,8 @@ impl<'a> WindowRefs<'a> {
         };
         let spec_l = spec.trim();
         let lower = spec_l.to_lowercase();
-        if lower.starts_with("hwnd:") {
-            let n: u64 = spec_l[5..]
+        if let Some(rest) = lower.strip_prefix("hwnd:") {
+            let n: u64 = rest
                 .trim()
                 .parse()
                 .map_err(|_| StepError::value("hwnd spec requires an integer"))?;
@@ -205,8 +205,8 @@ impl<'a> WindowRefs<'a> {
                 &owned
             }
         };
-        if lower.starts_with("pid:") {
-            let pid: u32 = spec_l[4..]
+        if let Some(rest) = lower.strip_prefix("pid:") {
+            let pid: u32 = rest
                 .trim()
                 .parse()
                 .map_err(|_| StepError::value(format!("bad pid spec: {}", py_repr(spec))))?;

@@ -66,7 +66,7 @@ pub use args::Args;
 pub use error::{StepError, StepResult};
 pub use many::{ManyResult, ToolOutcome};
 pub use refs::{ElementRefs, WindowRefs};
-pub use repeat::{FailureCounter, RepeatNote};
+pub use repeat::{FailureCounter, REPEAT_FAIL_LIMIT, REPEAT_WINDOW, RepeatNote};
 pub use snapshot::{WindowLine, format_windows};
 
 /// What a call remembers about the world between calls (the Python module globals that

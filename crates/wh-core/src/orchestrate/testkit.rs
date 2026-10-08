@@ -126,3 +126,12 @@ impl Kit {
         ctx.run(&Self::args(v))
     }
 }
+
+/// The key the core presses for select-all, copy, paste and new-tab on this OS: Ctrl on Windows,
+/// Command on a Mac. (A step that says `ctrl+c` still presses Ctrl everywhere.)
+pub(crate) fn cmd_key() -> crate::keys::Key {
+    match crate::keys::Platform::current() {
+        crate::keys::Platform::Windows => crate::keys::Key::Ctrl,
+        crate::keys::Platform::Mac => crate::keys::Key::Meta,
+    }
+}

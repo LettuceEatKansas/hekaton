@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::StepError;
-use super::testkit::Kit;
+use super::testkit::{Kit, cmd_key};
 use crate::backend::Backend;
 use crate::backend::fake::FakeBackend;
 use crate::backend::{
@@ -35,7 +35,7 @@ fn record_chords(kit: &Kit) -> Arc<Mutex<Vec<Vec<Key>>>> {
     let sink = seen.clone();
     kit.fake.set_chord_hook(move |fake, keys| {
         sink.lock().unwrap().push(keys.to_vec());
-        if keys == [Key::Ctrl, Key::Char('n')] {
+        if keys == [cmd_key(), Key::Char('n')] {
             retitle_notepad(fake);
         }
     });
@@ -78,7 +78,7 @@ fn open_new_on_a_running_editor_makes_a_blank_tab() {
     let out = do_open(&kit, "notepad", 8.0, true, true).unwrap();
     assert_eq!(
         chords.lock().unwrap().clone(),
-        vec![vec![Key::Ctrl, Key::Char('n')]]
+        vec![vec![cmd_key(), Key::Char('n')]]
     );
     assert_eq!(
         out,
@@ -218,7 +218,7 @@ fn a_fresh_notepad_on_a_restored_tab_gets_a_blank_tab() {
     let out = do_open(&kit, "notepad", 3.0, true, false).unwrap();
     assert_eq!(
         chords.lock().unwrap().clone(),
-        vec![vec![Key::Ctrl, Key::Char('n')]]
+        vec![vec![cmd_key(), Key::Char('n')]]
     );
     assert!(out.contains("Untitled - Notepad"), "{out}");
     assert!(out.starts_with("ok new blank tab in w1"), "{out}");
@@ -427,7 +427,7 @@ fn dialog_kit(
     );
     kit.fake.set_file_dialog_field(dlg, ElementId(FIELD.into()));
     kit.fake.set_chord_hook(move |fake, keys| {
-        if keys == [Key::Ctrl, Key::Char('v')] {
+        if keys == [cmd_key(), Key::Char('v')] {
             let text = crate::backend::Backend::clipboard_text(fake).unwrap();
             fake.set_element_value(&ElementId(FIELD.into()), &text);
         }

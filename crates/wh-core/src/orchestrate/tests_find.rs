@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::StepError;
 use super::find::{Cand, RowItem, group_into_rows, lookalike_note, same_line};
-use super::testkit::Kit;
+use super::testkit::{Kit, cmd_key};
 use crate::backend::fake::InputEvent;
 use crate::backend::{
     Caret, ClipboardContent, Display, Element, OcrLine, OcrResult, OcrWord, Rect, Role, WindowRef,
@@ -679,7 +679,7 @@ fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
     let seen = sink.clone();
     kit.fake.set_chord_hook(move |fake, keys| {
         seen.lock().unwrap().push(keys.to_vec());
-        if keys == [Key::Ctrl, Key::Char('c')] {
+        if keys == [cmd_key(), Key::Char('c')] {
             fake.set_clipboard(ClipboardContent::Text(body.clone()));
         }
     });
@@ -694,8 +694,8 @@ fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
     assert_eq!(
         sink.lock().unwrap().clone(),
         vec![
-            vec![Key::Ctrl, Key::Char('a')],
-            vec![Key::Ctrl, Key::Char('c')],
+            vec![cmd_key(), Key::Char('a')],
+            vec![cmd_key(), Key::Char('c')],
             vec![Key::Left]
         ]
     );

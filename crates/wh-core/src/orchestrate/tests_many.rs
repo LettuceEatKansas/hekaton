@@ -1030,3 +1030,109 @@ fn the_files_route_lists_newest_first() {
         "{listing}"
     );
 }
+
+#[test]
+fn a_refused_batch_does_not_write_what_its_steps_typed_to_the_audit_log() {
+    // The Python audit log redacted only the top level, so a batch refused at the gate (here: the
+    // owner has not acknowledged) wrote the text of its type steps to disk.
+    let kit = kit_unacknowledged();
+    let out = kit.computer.execute(
+        &json!({"actions": [{"action": "type", "text": "hunter2"}, {"action": "key", "text": "enter"}]}),
+        &kit.who,
+    );
+    assert!(!out.ok);
+    let log = std::fs::read_to_string(kit.computer.config().paths().audit_log()).unwrap();
+    assert!(!log.contains("hunter2"), "{log}");
+    assert!(log.contains("<7 chars"), "{log}");
+}
+
+// A realistic batch end to end: start Notepad, type into it, Save As, fill the dialog.
+#[test]
+fn a_whole_batch_runs_from_launch_to_a_saved_file() {
+    use crate::backend::{Backend, ClipboardContent, ElementId, WindowInfo};
+    use crate::keys::Key;
+    let kit = Kit::new();
+    let field = ElementId("filename".into());
+    // launching Notepad opens a blank window; ctrl+s opens Save As in front of it; pasting fills the
+    // box; Enter closes the dialog
+    kit.fake.set_launch_hook(|fake, _| {
+        fake.add_window(WindowInfo::basic(
+            "Untitled - Notepad",
+            "Notepad.exe",
+            30,
+            Rect::from_xywh(10, 10, 300, 160),
+        ));
+    });
+    let dialog_field = field.clone();
+    kit.fake.set_chord_hook(move |fake, keys| {
+        let cmd = super::testkit::cmd_key();
+        if keys == [Key::Ctrl, Key::Char('s')] {
+            let dlg = fake.add_window(WindowInfo {
+                class: "#32770".into(),
+                ..WindowInfo::basic(
+                    "Save As",
+                    "Notepad.exe",
+                    30,
+                    Rect::from_xywh(40, 40, 200, 100),
+                )
+            });
+            fake.set_tree(
+                dlg,
+                Element::new("root", Role::Window, "Save As").with_child(
+                    Element::new("filename", Role::Edit, "File name:")
+                        .at(Rect::new(50, 50, 150, 70))
+                        .valued("Untitled.txt"),
+                ),
+            );
+            fake.set_file_dialog_field(dlg, dialog_field.clone());
+            fake.set_foreground(Some(dlg));
+        }
+        if keys == [cmd, Key::Char('v')] {
+            let pasted = fake.clipboard_text().unwrap();
+            fake.set_element_value(&dialog_field, &pasted);
+        }
+        if keys == [Key::Enter] {
+            for w in fake.list_windows(true).unwrap() {
+                if w.title == "Save As" {
+                    fake.close_window(w.window);
+                }
+            }
+        }
+    });
+    kit.fake
+        .set_clipboard(ClipboardContent::Text("owner's text".into()));
+    let out = kit
+        .run(json!({"actions": [
+            {"action": "open_app", "text": "Notepad"},
+            {"action": "type", "text": "hello from winhands"},
+            {"action": "key", "text": "ctrl+s"},
+            {"action": "file_dialog", "text": "C:/Users/jon/out.txt"},
+            {"action": "list_windows"}
+        ]}))
+        .unwrap();
+    let lines: Vec<&str> = out.text.lines().collect();
+    assert_eq!(
+        lines[0], "ok focused w0 \"Untitled - Notepad\" pid:30",
+        "{}",
+        out.text
+    );
+    assert_eq!(lines[1], "typed 19 chars (pasted)", "{}", out.text);
+    assert_eq!(lines[2], "pressed ctrl+s", "{}", out.text);
+    assert_eq!(
+        lines[3], r"file dialog: entered C:\Users\jon\out.txt and confirmed",
+        "{}",
+        out.text
+    );
+    assert!(
+        lines[4].starts_with("w0 \"Untitled - Notepad\" Notepad.exe 10,10,300,160"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        lines.len(),
+        5,
+        "a text answer last: no settle line, no picture"
+    );
+    assert!(out.images.is_empty());
+    assert_eq!(kit.fake.clipboard_text().unwrap(), "owner's text");
+}

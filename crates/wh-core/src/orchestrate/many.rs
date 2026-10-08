@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::args::{Args, flag, get};
+use super::args::{Args, flag};
 use super::error::{StepError, StepResult};
 use super::guard::normalize_only_app;
 use super::{CallOpts, Computer, Ctx};
@@ -139,6 +139,21 @@ impl CallOpts {
             policy,
         }
     }
+}
+
+/// The call as it is logged when it fails: what each step typed is redacted too. (The Python audit
+/// log redacted only the top level, so a refused or malformed batch wrote the text of its `type`
+/// steps to disk.)
+fn redact_steps(args: &Value) -> Value {
+    let mut out = args.clone();
+    if let Some(Value::Array(steps)) = out.get_mut("actions") {
+        for step in steps.iter_mut() {
+            if step.is_object() {
+                *step = crate::audit::redact_args(step);
+            }
+        }
+    }
+    out
 }
 
 fn step_action_text(step: &Args) -> String {
@@ -349,8 +364,6 @@ impl Computer {
     ) -> Result<ManyResult, StepError> {
         let o = CallOpts::from_args(self, args, policy)?;
         let ctx = Ctx { c: self, o, who };
-        // The batch is also the last place a bogus `shot` key could matter: it is read as a flag.
-        let _ = get(args, "shot");
         ctx.run_steps(args)
     }
 
@@ -368,7 +381,13 @@ impl Computer {
 
     fn fail(&self, args: &Value, err: &StepError) -> ToolOutcome {
         let mut error = err.message().to_string();
-        log_action(self.cfg.paths(), "computer", args, &error, false);
+        log_action(
+            self.cfg.paths(),
+            "computer",
+            &redact_steps(args),
+            &error,
+            false,
+        );
         error = self.fails.note_failure("computer", args, &error);
         ToolOutcome {
             ok: false,

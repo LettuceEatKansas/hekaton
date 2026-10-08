@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::StepError;
-use super::testkit::{H, Kit, W};
+use super::testkit::{H, Kit, W, cmd_key};
 use crate::backend::fake::InputEvent;
 use crate::backend::{
     ClipboardContent, Element, MenuItem, MouseButton, OcrLine, OcrResult, OcrWord, Point, Rect,
@@ -152,7 +152,10 @@ fn a_lone_symbol_key_is_typed_and_names_are_pressed() {
         "typed '4309*82=' (not a key name, so typed as text) (pasted)"
     );
     let seen = chords.lock().unwrap().clone();
-    assert_eq!(seen, vec![ctrl('a'), vec![Key::Enter], ctrl('v')]);
+    assert_eq!(
+        seen,
+        vec![ctrl('a'), vec![Key::Enter], vec![cmd_key(), Key::Char('v')]]
+    );
 }
 
 // Ported from test_key_text_fallback_only_for_calculator_like_text (R1).
@@ -1495,4 +1498,101 @@ fn the_last_point_is_ringed_on_the_next_screenshot() {
         .unwrap();
     let (_, plain) = off.step(json!({"action": "screenshot"})).unwrap();
     assert_ne!(with_ring, plain, "the marker changes the picture");
+}
+
+/// Width and height from the IHDR chunk of a base64 PNG.
+fn png_size(b64: &str) -> (u32, u32) {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("base64");
+    let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    (w, h)
+}
+
+// Ported from test_zoom_never_upscales_more_than_2x, test_zoom_never_exceeds_shot_long and
+// test_zoom_still_downscales_a_big_region (W3), through the zoom action rather than the maths.
+#[test]
+fn a_zoom_picture_is_capped_at_twice_its_pixels_and_at_shot_long() {
+    // shot space is screen space here (1280 long edge), so a 400 x 300 box used to become 1280 x 960
+    let ctx_size = |long: i64, region: [i32; 4]| {
+        let kit = Kit::with_env(
+            MapEnv::new()
+                .with("WINHANDS_IMG", "png")
+                .with("WINHANDS_ZOOM_OCR", "0")
+                .with("WINHANDS_SHOT_LONG", &long.to_string()),
+        );
+        kit.fake.set_displays(vec![crate::backend::Display {
+            id: 1,
+            name: String::new(),
+            rect: Rect::from_xywh(0, 0, 1280, 720),
+            scale: 1.0,
+            primary: true,
+        }]);
+        kit.fake.clear_screen();
+        let (_, img) = kit
+            .step(json!({"action": "zoom", "region": region}))
+            .unwrap();
+        png_size(&img.unwrap())
+    };
+    assert_eq!(ctx_size(1280, [0, 0, 400, 300]), (800, 600));
+    let (w, h) = ctx_size(500, [0, 0, 200, 150]); // 400 x 300 screen px
+    assert_eq!(w.max(h), 500);
+    assert!(h.abs_diff(375) <= 2, "{h}");
+    assert_eq!(ctx_size(640, [0, 0, 600, 300]), (640, 320));
+}
+
+#[test]
+fn a_click_into_the_callers_own_window_is_refused_before_any_input() {
+    let mut kit = Kit::new();
+    kit.window("Claude", "claude.exe", 100, Rect::new(0, 0, 150, 180));
+    kit.window("Notepad", "notepad.exe", 5, Rect::new(150, 0, 320, 180));
+    kit.who = crate::caller::Caller::new(vec![(100, "claude.exe".into())], false);
+    for call in [
+        json!({"action": "left_click", "coordinate": [10, 10]}),
+        json!({"action": "scroll", "coordinate": [10, 10]}),
+        json!({"action": "left_click_drag", "start_coordinate": [200, 10], "coordinate": [10, 10]}),
+        json!({"action": "left_mouse_down", "coordinate": [10, 10]}),
+    ] {
+        let err = err_of(kit.step(call.clone()));
+        assert!(
+            err.message()
+                .starts_with("refused: that window belongs to claude.exe (pid 100)"),
+            "{call}: {err}"
+        );
+    }
+    assert!(kit.fake.events().is_empty());
+    kit.step(json!({"action": "left_click", "coordinate": [200, 10]}))
+        .unwrap();
+}
+
+// Ported from test_keys_without_a_window_refuse_the_agents_own_app (2026-09-19): when the caller
+// cannot be identified, the old fixed list of agent, terminal and editor processes stands in.
+#[test]
+fn keys_into_an_agent_host_are_refused_when_the_caller_is_unknown() {
+    for host in [
+        "claude.exe",
+        "hermes.exe",
+        "codex.exe",
+        "windowsterminal.exe",
+        "code.exe",
+    ] {
+        let kit = Kit::new();
+        kit.front("Agent", host, 7);
+        let err = err_of(kit.step(json!({"action": "type", "text": "hello"})));
+        assert!(matches!(err, StepError::Target(_)));
+        assert!(err.message().contains(host), "{host}: {err}");
+        assert!(
+            err.message()
+                .contains("could not work out which process is calling"),
+            "{err}"
+        );
+        assert!(kit.fake.events().is_empty());
+    }
+    let kit = Kit::new();
+    kit.front("Notes", "notepad.exe", 7);
+    kit.step(json!({"action": "type", "text": "hello"}))
+        .unwrap();
+    assert_eq!(kit.fake.typed_text(), "hello");
 }
