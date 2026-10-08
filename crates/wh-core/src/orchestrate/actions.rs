@@ -1,0 +1,860 @@
+//! One action. Port of `computer.run`: every branch of the `computer` tool's vocabulary, in the same
+//! order, with the same checks before the same input and the same words in the result.
+//!
+//! The shape of a step: validate the action; for an acting action wait for a person to stop using the
+//! mouse and bring the remembered target back; do the action; then (for an acting action) mark the
+//! input as ours, prefix the note, and run the step's `expect` check if it has one.
+
+use std::path::Path;
+
+use serde_json::Value;
+
+use super::args::{Args, flag, float_or, get, int_or, is_truthy, text as text_arg, to_int};
+use super::error::{StepError, StepResult};
+use super::snapshot::WAKE_HINT;
+use super::{Ctx, secs};
+use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_passive};
+use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection, no_guard};
+use crate::keys::{Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo};
+use crate::textutil::{fmt_g, py_repr, py_value_repr};
+
+/// Shortcuts that put something on the clipboard (`_COPY_COMBOS`).
+const COPY_COMBOS: [&str; 3] = ["ctrl+c", "ctrl+x", "ctrl+insert"];
+
+/// A step's result: the note and, when the step produced one, a base64 picture.
+pub(crate) type StepOut = (String, Option<String>);
+
+/// `_wait_timeout`: `max(0.1, min(float(timeout or 10), 120.0))`.
+fn wait_timeout(args: &Args) -> StepResult<f64> {
+    Ok(float_or(args, "timeout", 10.0)?.clamp(0.1, 120.0))
+}
+
+fn click_button(name: &str) -> StepResult<MouseButton> {
+    match name {
+        "left" => Ok(MouseButton::Left),
+        "right" => Ok(MouseButton::Right),
+        "middle" => Ok(MouseButton::Middle),
+        // Python indexed a dict with it: the KeyError's text is the quoted key
+        other => Err(StepError::runtime(py_repr(other))),
+    }
+}
+
+impl Ctx<'_> {
+    /// Do one action. Returns the result text and, for `screenshot`, `zoom` and the find actions, a
+    /// picture. Python `run(args)`.
+    pub(crate) fn run(&self, step: &Args) -> StepResult<StepOut> {
+        let action = match step.get("action") {
+            None => String::new(),
+            Some(v) => crate::textutil::py_str(v).trim().to_string(),
+        };
+        if !is_action(&action) {
+            return Err(StepError::value(format!(
+                "unknown action {}; one of: {}",
+                py_repr(&action),
+                ACTIONS_SORTED.join(", ")
+            )));
+        }
+        let mut coord: Option<Value> = get(step, "coordinate").cloned();
+        let mut text = text_arg(step, "text");
+        let mut scroll_amount: Option<i64> = None;
+        if action == "scroll" {
+            // 2026-09-21 eval: Qwen sent scroll with start_coordinate for the spot and text "10" for
+            // the amount; the spot was ignored and "10" failed as a modifier key. Read what it meant.
+            if coord.is_none()
+                && let Some(sc) = get(step, "start_coordinate")
+            {
+                coord = Some(sc.clone());
+            }
+            let t = text.trim();
+            if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+                scroll_amount = Some(if is_truthy(step, "scroll_amount") {
+                    int_or(step, "scroll_amount", 3)?
+                } else {
+                    t.parse::<i64>().unwrap_or(3)
+                });
+                text.clear();
+            }
+        }
+        let acts = !is_passive(&action);
+        let mut prefix = String::new();
+        if acts {
+            self.wait_for_human()?;
+            prefix = self.restore_target(matches!(
+                action.as_str(),
+                "key" | "type" | "hold_key" | "read_text"
+            ));
+        }
+
+        let note: String = match action.as_str() {
+            "screenshot" => {
+                let (sw, sh) = self.scale().shot_size();
+                let space = if self.o.coords == crate::scale::Coords::Norm1000 {
+                    "0-1000 on both axes".to_string()
+                } else {
+                    format!("pixels of this {sw}x{sh} image")
+                };
+                self.remember_target();
+                return Ok((
+                    format!("screenshot; give coordinates in {space}"),
+                    Some(self.screenshot_b64(None)?),
+                ));
+            }
+            "zoom" => {
+                // 2026-09-21 h-clockdate: a model sent the box as "coordinate" and got a bare
+                // "'NoneType' object is not subscriptable"; the four numbers say what it meant.
+                let region_v = get(step, "region").cloned().or_else(|| {
+                    coord
+                        .as_ref()
+                        .filter(|c| matches!(c, Value::Array(a) if a.len() == 4))
+                        .cloned()
+                });
+                let boxed = region_v.as_ref().and_then(super::args::four_numbers);
+                let Some(boxed) = boxed else {
+                    return Err(StepError::value(
+                        "zoom needs region: [x0, y0, x1, y1], the box to magnify",
+                    ));
+                };
+                let region = self.scale().min_zoom(boxed?);
+                let region_f = [
+                    f64::from(region[0]),
+                    f64::from(region[1]),
+                    f64::from(region[2]),
+                    f64::from(region[3]),
+                ];
+                let img = self.screenshot_b64(Some(region_f))?;
+                return Ok((
+                    format!(
+                        "zoomed view (coordinates stay in the full screenshot's space){}",
+                        self.zoom_text(region)?
+                    ),
+                    Some(img),
+                ));
+            }
+            "find_text" => {
+                if text.is_empty() {
+                    return Err(StepError::value(
+                        "find_text needs text: the words to look for, e.g. Developer",
+                    ));
+                }
+                return self.find_text(&text);
+            }
+            "read_field" => {
+                let label = if text.is_empty() {
+                    text_arg(step, "label")
+                } else {
+                    text.clone()
+                };
+                if label.is_empty() {
+                    return Err(StepError::value(
+                        "read_field needs text: the field's label, e.g. Email",
+                    ));
+                }
+                if let Some(val) = self.read_field_uia(&label) {
+                    return Ok((format!("{label}: {} (uia)", py_repr(&val)), None));
+                }
+                let (row_note, img) = self.find_text(&label)?;
+                return Ok((
+                    format!(
+                        "no labelled field found via UIA for {}; nearest OCR row:\n{row_note}",
+                        py_repr(&label)
+                    ),
+                    img,
+                ));
+            }
+            "cursor_position" => {
+                let p = self.be().cursor_position()?;
+                return Ok((format!("cursor at {}", self.pt(p.x, p.y)), None));
+            }
+            "list_windows" => {
+                let wins = self.c.window_refs().list(is_truthy(step, "all"))?;
+                return Ok((super::refs::format_windows(&wins).join("\n"), None));
+            }
+            "read" => {
+                // UIA first: the window's elements as `N Type "name" [state]`, no picture needed.
+                let refs = self.c.window_refs();
+                let hwnd = refs.resolve((!text.is_empty()).then_some(text.as_str()))?;
+                self.check_allowed(self.root_of(hwnd))?;
+                // 2026-10-08 (W10): read is passive, so it no longer raises an occluded Chromium
+                // window to wake its accessibility tree unless the caller asked (wake=true);
+                // otherwise it says how.
+                let wake = flag(step.get("wake"), false);
+                let limit = int_or(step, "limit", 40)?;
+                let filter = text_arg(step, "filter");
+                let (mut out, hint) =
+                    self.do_snapshot(Some(&hwnd.spec()), limit, &filter, false, wake)?;
+                if hint {
+                    out.push('\n');
+                    out.push_str(WAKE_HINT);
+                }
+                return Ok((out, None));
+            }
+            "list_files" => {
+                let path = if text.is_empty() {
+                    text_arg(step, "path")
+                } else {
+                    text.clone()
+                };
+                if path.is_empty() {
+                    return Err(StepError::value("list_files needs text: the folder path"));
+                }
+                let env = self.cfg().env();
+                self.check_wait_path_allowed(
+                    &super::files::expand_vars(env, &path),
+                    "list_files may only list",
+                )?;
+                let limit = int_or(step, "limit", 20)?;
+                let filter = text_arg(step, "filter");
+                let out = super::files::do_files(
+                    env,
+                    &|secs| self.utc_offset(secs),
+                    &path,
+                    "modified",
+                    true,
+                    limit,
+                    &filter,
+                )?;
+                return Ok((out, None));
+            }
+            "wait" => {
+                let d = float_or(step, "duration", 1.0)?.clamp(0.0, 30.0);
+                // A model asks to "wait 2.5 s" because it expects an animation. Wait for the
+                // animation instead: return once the screen settles, after at least 40% of the time
+                // asked (enemy turns pause between attacks). In a first Gemini run, 56% of all acting
+                // time was waits it added itself (66 of 117 s).
+                let took = if d > 0.3 {
+                    self.settle(Some(d), 0.4 * d, 2)?
+                } else {
+                    self.sleep(d);
+                    d
+                };
+                format!("waited {took:.1}s (asked {}s, screen settled)", fmt_g(d))
+            }
+            "read_text" => {
+                // Sends select-all / copy only when the app exposes no text to UIA, so it is an
+                // acting step.
+                self.read_text(&text)?
+            }
+            "file_dialog" => {
+                if text.is_empty() {
+                    return Err(StepError::value(
+                        "file_dialog needs text: the full file path",
+                    ));
+                }
+                self.file_dialog(&text)?
+            }
+            "open_app" => {
+                if text.is_empty() {
+                    return Err(StepError::value(
+                        "open_app needs text: the app name, e.g. Notepad",
+                    ));
+                }
+                let text = super::open::repair_escapes(&text, &|p| Path::new(p).is_file());
+                self.check_launch_allowed(&text)?;
+                // A plain name that matches an open window's title focuses that window (2026-09-21:
+                // Search Console open in a browser as "Overview - Brave" sat behind the terminal and
+                // open_app "Overview" tried to launch a program called Overview; the model had no way
+                // to reach it).
+                let is_program = !super::guard::real_launch_target(text.to_lowercase().trim())
+                    .0
+                    .is_empty();
+                let win = if is_program {
+                    None
+                } else {
+                    self.window_titled(&text)
+                };
+                let note = if let Some(w) = win {
+                    self.be().bring_to_foreground(w.window)?;
+                    format!("focused existing window {}", py_repr(&w.title))
+                } else {
+                    self.do_open(&text, 8.0, true, true)?
+                };
+                self.remember_target();
+                note
+            }
+            "clipboard_get" => {
+                let val = self.be().clipboard_text()?;
+                format!(
+                    "clipboard ({} chars): {}",
+                    val.chars().count(),
+                    py_repr(&val)
+                )
+            }
+            "clipboard_set" => {
+                if text.is_empty() {
+                    return Err(StepError::value("clipboard_set needs text"));
+                }
+                let n = text.chars().count();
+                let cap = self.cfg().clip_max();
+                if n as i64 > cap {
+                    return Err(StepError::value(format!(
+                        "clipboard_set text is {n} chars, over the {cap}-char cap"
+                    )));
+                }
+                self.be().set_clipboard_text(&text)?;
+                format!("clipboard set to {n} chars")
+            }
+            "wait_for_text" => {
+                if text.is_empty() {
+                    return Err(StepError::value(
+                        "wait_for_text needs text: the words to wait for",
+                    ));
+                }
+                let timeout = wait_timeout(step)?;
+                let mut failure: Option<StepError> = None;
+                let (found, took) = self.poll(
+                    || match self.locate_text(&text) {
+                        Ok(c) if !c.is_empty() => Some(c),
+                        Ok(_) => None,
+                        Err(e) => {
+                            failure = Some(e);
+                            Some(Vec::new())
+                        }
+                    },
+                    timeout,
+                    0.3,
+                );
+                if let Some(e) = failure {
+                    return Err(e);
+                }
+                match found {
+                    Some(c) => format!(
+                        "wait_for_text: {} appeared after {took:.1}s ({})",
+                        py_repr(&text),
+                        c[0].source
+                    ),
+                    None => format!(
+                        "wait_for_text: {} did not appear within {}s",
+                        py_repr(&text),
+                        fmt_g(timeout)
+                    ),
+                }
+            }
+            "wait_for_file" => {
+                let path = if text.is_empty() {
+                    text_arg(step, "path")
+                } else {
+                    text.clone()
+                };
+                if path.is_empty() {
+                    return Err(StepError::value(
+                        "wait_for_file needs text: the file path to watch for",
+                    ));
+                }
+                self.check_wait_path_allowed(&path, "wait_for_file may only watch")?;
+                let timeout = wait_timeout(step)?;
+                let (found, took) =
+                    self.poll(|| Path::new(&path).exists().then_some(()), timeout, 0.25);
+                if found.is_some() {
+                    format!("wait_for_file: {path} appeared after {took:.1}s")
+                } else {
+                    format!(
+                        "wait_for_file: {path} did not appear within {}s",
+                        fmt_g(timeout)
+                    )
+                }
+            }
+            "click_text" => self.click_text(step, &text)?,
+            "replace_word" => self.replace_word(step, &text)?,
+            "type" | "key" | "hold_key" => self.keyboard(step, &action, &text)?,
+            _ => self.pointer(
+                step,
+                &action,
+                coord.as_ref(),
+                &text,
+                scroll_amount,
+                &mut prefix,
+            )?,
+        };
+        if acts {
+            self.mark_ours();
+        }
+        let mut note = format!("{prefix}{note}");
+        if let Some(expect) = step.get("expect").filter(|v| crate::config::truthy(v)) {
+            self.settle(Some(0.6), 0.1, 2)?;
+            note.push_str("; ");
+            note.push_str(&self.check_expect(expect)?);
+        }
+        Ok((note, None))
+    }
+
+    /// The local zone's offset from UTC at a Unix time, for the `list_files` stamps. A backend that
+    /// cannot say reads as UTC.
+    fn utc_offset(&self, unix_secs: i64) -> i32 {
+        self.be().local_utc_offset(unix_secs).unwrap_or(0)
+    }
+
+    // ------------------------------------------------------------------ text-targeted clicks
+
+    fn click_text(&self, step: &Args, text: &str) -> StepResult<String> {
+        if text.is_empty() {
+            return Err(StepError::value(
+                "click_text needs text: the words to click",
+            ));
+        }
+        let cands = self.locate_text(text)?;
+        if cands.is_empty() {
+            return Err(StepError::target(format!(
+                "no text on screen matches {} (tried UIA then OCR); zoom or find_text first to see \
+                 what is actually there",
+                py_repr(text)
+            )));
+        }
+        let nth_arg = get(step, "nth");
+        if nth_arg.is_none() && cands.len() > 1 {
+            let labels = cands
+                .iter()
+                .take(8)
+                .enumerate()
+                .map(|(i, c)| format!("{}: {}@{}", i + 1, py_repr(&c.label), self.pt(c.x, c.y)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(StepError::target(format!(
+                "{} matches for {}, ambiguous: {labels}. Pass nth to pick one",
+                cands.len(),
+                py_repr(text)
+            )));
+        }
+        let nth = match nth_arg {
+            Some(v) if crate::config::truthy(v) => to_int(v)?,
+            _ => 1,
+        };
+        if !(1..=cands.len() as i64).contains(&nth) {
+            return Err(StepError::target(format!(
+                "nth={nth} out of range; found {} match(es) for {}",
+                cands.len(),
+                py_repr(text)
+            )));
+        }
+        let c = &cands[(nth - 1) as usize];
+        let p = Point { x: c.x, y: c.y };
+        self.c.mem().last_point = Some(p);
+        self.host_at(p)?;
+        let button_name = if is_truthy(step, "button") {
+            text_arg(step, "button")
+        } else {
+            "left".to_string()
+        };
+        let double = is_truthy(step, "double");
+        let button = click_button(&button_name)?;
+        self.with_modifiers("", || {
+            self.be()
+                .mouse_click(p, button, if double { 2 } else { 1 }, &no_guard)
+                .map_err(StepError::from)
+        })?;
+        Ok(format!(
+            "clicked {} ({}) at {}",
+            py_repr(&c.label),
+            c.source,
+            self.pt(c.x, c.y)
+        ))
+    }
+
+    fn replace_word(&self, step: &Args, text: &str) -> StepResult<String> {
+        let old = if is_truthy(step, "old") {
+            get(step, "old").cloned().unwrap_or(Value::Null)
+        } else {
+            Value::String(text.to_string())
+        };
+        let new = get(step, "new");
+        if !crate::config::truthy(&old) || new.is_none() {
+            return Err(StepError::value("replace_word needs old and new"));
+        }
+        let old_text = crate::textutil::py_str(&old);
+        let cands = self.locate_text(&old_text)?;
+        let Some(c) = cands.first() else {
+            return Err(StepError::target(format!(
+                "no text on screen matches {} (tried UIA then OCR); zoom or find_text first to see \
+                 what is actually there",
+                py_value_repr(&old)
+            )));
+        };
+        let p = Point { x: c.x, y: c.y };
+        self.c.mem().last_point = Some(p);
+        self.host_at(p)?;
+        let hit = self.be().window_at_point(p).ok().flatten();
+        self.refuse_explorer_open(hit.map(|h| self.root_of(h)))?;
+        let (x, y, _) = self.snap_to_word(p.x, p.y);
+        self.be()
+            .mouse_click(Point { x, y }, MouseButton::Left, 2, &no_guard)?;
+        self.sleep(0.05);
+        let new_text = crate::textutil::py_str(new.unwrap_or(&Value::Null));
+        let suffix = self.type_text(&new_text)?;
+        Ok(format!(
+            "replaced {} ({}) with {}{suffix}",
+            py_repr(&c.label),
+            c.source,
+            py_repr(&new_text)
+        ))
+    }
+
+    // ------------------------------------------------------------------ keyboard
+
+    fn keyboard(&self, step: &Args, action: &str, text: &str) -> StepResult<String> {
+        let fg = self.be().foreground_window().ok().flatten();
+        let is_key = action == "key" || action == "hold_key";
+        let combo_now = if is_key {
+            normalize_key_text(text)
+        } else {
+            String::new()
+        };
+        let system_combo = is_key
+            && matches!(
+                combo_now.split('+').next().unwrap_or(""),
+                "win" | "windows" | "meta"
+            );
+        // 2026-09-21: a Windows-key combo used to skip every check below because it "goes to the
+        // shell, not the focused window" - true, but under an allowlist the shell IS the escape:
+        // win+r is Run, win+s is Search, both can launch anything. Refuse them outright there.
+        if system_combo && !self.o.only_apps.is_empty() {
+            return Err(StepError::target(
+                "refused: Windows-key shortcuts (win+...) are blocked while a task allowlist is \
+                 active; they reach the Start menu, Run or Search, all outside it",
+            ));
+        }
+        if let Some(fg) = fg
+            && !system_combo
+        {
+            // Windows-key combos go to the shell, not to the focused window, so they are safe even
+            // when Claude or Hermes is in front (a local model's Start-menu batch was refused,
+            // 2026-09-20).
+            let root = self.root_of(fg);
+            self.check_not_protected(root)?;
+            self.refuse_host(root)?;
+            self.check_allowed(root)?;
+            if is_key && matches!(combo_now.as_str(), "enter" | "alt+enter") {
+                // alt+enter on a selected file shows Properties, not the file itself, but it is still
+                // File Explorer acting on the selection outside the allowlist's editor.
+                self.refuse_explorer_open(Some(root))?;
+            }
+        }
+        match action {
+            "type" => {
+                if text.is_empty() {
+                    return Err(StepError::value("type needs text"));
+                }
+                Ok(format!(
+                    "typed {} chars{}",
+                    text.chars().count(),
+                    self.type_text(text)?
+                ))
+            }
+            "key" => {
+                let combo = combo_now;
+                let reps = int_or(step, "repeat", 1)?.clamp(1, 100) as u32;
+                let trimmed = text.trim();
+                let lone = trimmed.chars().count() == 1;
+                if lone && key_from_name(&combo).is_none() {
+                    // 2026-09-21 eval: Qwen pressed key "*" in Calculator, got "unknown key" and lost
+                    // the rest of its batch. A lone symbol (* / % = ( etc.) means that character:
+                    // type it.
+                    for _ in 0..reps {
+                        self.be().type_text(trimmed, &no_guard)?;
+                        self.sleep(0.012);
+                    }
+                    return Ok(format!("typed {}", py_repr(trimmed)));
+                }
+                if !text.trim_matches('+').contains('+')
+                    && trimmed.chars().count() > 1
+                    && parse_key_combo(&combo, Platform::current()).is_err()
+                    && is_calc_like(trimmed)
+                {
+                    // 2026-09-21 eval: Qwen sent key "4309*82=" to Calculator and the batch died on
+                    // "unknown key". Text that is not a key name is what the model wants typed.
+                    // Narrowed to calculator-like text after this fallback silently typed an
+                    // unrecognised key NAME (a typo, a made-up shortcut) instead of raising the normal
+                    // "unknown key" error a model needs to see and fix.
+                    return Ok(format!(
+                        "typed {} (not a key name, so typed as text){}",
+                        py_repr(text),
+                        self.type_text(text)?
+                    ));
+                }
+                let focus = self.be().focus_token().unwrap_or(0);
+                self.c.mem().pre_key = (self.be().foreground_window().ok().flatten(), focus);
+                let seq0 = if COPY_COMBOS.contains(&combo.as_str()) {
+                    self.be().clipboard_sequence().ok().flatten()
+                } else {
+                    None
+                };
+                self.send_combo(&combo, reps)?;
+                let mut note = format!("pressed {combo}");
+                if COPY_COMBOS.contains(&combo.as_str()) {
+                    note.push_str(&self.copy_result(seq0));
+                }
+                if combo == "shift+f10" {
+                    // the keyboard's right-click: list the menu it opens
+                    let items = self.menu_items(1.0, 0.4);
+                    if !items.is_empty() {
+                        note.push_str("; menu: ");
+                        note.push_str(&self.menu_note(&items));
+                    }
+                }
+                Ok(note)
+            }
+            _ => {
+                let combo = combo_now;
+                let keys = parse_key_combo(&combo, Platform::current())?;
+                let d = float_or(step, "duration", 0.5)?.clamp(0.0, 30.0);
+                self.holding(&keys, || {
+                    self.sleep(d);
+                    Ok(())
+                })?;
+                Ok(format!("held {combo} {}s", fmt_g(d)))
+            }
+        }
+    }
+
+    /// After ctrl+c / ctrl+x: did anything reach the clipboard? h-copyfile: a copy with nothing
+    /// selected changed nothing, and the model only found out after pasting into an empty folder,
+    /// twice. Python `_copy_result`.
+    fn copy_result(&self, seq0: Option<u64>) -> String {
+        let Some(seq0) = seq0 else {
+            return String::new();
+        };
+        let (changed, _) = self.poll(
+            || {
+                (self
+                    .be()
+                    .clipboard_sequence()
+                    .ok()
+                    .flatten()
+                    .unwrap_or(seq0)
+                    != seq0)
+                    .then_some(())
+            },
+            0.6,
+            0.05,
+        );
+        if changed.is_none() {
+            return "; clipboard unchanged: nothing was copied (is the item or text really selected? \
+                    click it once and check it is highlighted)"
+                .to_string();
+        }
+        format!("; clipboard now holds {}", self.clipboard_summary())
+    }
+
+    /// What the clipboard holds now, in a few words: files (by name), text, or something else.
+    /// Python `_clipboard_summary`.
+    fn clipboard_summary(&self) -> String {
+        match self.be().clipboard() {
+            Ok(ClipboardContent::Files(files)) => {
+                let n = files.len();
+                let names: Vec<String> = files
+                    .iter()
+                    .take(5)
+                    .map(|f| super::guard::basename(f))
+                    .collect();
+                let more = if n > 5 {
+                    format!(" and {} more", n - 5)
+                } else {
+                    String::new()
+                };
+                format!("{n} file(s): {}{more}", names.join(", "))
+            }
+            Ok(ClipboardContent::Text(val)) => format!(
+                "text ({} chars): {}",
+                val.chars().count(),
+                py_repr(&val.chars().take(60).collect::<String>())
+            ),
+            Ok(_) => "new content (not text or files)".to_string(),
+            Err(_) => "new content".to_string(),
+        }
+    }
+
+    // ------------------------------------------------------------------ pointer
+
+    fn describe_point(&self, p: Point) -> String {
+        let Ok(Some(hit)) = self.be().element_at(p, 3, secs(0.25)) else {
+            return String::new();
+        };
+        // a list row's name cell is a child of the row: report the row. Python walks the element and
+        // two parents looking for one.
+        let chain = [
+            Some(&hit.element),
+            hit.ancestors.first(),
+            hit.ancestors.get(1),
+        ];
+        let pick = chain
+            .iter()
+            .flatten()
+            .find(|e| e.role.is_item())
+            .copied()
+            .unwrap_or(&hit.element);
+        let name = pick.name.trim();
+        if name.is_empty() || matches!(pick.role, Role::Pane | Role::Window) {
+            return String::new();
+        }
+        let tail = if pick.role.is_container() {
+            ", no item there"
+        } else {
+            ""
+        };
+        format!(
+            " (on {} {}{tail})",
+            pick.role.words(),
+            py_repr(&name.chars().take(60).collect::<String>())
+        )
+    }
+
+    fn pointer(
+        &self,
+        step: &Args,
+        action: &str,
+        coord: Option<&Value>,
+        text: &str,
+        scroll_amount: Option<i64>,
+        prefix: &mut String,
+    ) -> StepResult<String> {
+        let (mut x, mut y) = match coord {
+            Some(c) => self.scale().to_screen_value(c)?,
+            None => {
+                let p = self.be().cursor_position()?;
+                (p.x, p.y)
+            }
+        };
+        self.c.mem().last_point = Some(Point { x, y });
+        let coord_repr = coord.map_or_else(|| "None".to_string(), py_value_repr);
+        match action {
+            "left_click_drag" => {
+                let start = get(step, "start_coordinate")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let (sx, sy) = self.scale().to_screen_value(&start)?;
+                // 2026-09-21: host_at already refuses either end that is a host or a not-allowed
+                // window on its own, same as every other pointer action; a drag whose two ends land in
+                // two DIFFERENT windows is allowed as long as both individually pass that check (both
+                // unrestricted, with no only_apps active, or both named on the allowlist).
+                self.host_at(Point { x: sx, y: sy })?;
+                self.host_at(Point { x, y })?;
+                let h1 = self
+                    .be()
+                    .window_at_point(Point { x: sx, y: sy })
+                    .ok()
+                    .flatten();
+                let h2 = self.be().window_at_point(Point { x, y }).ok().flatten();
+                let cross =
+                    matches!((h1, h2), (Some(a), Some(b)) if self.root_of(a) != self.root_of(b));
+                self.with_modifiers(text, || {
+                    self.be()
+                        .mouse_drag(Point { x: sx, y: sy }, Point { x, y }, &no_guard)
+                        .map_err(StepError::from)
+                })?;
+                Ok(format!(
+                    "dragged {} -> {coord_repr}{}",
+                    py_value_repr(&start),
+                    if cross { " (cross-window)" } else { "" }
+                ))
+            }
+            "mouse_move" => {
+                self.be().mouse_move(Point { x, y })?;
+                Ok(format!("moved to {coord_repr}"))
+            }
+            "left_mouse_down" | "left_mouse_up" => {
+                self.host_at(Point { x, y })?;
+                self.be()
+                    .mouse_button(MouseButton::Left, action == "left_mouse_down")?;
+                Ok(action.replace('_', " "))
+            }
+            "scroll" => {
+                self.host_at(Point { x, y })?;
+                let direction = if is_truthy(step, "scroll_direction") {
+                    text_arg(step, "scroll_direction")
+                } else {
+                    "down".to_string()
+                };
+                let amount = match scroll_amount {
+                    Some(n) if n != 0 => n,
+                    _ => int_or(step, "scroll_amount", 3)?,
+                }
+                .clamp(1, 30) as u32;
+                self.with_modifiers(text, || {
+                    let Some(dir) = ScrollDirection::parse(&direction) else {
+                        // Python moved the pointer first, then refused the direction
+                        self.be().mouse_move(Point { x, y })?;
+                        return Err(StepError::value(format!(
+                            "bad direction: {}",
+                            py_repr(&direction)
+                        )));
+                    };
+                    self.be()
+                        .mouse_scroll(Point { x, y }, dir, amount, &no_guard)
+                        .map_err(StepError::from)
+                })?;
+                Ok(format!("scrolled {direction} {amount}"))
+            }
+            _ => {
+                self.host_at(Point { x, y })?;
+                if action == "double_click" {
+                    let hit = self.be().window_at_point(Point { x, y }).ok().flatten();
+                    self.refuse_explorer_open(hit.map(|h| self.root_of(h)))?;
+                    let (nx, ny, snapped) = self.snap_to_word(x, y);
+                    x = nx;
+                    y = ny;
+                    if !snapped.is_empty() {
+                        prefix.push_str(&format!(
+                            "(aim: moved onto the word {}) ",
+                            py_repr(&snapped)
+                        ));
+                    }
+                }
+                let p = Point { x, y };
+                if matches!(action, "left_click" | "double_click") {
+                    self.check_irreversible(p, step)?;
+                }
+                let button = match action {
+                    "right_click" => MouseButton::Right,
+                    "middle_click" => MouseButton::Middle,
+                    _ => MouseButton::Left,
+                };
+                let landed = if matches!(action, "left_click" | "right_click" | "double_click") {
+                    self.describe_point(p)
+                } else {
+                    String::new()
+                };
+                let in_menu = action == "left_click" && !self.popup_menus().is_empty();
+                if action == "triple_click" {
+                    self.with_modifiers(text, || {
+                        for _ in 0..3 {
+                            self.be().mouse_click(p, MouseButton::Left, 1, &no_guard)?;
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    let count = if action == "double_click" { 2 } else { 1 };
+                    self.with_modifiers(text, || {
+                        self.be()
+                            .mouse_click(p, button, count, &no_guard)
+                            .map_err(StepError::from)
+                    })?;
+                }
+                let at = if coord.is_some() {
+                    coord_repr
+                } else {
+                    self.pt(x, y)
+                };
+                let mut note = format!("{} at {at}{landed}", action.replace('_', " "));
+                if action == "right_click" {
+                    let items = self.right_click_menu_items();
+                    if !items.is_empty() {
+                        note.push_str("; menu: ");
+                        note.push_str(&self.menu_note(&items));
+                    }
+                } else if in_menu {
+                    // A click inside an open menu often opens a submenu: say what is showing now.
+                    self.sleep(0.15);
+                    let items = self.menu_items(0.3, 0.4);
+                    if !items.is_empty() {
+                        note.push_str("; menu now: ");
+                        note.push_str(&self.menu_note(&items));
+                    }
+                }
+                Ok(note)
+            }
+        }
+    }
+
+    /// Does the last step of a call end in a text-only answer?
+    pub(crate) fn no_trailing_shot(action: Option<&str>) -> bool {
+        action.is_some_and(|a| NO_TRAILING_SHOT.contains(&a))
+    }
+}
