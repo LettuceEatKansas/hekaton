@@ -2,7 +2,8 @@
 //!
 //! This crate has no OS bindings and builds on Windows, macOS and Linux. It holds the configuration,
 //! the safety layer (acknowledgement gate, destructive-action refusals, audit log, rate cap, human-input
-//! pause), the key-combo parser, coordinate scaling, the image pipeline and the [`backend::Backend`]
+//! pause), the key-combo parser, coordinate scaling, the image pipeline, the caller guard, the
+//! `computer` tool itself ([`orchestrate`]: batching, every action, the allowlist) and the [`backend::Backend`]
 //! trait that `wh-win` and `wh-mac` implement. The Python build (`winhands/`) is the specification;
 //! each module's docs name the Python file it ports.
 //!
@@ -14,6 +15,7 @@ pub mod ack;
 pub mod actions;
 pub mod audit;
 pub mod backend;
+pub mod caller;
 pub mod clock;
 pub mod config;
 pub mod destructive;
@@ -29,11 +31,11 @@ pub mod state;
 pub mod textutil;
 pub mod token;
 
+pub mod orchestrate;
+
 // Later phases. Each stub says what it will port.
-pub mod caller;
 pub mod daemon;
 pub mod mcp;
-pub mod orchestrate;
 
 #[cfg(test)]
 pub(crate) mod testutil;
