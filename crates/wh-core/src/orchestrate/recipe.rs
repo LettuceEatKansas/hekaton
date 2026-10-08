@@ -32,15 +32,17 @@ impl Ctx<'_> {
 
     /// Run one step under its recipe's allowlist (which only ever narrows the call's), or under the
     /// call's own when it has none. The call's allowlist is not touched: the step gets a context of
-    /// its own, so it is back in force the moment the step ends, however it ends.
-    /// Python `recipes.scope`.
+    /// its own, so it is back in force the moment the step ends, however it ends. A `scope` on the
+    /// step (not the call's own action, `call_args`) is set for this step only, under that allowlist.
+    /// Python `recipes.scope` with `_step_scope`.
     pub(crate) fn run_scoped(
         &self,
         step: &Args,
         scope: Option<&BTreeSet<String>>,
+        call_args: bool,
     ) -> StepResult<StepOut> {
         match scope {
-            None => self.run(step),
+            None => self.run_step_scope(step, call_args),
             Some(only_apps) => {
                 let narrowed = Ctx {
                     c: self.c,
@@ -50,7 +52,7 @@ impl Ctx<'_> {
                     },
                     who: self.who,
                 };
-                narrowed.run(step)
+                narrowed.run_step_scope(step, call_args)
             }
         }
     }

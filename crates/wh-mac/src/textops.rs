@@ -258,13 +258,25 @@ pub(crate) fn scroll_step(direction: ScrollDirection) -> (i32, i32) {
     }
 }
 
-/// Intermediate pointer positions for a drag from `from` to `to`, ending exactly on `to`.
+/// How many moves a drag makes on the way from press to release (Python `core.drag`, 2026-10-08).
+pub(crate) const DRAG_STEPS: usize = 12;
+/// After the press, before the first move: lets the app register the button going down.
+pub(crate) const DRAG_PRESS_SETTLE: Duration = Duration::from_millis(50);
+/// Between two moves, about one frame of a game capped at 60 FPS.
+pub(crate) const DRAG_STEP_GAP: Duration = Duration::from_millis(15);
+/// On the target before the release, a few frames, so a drop target sees the item over it.
+///
+/// 2026-10-08 live run (a game capped at 24 FPS): an 80 ms drag released on the same frame it
+/// arrived, so the game often never saw the card over its target and the drop did nothing. About
+/// 0.35 s per drag now.
+pub(crate) const DRAG_DWELL: Duration = Duration::from_millis(120);
+
+/// The pointer positions of a drag from `from` to `to`: [`DRAG_STEPS`] evenly spaced moves, the last
+/// exactly on `to`.
 pub(crate) fn drag_path(from: Point, to: Point) -> Vec<Point> {
-    let dist = f64::from(to.x - from.x).hypot(f64::from(to.y - from.y));
-    let steps = ((dist / 25.0).ceil() as usize).clamp(3, 24);
-    (1..=steps)
+    (1..=DRAG_STEPS)
         .map(|i| {
-            let t = i as f64 / steps as f64;
+            let t = i as f64 / DRAG_STEPS as f64;
             Point {
                 x: from.x + (f64::from(to.x - from.x) * t).round() as i32,
                 y: from.y + (f64::from(to.y - from.y) * t).round() as i32,
@@ -470,14 +482,28 @@ mod tests {
     #[test]
     fn drag_paths_end_on_the_target() {
         let path = drag_path(Point::new(0, 0), Point::new(300, 100));
+        assert_eq!(path.len(), 12);
         assert_eq!(*path.last().unwrap(), Point::new(300, 100));
-        assert!(path.len() >= 3 && path.len() <= 24);
         assert!(path.windows(2).all(|w| w[0].x <= w[1].x));
+        // even a one pixel drag makes all twelve moves and ends on the target
         let short = drag_path(Point::new(5, 5), Point::new(5, 6));
-        assert_eq!(short.len(), 3);
+        assert_eq!(short.len(), 12);
         assert_eq!(*short.last().unwrap(), Point::new(5, 6));
         let long = drag_path(Point::new(0, 0), Point::new(5000, 0));
-        assert_eq!(long.len(), 24);
+        assert_eq!(long.len(), 12);
+        assert_eq!(*long.last().unwrap(), Point::new(5000, 0));
+    }
+
+    // Ported from core.drag (7e3838c): press, 50 ms, 12 moves 15 ms apart, 120 ms on the target,
+    // then release. About a third of a second per drag.
+    #[test]
+    fn a_drag_takes_about_a_third_of_a_second() {
+        assert_eq!(DRAG_STEPS, 12);
+        assert_eq!(DRAG_PRESS_SETTLE, Duration::from_millis(50));
+        assert_eq!(DRAG_STEP_GAP, Duration::from_millis(15));
+        assert_eq!(DRAG_DWELL, Duration::from_millis(120));
+        let total = DRAG_PRESS_SETTLE + DRAG_STEP_GAP * DRAG_STEPS as u32 + DRAG_DWELL;
+        assert_eq!(total, Duration::from_millis(350));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::StepError;
-use super::testkit::{H, Kit, W, cmd_key};
+use super::testkit::{H, Kit, W, cmd_key, png_size};
 use crate::backend::fake::InputEvent;
 use crate::backend::{
     ClipboardContent, Element, MenuItem, MouseButton, OcrLine, OcrResult, OcrWord, Point, Rect,
@@ -1498,17 +1498,6 @@ fn the_last_point_is_ringed_on_the_next_screenshot() {
         .unwrap();
     let (_, plain) = off.step(json!({"action": "screenshot"})).unwrap();
     assert_ne!(with_ring, plain, "the marker changes the picture");
-}
-
-/// Width and height from the IHDR chunk of a base64 PNG.
-fn png_size(b64: &str) -> (u32, u32) {
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .expect("base64");
-    let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
-    let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
-    (w, h)
 }
 
 // Ported from test_zoom_never_upscales_more_than_2x, test_zoom_never_exceeds_shot_long and

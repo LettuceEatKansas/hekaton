@@ -34,6 +34,7 @@ mod open;
 mod recipe;
 mod refs;
 mod repeat;
+mod scope;
 mod shortcuts;
 mod shots;
 mod snapshot;
@@ -52,6 +53,8 @@ mod tests_many;
 mod tests_open;
 #[cfg(test)]
 mod tests_recipes;
+#[cfg(test)]
+mod tests_scope;
 #[cfg(test)]
 mod tests_shortcuts;
 
@@ -217,6 +220,9 @@ pub(crate) struct CallOpts {
     pub snap_call: bool,
     /// The destructive opt-in for this call.
     pub policy: Policy,
+    /// The window this call is scoped to, if any (`scope`). Shared by every context made from these
+    /// options, so a recipe step's narrowed context sees the same one.
+    pub scope: scope::ScopeCell,
 }
 
 /// A call in flight: the long-lived tool, this call's options and who is calling.

@@ -25,14 +25,15 @@ use crate::keymap::{
     FLAG_CAPS_LOCK, FLAG_SHIFT, VK_RETURN, VK_TAB, implied_flags, keycode, modifier_flag,
 };
 use crate::perm;
-use crate::textops::{ClickChain, TYPE_CHUNK_UNITS, TypeStep, drag_path, plan_typing, scroll_step};
+use crate::textops::{
+    ClickChain, DRAG_DWELL, DRAG_PRESS_SETTLE, DRAG_STEP_GAP, TYPE_CHUNK_UNITS, TypeStep,
+    drag_path, plan_typing, scroll_step,
+};
 
 /// Pause between the parts of a click so apps see distinct events.
 const CLICK_GAP: Duration = Duration::from_millis(14);
 /// Pause after moving the pointer so hover state settles before the press.
 const HOVER_GAP: Duration = Duration::from_millis(10);
-/// Pause between drag steps.
-const DRAG_GAP: Duration = Duration::from_millis(8);
 /// Pause between scroll notches.
 const SCROLL_GAP: Duration = Duration::from_millis(12);
 /// Pause between typed chunks.
@@ -286,8 +287,10 @@ impl Input {
         Ok(())
     }
 
-    /// Press at `from`, drag to `to`, release at `to`; the release happens even if the guard stops
-    /// the drag.
+    /// Press at `from`, wait for the press to register, move to `to` in twelve steps, stay there for a
+    /// few frames, release at `to`. The release happens even if the guard stops the drag. Same timing
+    /// as the Windows build (`core.drag`, 2026-10-08): a game that samples input once a frame needs to
+    /// see the item over its target before the button comes up.
     pub(crate) fn drag(&self, from: Point, to: Point, guard: InputGuard<'_>) -> BackendResult<()> {
         perm::require_post_events("drag")?;
         guard()?;
@@ -306,7 +309,7 @@ impl Input {
             Some(1),
             flags,
         )?;
-        sleep(CLICK_GAP);
+        sleep(DRAG_PRESS_SETTLE);
         let mut at = from;
         let mut outcome = Ok(());
         for p in drag_path(from, to) {
@@ -325,7 +328,10 @@ impl Input {
                 break;
             }
             at = p;
-            sleep(DRAG_GAP);
+            sleep(DRAG_STEP_GAP);
+        }
+        if outcome.is_ok() {
+            sleep(DRAG_DWELL);
         }
         self.state().buttons[0] = false;
         let up = self.mouse_event(

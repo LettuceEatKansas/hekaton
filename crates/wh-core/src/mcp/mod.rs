@@ -327,6 +327,10 @@ pub fn build_payload(
     if display != 0 {
         payload.insert("display".into(), Value::from(display));
     }
+    // 2026-10-08: scope rides top-level, so it covers every step of a batch.
+    if let Some(scope) = opt_str(args, "scope")?.filter(|s| !s.is_empty()) {
+        payload.insert("scope".into(), Value::from(scope));
+    }
     // shot=false drops the trailing screenshot (the call still settles); shot_long is this call's
     // screenshot long edge and the daemon reads this call's coordinates in that same scale.
     if !opt_bool(args, "shot")?.unwrap_or(true) {

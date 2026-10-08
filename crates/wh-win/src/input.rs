@@ -28,8 +28,18 @@ use crate::display;
 /// One wheel notch (`WHEEL_DELTA`).
 const WHEEL_DELTA: i32 = 120;
 
-/// How many interpolated moves a drag makes (Python: `range(1, 9)`).
-const DRAG_STEPS: i32 = 8;
+/// How many interpolated moves a drag makes (Python `core.drag`: `range(1, 13)`).
+const DRAG_STEPS: i32 = 12;
+/// After the press, before the first move: lets the app register the button going down.
+const DRAG_PRESS_SETTLE: Duration = Duration::from_millis(50);
+/// Between two moves, about one frame of a game capped at 60 FPS.
+const DRAG_STEP_GAP: Duration = Duration::from_millis(15);
+/// On the target before the release, a few frames, so a drop target sees the item over it.
+///
+/// 2026-10-08 live run (Slay the Spire 2 capped at 24 FPS): an 80 ms drag released on the same frame
+/// it arrived, so the game often never saw the card over its target and the drop did nothing. About
+/// 0.35 s per drag now.
+const DRAG_DWELL: Duration = Duration::from_millis(120);
 
 // ------------------------------------------------------------------------------------ pure helpers
 
@@ -48,7 +58,7 @@ pub(crate) fn normalize(p: Point, desktop: Rect) -> (i32, i32) {
     )
 }
 
-/// The `i`-th of eight points on the way from `from` to `to`, rounding down like Python's `//`.
+/// The `i`-th of [`DRAG_STEPS`] points on the way from `from` to `to`, rounding down like Python's `//`.
 pub(crate) fn drag_point(from: Point, to: Point, i: i32) -> Point {
     Point {
         x: from.x + (to.x - from.x).saturating_mul(i).div_euclid(DRAG_STEPS),
@@ -243,11 +253,13 @@ impl Injector {
         guard()?;
         self.mouse_event(MOUSEEVENTF_LEFTDOWN, 0)?;
         let moved = (|| -> BackendResult<()> {
+            sleep(DRAG_PRESS_SETTLE);
             for i in 1..=DRAG_STEPS {
                 guard()?;
                 self.move_to(drag_point(from, to, i))?;
-                sleep(Duration::from_millis(10));
+                sleep(DRAG_STEP_GAP);
             }
+            sleep(DRAG_DWELL);
             Ok(())
         })();
         // Always release, even if focus changed or the guard stopped the drag.
@@ -320,16 +332,29 @@ mod tests {
     #[test]
     fn drag_points_floor_like_python_integer_division() {
         let (a, b) = (Point::new(100, 100), Point::new(20, 140));
-        let points: Vec<Point> = (1..=8).map(|i| drag_point(a, b, i)).collect();
-        assert_eq!(points[7], b);
-        // (20 - 100) * 1 // 8 is -10 in Python, and (-80 * 3) // 8 is -30.
-        assert_eq!(points[0], Point::new(90, 105));
-        assert_eq!(points[2], Point::new(70, 115));
-        // A step that is not a multiple of 8 floors: (-7 * 1) // 8 is -1 in Python.
+        let points: Vec<Point> = (1..=DRAG_STEPS).map(|i| drag_point(a, b, i)).collect();
+        assert_eq!(points.len(), 12);
+        assert_eq!(points[11], b);
+        // (20 - 100) * 1 // 12 is -7 in Python, and (-80 * 3) // 12 is -20.
+        assert_eq!(points[0], Point::new(93, 103));
+        assert_eq!(points[2], Point::new(80, 110));
+        // A step that is not a multiple of 12 floors: (-7 * 1) // 12 is -1 in Python.
         assert_eq!(
             drag_point(Point::new(10, 10), Point::new(3, 10), 1),
             Point::new(9, 10)
         );
+    }
+
+    // Ported from core.drag (7e3838c): press, 50 ms, 12 moves 15 ms apart, 120 ms on the target,
+    // then release. About a third of a second per drag.
+    #[test]
+    fn a_drag_takes_about_a_third_of_a_second() {
+        assert_eq!(DRAG_STEPS, 12);
+        assert_eq!(DRAG_PRESS_SETTLE, Duration::from_millis(50));
+        assert_eq!(DRAG_STEP_GAP, Duration::from_millis(15));
+        assert_eq!(DRAG_DWELL, Duration::from_millis(120));
+        let total = DRAG_PRESS_SETTLE + DRAG_STEP_GAP * DRAG_STEPS as u32 + DRAG_DWELL;
+        assert_eq!(total, Duration::from_millis(350));
     }
 
     #[test]

@@ -391,6 +391,22 @@ fn call_options_are_not_recipe_params() {
     assert_eq!(p["shot_long"], 800);
 }
 
+// Ported from test_20261008d_scope_shim.py::test_wh_passes_scope_to_a_computer_call_and_keeps_it_out_of_recipe_params.
+#[test]
+fn wh_passes_scope_to_a_computer_call_and_keeps_it_out_of_recipe_params() {
+    let game = "Slay the Spire 2";
+    let scope = format!("scope={game}");
+    let (tool, p) = parse(&["computer", "action=screenshot", &scope]);
+    assert_eq!(tool, "computer");
+    assert_eq!(p["scope"], game);
+    let (_, p) = parse(&["recipe", "run", "capture_page", "url=https://x.org", &scope]);
+    assert_eq!(p["scope"], game);
+    assert_eq!(p["params"], json!({"url": "https://x.org"}));
+    // a window name that looks like a number stays text
+    let (_, p) = parse(&["computer", "action=screenshot", "scope=2048"]);
+    assert_eq!(p["scope"], "2048");
+}
+
 #[test]
 fn bad_shortcut_commands_are_a_clear_exit() {
     for (argv, why) in [

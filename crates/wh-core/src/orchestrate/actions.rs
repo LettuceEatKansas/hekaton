@@ -102,12 +102,23 @@ impl Ctx<'_> {
                     return self.save_screenshot(step);
                 }
                 let (sw, sh) = self.scale().shot_size();
+                self.remember_target();
+                if self.scoped() {
+                    // say what the picture is, so the model knows its coordinate space is the window
+                    return Ok((
+                        format!(
+                            "screenshot of {} ({sw}x{sh}); give coordinates in {}",
+                            self.scope_name(),
+                            self.this_image_space()
+                        ),
+                        Some(self.screenshot_b64(None)?),
+                    ));
+                }
                 let space = if self.o.coords == crate::scale::Coords::Norm1000 {
                     "0-1000 on both axes".to_string()
                 } else {
                     format!("pixels of this {sw}x{sh} image")
                 };
-                self.remember_target();
                 return Ok((
                     format!("screenshot; give coordinates in {space}"),
                     Some(self.screenshot_b64(None)?),
@@ -136,9 +147,14 @@ impl Ctx<'_> {
                     f64::from(region[3]),
                 ];
                 let img = self.screenshot_b64(Some(region_f))?;
+                let whole = if self.scoped() {
+                    format!("the {} screenshot's", self.scope_name())
+                } else {
+                    "the full screenshot's".to_string()
+                };
                 return Ok((
                     format!(
-                        "zoomed view (coordinates stay in the full screenshot's space){}",
+                        "zoomed view (coordinates stay in {whole} space){}",
                         self.zoom_text(region)?
                     ),
                     Some(img),

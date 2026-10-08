@@ -79,6 +79,8 @@ struct State {
     screens: VecDeque<Image>,
     last_screen: Option<Image>,
     captures: u64,
+    /// The rectangle of every capture, in order.
+    capture_log: Vec<Rect>,
     trees: HashMap<WindowRef, Element>,
     performed: Vec<(ElementId, ElementAction)>,
     focused: Option<Element>,
@@ -123,6 +125,7 @@ struct State {
     window_ops: Vec<(WindowRef, WindowOp)>,
     hold_open: Vec<WindowRef>,
     ignore_ops: bool,
+    no_restore: bool,
     max_width: Option<i32>,
     folder_windows: Vec<(String, WindowRef)>,
     shell: ShellMode,
@@ -178,6 +181,7 @@ impl FakeBackend {
                 screens: VecDeque::new(),
                 last_screen: None,
                 captures: 0,
+                capture_log: Vec::new(),
                 trees: HashMap::new(),
                 performed: Vec::new(),
                 focused: None,
@@ -222,6 +226,7 @@ impl FakeBackend {
                 window_ops: Vec::new(),
                 hold_open: Vec::new(),
                 ignore_ops: false,
+                no_restore: false,
                 max_width: None,
                 folder_windows: Vec::new(),
                 shell: ShellMode::Works,
@@ -321,6 +326,11 @@ impl FakeBackend {
     pub fn queue_screens(&self, images: Vec<Image>) {
         let mut s = self.st();
         s.screens = images.into();
+    }
+
+    /// The rectangle of every capture taken so far, oldest first (what a crop was asked to cover).
+    pub fn captured_rects(&self) -> Vec<Rect> {
+        self.st().capture_log.clone()
     }
 
     /// How many captures have been taken.
@@ -583,6 +593,11 @@ impl FakeBackend {
         self.st().ignore_ops = value;
     }
 
+    /// Make `restore_window` do nothing: a minimised window that stays minimised.
+    pub fn refuse_restore(&self, value: bool) {
+        self.st().no_restore = value;
+    }
+
     /// Clamp a moved window's width to at most this (an app that limits its own size).
     pub fn limit_window_width(&self, width: i32) {
         self.st().max_width = Some(width);
@@ -788,6 +803,7 @@ impl Backend for FakeBackend {
         };
         let mut s = self.st();
         s.captures += 1;
+        s.capture_log.push(rect);
         let source = if s.screens.len() > 1 {
             s.screens.pop_front()
         } else if let Some(last) = s.screens.front() {
@@ -909,6 +925,9 @@ impl Backend for FakeBackend {
 
     fn restore_window(&self, window: WindowRef, _timeout: Duration) -> BackendResult<()> {
         let mut s = self.st();
+        if s.no_restore {
+            return Ok(());
+        }
         let info = s
             .windows
             .iter_mut()

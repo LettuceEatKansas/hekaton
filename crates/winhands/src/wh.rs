@@ -29,7 +29,9 @@ Shortcuts and recipes (each is one `computer` call, so Hermes cron or a script r
     wh folder path=C:/Users/me/Downloads sort="date_modified desc" list=3
 
 `recipe run NAME` turns every other key=value into a recipe param, except the call options shot,
-shot_long, only_apps, display, coords, allow_irreversible and allow_destructive. Exit code 1 when a step failed.
+shot_long, only_apps, display, scope, coords, allow_irreversible and allow_destructive. Exit code 1 when a step failed.
+`scope=<window>` (a wN ref, title part or app.exe, also on any `computer` call) limits screenshots and
+coordinates to that window.
 
 Values: text-like keys (text, title, name, value, query, path, keys, app, target, window, filter,
 and any key wh does not know) are ALWAYS kept as text, so text=123 and text=yes type those words.
@@ -118,11 +120,12 @@ pub const LIST_KEYS: [&str; 1] = ["only_apps"];
 pub const SUGAR: [&str; 3] = ["recipe", "window", "folder"];
 
 /// The options of a call, which `recipe run` does not turn into recipe params.
-pub const CALL_KEYS: [&str; 7] = [
+pub const CALL_KEYS: [&str; 8] = [
     "shot",
     "shot_long",
     "only_apps",
     "display",
+    "scope",
     "coords",
     "allow_irreversible",
     "allow_destructive",

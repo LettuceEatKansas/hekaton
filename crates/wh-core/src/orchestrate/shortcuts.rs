@@ -314,7 +314,7 @@ impl Ctx<'_> {
         self.check_allowed(root)
     }
 
-    fn state_of(&self, w: WindowRef) -> StepResult<WindowState> {
+    pub(crate) fn state_of(&self, w: WindowRef) -> StepResult<WindowState> {
         Ok(self.be().window_geometry(w)?.state)
     }
 
@@ -626,14 +626,20 @@ impl Ctx<'_> {
         Ok(path)
     }
 
-    /// `screenshot` with `save_to`: write the picture (the whole display, or one window with
-    /// `window=`) at full resolution, and still return the usual picture unless `shot=false`.
+    /// `screenshot` with `save_to`: write the picture (the whole display, the call's scope, or one
+    /// window with `window=`) at full resolution, and still return the usual picture unless `shot=false`.
     /// Python `shortcuts.save_screenshot`.
     pub(crate) fn save_screenshot(&self, step: &Args) -> StepResult<(String, Option<String>)> {
         let path = self.save_path(&text_arg(step, "save_to"))?;
         let spec = text_arg(step, "window");
         let (area, what) = if spec.is_empty() {
-            (self.display_rect(), "the display".to_string())
+            // under a scope the display is the window (Python `_scope_name`)
+            let what = if self.scoped() {
+                self.scope_name()
+            } else {
+                "the display".to_string()
+            };
+            (self.display_rect(), what)
         } else {
             let target = self
                 .resolve_window(&spec, false)?

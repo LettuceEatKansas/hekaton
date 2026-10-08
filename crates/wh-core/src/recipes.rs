@@ -865,7 +865,7 @@ fn expand_one(
     Ok(out)
 }
 
-fn is_recipe_step(s: &Value) -> bool {
+pub(crate) fn is_recipe_step(s: &Value) -> bool {
     s.as_object().is_some_and(|m| {
         m.get("action")
             .is_some_and(|a| truthy(a) && py_str(a).trim() == "recipe")
@@ -1622,6 +1622,8 @@ mod tests {
         let save = run("save_as", json!({"path": "C:\\a\\b.txt"}));
         assert_eq!(actions_of(&save), ["key", "file_dialog"]);
         assert_eq!(save[0]["text"], "ctrl+shift+s");
+        // Save As, not a plain save: the File name box has to be there before the path is typed
+        assert_eq!(save[0]["expect"], json!({"text": "File name"}));
         assert_eq!(save[1]["text"], "C:\\a\\b.txt");
         assert_eq!(save[1]["expect"], json!({"gone_text": "File name"}));
 

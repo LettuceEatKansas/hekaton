@@ -32,6 +32,17 @@ pub(crate) fn textured(w: u32, h: u32) -> Image {
     Image::new(w, h, bytes).expect("textured image")
 }
 
+/// Width and height from the IHDR chunk of a base64 PNG.
+pub(crate) fn png_size(b64: &str) -> (u32, u32) {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("base64");
+    let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    (w, h)
+}
+
 pub(crate) struct Kit {
     pub fake: Arc<FakeBackend>,
     pub clock: Arc<FakeClock>,

@@ -138,10 +138,27 @@ impl<'a> Ctx<'a> {
     }
 
     /// The monitor containing the centre of the foreground window, or `None` (`_fg_monitor`).
+    ///
+    /// 2026-10-08 live run: Hermes (the agent's own app) was in front on monitor 2 while the game it
+    /// was playing sat on monitor 1, so every screenshot showed Hermes and every drag was refused as
+    /// aimed at the agent itself. When the window in front is the agent's own (its app, terminal or
+    /// their parents), the monitor is the one of the topmost window that is not.
     pub(crate) fn fg_monitor(&self) -> Option<Rect> {
         let root = self.fg_root()?;
-        let info = self.info(root)?;
-        let c = info.rect.center();
+        let behind_the_agent = if self.is_host(root) {
+            self.be().list_windows(false).ok().and_then(|list| {
+                list.into_iter()
+                    .find(|w| !w.hidden && !w.minimized && !self.is_host(w.window))
+                    .map(|w| w.rect)
+            })
+        } else {
+            None
+        };
+        let rect = match behind_the_agent {
+            Some(r) => r,
+            None => self.info(root)?.rect,
+        };
+        let c = rect.center();
         self.monitors_cached()
             .into_iter()
             .find(|d| d.rect.contains(c))
@@ -158,13 +175,18 @@ impl<'a> Ctx<'a> {
             .unwrap_or_else(|| Rect::from_xywh(0, 0, 1920, 1080))
     }
 
-    /// The screen the model sees: this call's `display`, else the configured `x,y,w,h`, else the
-    /// monitor holding the window in front, else the primary one (Python `display_rect()`).
+    /// The screen the model sees: the window this call is scoped to, else this call's `display`, else
+    /// the configured `x,y,w,h`, else the monitor holding the window in front, else the primary one
+    /// (Python `display_rect()`).
     ///
     /// 2026-09-21: Search Console was focused in Brave on monitor 2 while every screenshot showed
     /// monitor 1, so the model never saw it. A configured spec that does not parse is ignored here
     /// (Python raised a `ValueError` from whichever action first asked for the rect).
     pub(crate) fn display_rect(&self) -> Rect {
+        // A scoped call sees one window, whatever `display` or the configuration say.
+        if let Some(r) = self.scope_rect() {
+            return r;
+        }
         if let Some(r) = self.o.display {
             return r;
         }

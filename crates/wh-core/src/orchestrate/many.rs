@@ -122,6 +122,7 @@ impl CallOpts {
             only_apps,
             snap_call: args.get("snap").is_some_and(truthy),
             policy,
+            scope: super::scope::ScopeCell::default(),
         })
     }
 
@@ -137,6 +138,7 @@ impl CallOpts {
             only_apps: BTreeSet::new(),
             snap_call: false,
             policy,
+            scope: super::scope::ScopeCell::default(),
         }
     }
 }
@@ -216,11 +218,14 @@ impl Ctx<'_> {
     /// The batch loop. Python `run_many` after the per-call options are set.
     fn run_steps(&self, args: &Args) -> StepResult<ManyResult> {
         let want_shot = flag(args.get("shot"), true);
-        let steps: Vec<Value> = match args.get("actions") {
-            Some(Value::Array(list)) if !list.is_empty() => list.clone(),
-            Some(v) if truthy(v) && !v.is_array() => vec![v.clone()],
-            _ => vec![Value::Object(args.clone())],
+        let (steps, own_args): (Vec<Value>, bool) = match args.get("actions") {
+            Some(Value::Array(list)) if !list.is_empty() => (list.clone(), false),
+            Some(v) if truthy(v) && !v.is_array() => (vec![v.clone()], false),
+            _ => (vec![Value::Object(args.clone())], true),
         };
+        // The call's own arguments are the one step when it is a lone action (not a recipe, whose
+        // steps are its own): its `scope` was applied for the whole call already.
+        let own_args = own_args && !crate::recipes::is_recipe_step(&steps[0]);
         // 2026-10-08: a `recipe` step becomes that recipe's own steps, so everything below (expect, the
         // stop at the first failure, settling, the safety checks in `run`) treats them like any batch.
         let items = crate::recipes::expand(&self.c.recipes, &steps, &self.o.only_apps)
@@ -244,7 +249,8 @@ impl Ctx<'_> {
             let outcome = self.skip_reason(step).and_then(|skip| {
                 if skip.is_empty() {
                     // a recipe's own only_apps narrows the call's for its steps
-                    self.run_scoped(step, item.scope.as_ref()).map(Some)
+                    self.run_scoped(step, item.scope.as_ref(), own_args)
+                        .map(Some)
                 } else {
                     notes.push(format!(
                         "step {} ({}) skipped: {skip}",
@@ -366,9 +372,10 @@ impl Ctx<'_> {
                 if want_shot {
                     shots.push(self.screenshot_b64(None)?);
                     notes.push(format!(
-                        "screen settled in {:.0} ms [image {}: full screen]",
+                        "screen settled in {:.0} ms [image {}: {}]",
                         waited * 1000.0,
-                        shots.len()
+                        shots.len(),
+                        self.image_tag()
                     ));
                 } else {
                     notes.push(format!("screen settled in {:.0} ms", waited * 1000.0));
@@ -405,6 +412,8 @@ impl Computer {
     ) -> Result<ManyResult, StepError> {
         let o = CallOpts::from_args(self, args, policy)?;
         let ctx = Ctx { c: self, o, who };
+        // after `only_apps`, because the window goes through the same allowlist check
+        ctx.apply_call_scope(args)?;
         ctx.run_steps(args)
     }
 

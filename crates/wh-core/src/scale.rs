@@ -138,9 +138,12 @@ impl Scale {
                 if !((0.0..=1000.0).contains(&x) && (0.0..=1000.0).contains(&y)) {
                     return invalid(format!("coordinate {} is outside 0..1000", py_pair(x, y)));
                 }
+                // The origin is added after the truncation: `as i32` of a negative sum rounds toward
+                // zero, one pixel off on a monitor or window whose origin is negative (left of or
+                // above the primary one). Python `to_screen`, 2026-10-08.
                 Ok((
-                    (f64::from(left) + x / 1000.0 * f64::from(w - 1)) as i32,
-                    (f64::from(top) + y / 1000.0 * f64::from(h - 1)) as i32,
+                    left + (x / 1000.0 * f64::from(w - 1)) as i32,
+                    top + (y / 1000.0 * f64::from(h - 1)) as i32,
                 ))
             }
             Coords::Pixels => {
@@ -152,10 +155,7 @@ impl Scale {
                     ));
                 }
                 let s = self.factor();
-                Ok((
-                    (f64::from(left) + x / s) as i32,
-                    (f64::from(top) + y / s) as i32,
-                ))
+                Ok((left + (x / s) as i32, top + (y / s) as i32))
             }
         }
     }
@@ -574,6 +574,54 @@ mod tests {
         );
         assert_eq!(above.to_screen(1000.0, 0.0), Ok((1919, -1080)));
         assert_eq!(above.from_screen(1919, -1080), [1000, 0]);
+    }
+
+    // ---- ported from test_20261008d_origin.py: the origin is added after truncating, so a monitor
+    // whose origin is negative is not a pixel off.
+
+    fn left_monitor(coords: Coords) -> Scale {
+        // a native size shot, so pixels are screen pixels
+        Scale::new(Rect::from_xywh(-1920, 0, 1920, 1080), coords, 1920)
+    }
+
+    #[test]
+    fn norm1000_on_a_monitor_with_a_negative_origin() {
+        let s = left_monitor(Coords::Norm1000);
+        assert_eq!(s.to_screen(0.0, 0.0), Ok((-1920, 0)));
+        // 959.5 and 539.5 truncate, then the origin is added
+        assert_eq!(s.to_screen(500.0, 500.0), Ok((-1920 + 959, 539)));
+        assert_eq!(s.to_screen(1000.0, 1000.0), Ok((-1, 1079)));
+    }
+
+    #[test]
+    fn pixels_on_a_monitor_with_a_negative_origin() {
+        let s = left_monitor(Coords::Pixels);
+        assert_eq!(s.to_screen(0.0, 0.0), Ok((-1920, 0)));
+        assert_eq!(s.to_screen(960.0, 540.0), Ok((-960, 540)));
+        assert_eq!(s.to_screen(1919.0, 1079.0), Ok((-1, 1079)));
+    }
+
+    #[test]
+    fn a_fractional_pixel_point_truncates_before_the_negative_origin() {
+        // 1920 -> 1280 shot, scale 2/3: shot pixel 1 is screen pixel 1.5. Truncated first, that is
+        // origin + 1; added first, -1918.5 would round toward zero to -1918, a pixel off.
+        let s = Scale::new(
+            Rect::from_xywh(-1920, -1080, 1920, 1080),
+            Coords::Pixels,
+            1280,
+        );
+        assert_eq!(s.to_screen(1.0, 1.0), Ok((-1920 + 1, -1080 + 1)));
+        assert_eq!(s.to_screen(3.0, 3.0), Ok((-1920 + 4, -1080 + 4)));
+    }
+
+    #[test]
+    fn a_positive_origin_is_unchanged() {
+        let s = Scale::new(
+            Rect::from_xywh(2560, 60, 1920, 1080),
+            Coords::Norm1000,
+            1920,
+        );
+        assert_eq!(s.to_screen(500.0, 500.0), Ok((2560 + 959, 60 + 539)));
     }
 
     #[test]

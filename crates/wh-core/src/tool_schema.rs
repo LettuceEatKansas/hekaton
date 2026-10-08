@@ -3,8 +3,8 @@
 //! This is the text a model reads on every turn, so it is mirrored from the Python build's
 //! `winhands/shim.py` (`TOOL_DESCRIPTION` and the slimmed schema FastMCP builds from the `computer`
 //! function signature) exactly, as of the 2026-10-08 additions: `shot`, `shot_long`, `wake`, the
-//! shortcuts (`window`, `folder`, `at`, `save_to`) and the recipe actions. Parameter names, their
-//! order and their types match `asyncio.run(shim.mcp.list_tools())` character for character; there are
+//! shortcuts (`window`, `folder`, `at`, `save_to`), the recipe actions and `scope`. Parameter names,
+//! their order and their types match `asyncio.run(shim.mcp.list_tools())` character for character; there are
 //! no `title` or `default` fields and no `required` list, and optional parameters are not wrapped in
 //! `anyOf` with null.
 //!
@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 pub const TOOL_NAME: &str = "computer";
 
 /// The tool description (Python `shim.TOOL_DESCRIPTION`).
-pub const TOOL_DESCRIPTION: &str = r##"Use the Windows desktop like a person. Acting calls settle, then return a screenshot; shot=false returns text only (use it for steps you need not see).
+pub const TOOL_DESCRIPTION: &str = r##"Use the Windows desktop like a person. Acting calls settle, then return a screenshot; shot=false returns text only.
 Pointer: left_click | right_click (lists menu items) | double_click | triple_click | middle_click | mouse_move (hover) | left_click_drag (start_coordinate -> coordinate) | scroll (scroll_direction, scroll_amount) | left_mouse_down | left_mouse_up. coordinate = [x, y] in the screenshot; text on a click = modifier held ("shift"). If you pass shot_long (screenshot long edge, px), pass the same value on every call that uses coordinates from that screenshot.
 Keys: type (text) | key (text: "ctrl+s", "Return"; repeat) | hold_key (text, duration).
 Look: screenshot | zoom (region [x0,y0,x1,y1]; adds UIA/OCR text) | find_text (text; lines with click points) | read (text = window title or ref, blank = front window; UI elements; filter, limit; wake=true raises an empty browser window briefly to build its tree) | read_field (text = label) | read_text (document text, numbered; text = word keeps matching lines) | list_windows | cursor_position.
@@ -35,10 +35,10 @@ Batch known sequences: actions=[{"action": ...}, ...] runs many steps in one cal
 Shortcuts, no clicks: window (op close|minimize|maximize|restore|focus|move; window = wN, title part or app.exe; move rect [x,y,w,h]). folder (path, view details|list|tiles|icons, sort "date_modified desc", list=n: opens Explorer set up, returns the top n entries as text).
 Recipes: recipe_list | recipe (name, params {k: v}) | recipe_save (name, text = description, params, steps using {k}, overwrite). Prefer recipe/window/folder to clicking; after a task likely to repeat, recipe_save it with params, not literals. A step may carry on_fail "skip", when {text|gone_text|title}.
 at=[fx, fy] (0..1 of window) replaces coordinate. screenshot save_to=file.png.
-display = monitor 1, 2, ... only_apps = process names input may reach, e.g. ["notepad.exe"]. allow_irreversible = true presses a Send/Buy/Delete-looking button under only_apps."##;
+display = monitor 1, 2, ... scope = a window: screenshots and coordinates cover only that window (sharper, fewer tokens). only_apps = process names input may reach, e.g. ["notepad.exe"]. allow_irreversible = true presses a Send/Buy/Delete-looking button under only_apps."##;
 
 /// The JSON input schema, compact (Python `list_tools()[0].inputSchema` through `json.dumps`).
-pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array"},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"}},"type":"object"}"##;
+pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array"},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"},"scope":{"type":"string"}},"type":"object"}"##;
 
 static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     serde_json::from_str(INPUT_SCHEMA_JSON).expect("the tool schema is valid JSON")
@@ -152,8 +152,8 @@ mod tests {
     fn the_parameters_come_in_the_pythons_order() {
         let names: Vec<String> = props().keys().cloned().collect();
         assert_eq!(names.first().map(String::as_str), Some("action"));
-        assert_eq!(names.last().map(String::as_str), Some("overwrite"));
-        assert_eq!(names.len(), 39);
+        assert_eq!(names.last().map(String::as_str), Some("scope"));
+        assert_eq!(names.len(), 40);
         let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
         assert!(pos("allow_destructive") < pos("shot") && pos("wake") < pos("window"));
         assert_eq!(
@@ -186,6 +186,16 @@ mod tests {
         ] {
             assert!(TOOL_DESCRIPTION.contains(needle), "{needle}");
         }
+        assert!(!TOOL_DESCRIPTION.contains('\u{2014}'));
+    }
+
+    // ---- ported from test_20261008d_scope_shim.py::test_the_schema_has_scope_and_one_short_sentence
+    #[test]
+    fn the_schema_has_scope_and_one_short_sentence() {
+        assert_eq!(props()["scope"], json!({"type": "string"}));
+        assert!(TOOL_DESCRIPTION.contains(
+            "scope = a window: screenshots and coordinates cover only that window (sharper, fewer tokens)"
+        ));
         assert!(!TOOL_DESCRIPTION.contains('\u{2014}'));
     }
 

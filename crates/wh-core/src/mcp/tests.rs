@@ -211,6 +211,7 @@ fn unset_extras_are_not_sent_so_old_payloads_are_unchanged() {
         "shot",
         "shot_long",
         "display",
+        "scope",
         "allow_destructive",
     ] {
         assert!(!p.contains_key(key), "{key}");
@@ -318,6 +319,26 @@ fn a_batch_replaces_the_payload_and_keeps_the_top_level_options() {
     assert_eq!(p["only_apps"], json!(["notepad.exe"]));
     assert_eq!(p["allow_destructive"], true);
     assert_eq!(p["coords"], "pixels");
+}
+
+// Ported from test_20261008d_scope_shim.py::test_scope_rides_at_the_top_level_so_it_covers_a_batch
+// and test_scope_is_not_sent_when_not_set.
+#[test]
+fn scope_rides_at_the_top_level_so_it_covers_a_batch() {
+    let game = "Slay the Spire 2";
+    let p = payload(json!({"action": "screenshot", "scope": game}));
+    assert_eq!(p["scope"], game);
+    let p = payload(json!({"scope": game, "actions": [
+        {"action": "left_click", "coordinate": [1, 2]}, {"action": "screenshot"}]}));
+    assert_eq!(p["scope"], game);
+    assert_eq!(p["actions"].as_array().map(Vec::len), Some(2));
+    assert!(!p["actions"][0].as_object().unwrap().contains_key("scope"));
+}
+
+#[test]
+fn scope_is_not_sent_when_not_set() {
+    assert!(!payload(json!({"action": "screenshot"})).contains_key("scope"));
+    assert!(!payload(json!({"action": "screenshot", "scope": ""})).contains_key("scope"));
 }
 
 #[test]

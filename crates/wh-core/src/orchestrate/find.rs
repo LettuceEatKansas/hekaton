@@ -386,6 +386,11 @@ impl Ctx<'_> {
             .uia_elements(self.fg_root(), None)
             .into_iter()
             .filter(|e| e.name.to_lowercase().contains(&q))
+            // scoped: the title bar is not in view
+            .filter(|e| {
+                let c = e.rect.center();
+                self.in_view(f64::from(c.x), f64::from(c.y))
+            })
             .map(|e| {
                 let c = e.rect.center();
                 Cand {
@@ -585,6 +590,13 @@ impl Ctx<'_> {
         let mut items: Vec<(f64, f64, f64, f64, String)> = self
             .uia_elements(self.fg_root(), None)
             .into_iter()
+            .filter(|e| {
+                // scoped: only what the window's picture shows
+                self.in_view(
+                    f64::from(e.rect.left + e.rect.right) / 2.0,
+                    f64::from(e.rect.top + e.rect.bottom) / 2.0,
+                )
+            })
             .map(|e| {
                 (
                     f64::from(e.rect.left),
