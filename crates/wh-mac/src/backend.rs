@@ -470,3 +470,27 @@ impl Backend for MacBackend {
         .any(|r| r.id == id && r.pid == pid)
     }
 }
+
+impl MacBackend {
+    /// Diagnostics for the end-to-end tests: the window server's view of every on-screen window
+    /// that contains `p`, front to back.
+    #[doc(hidden)]
+    pub fn debug_windows_at(&self, p: Point) -> Vec<String> {
+        winlist::on_screen_list()
+            .iter()
+            .filter(|w| w.bounds.contains(p))
+            .map(|w| {
+                format!(
+                    "id={} pid={} owner={:?} layer={} alpha={} title={:?} bounds={:?}",
+                    w.id, w.pid, w.owner_name, w.layer, w.alpha, w.title, w.bounds
+                )
+            })
+            .collect()
+    }
+
+    /// Diagnostics for the end-to-end tests: what Accessibility says about the focus.
+    #[doc(hidden)]
+    pub fn debug_focus(&self) -> String {
+        tree::debug_focus()
+    }
+}

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use wh_core::backend::{MouseButton, Point, ScrollDirection};
 
+use crate::keymap::ascii_key;
 use crate::ocrgeom::collapse_ws;
 
 /// Most UTF-16 units sent in one synthetic key event. Some apps drop longer unicode strings.
@@ -16,6 +17,19 @@ pub(crate) const PASTE_ABOVE_UNITS: usize = 400;
 pub(crate) const PIXELS_PER_NOTCH: i32 = 60;
 /// Longest line text a document hit carries.
 pub(crate) const MAX_HIT_LINE_CHARS: usize = 400;
+
+/// Drop the invisible direction marks some apps put in front of numbers and labels (Calculator
+/// prefixes its display with U+200E), which no caller wants in a name.
+pub(crate) fn strip_bidi(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+        })
+        .collect()
+}
 
 // ------------------------------------------------------------------------------------ typing
 
@@ -28,10 +42,22 @@ pub(crate) enum TypeStep {
     Return,
     /// The Tab key.
     Tab,
+    /// An ASCII character as the real US-layout key (`code`, with Shift if `shift`) carrying the
+    /// character as its unicode string too. Apps that read the key code (Calculator) and apps
+    /// that read the string (text fields) both get what they look for.
+    Key {
+        /// Virtual keycode.
+        code: u16,
+        /// Shift is part of the character.
+        shift: bool,
+        /// The character itself.
+        unit: u16,
+    },
 }
 
-/// Cut `text` into key events: unicode runs of at most `max_units` (never splitting a surrogate
-/// pair), with newlines and tabs as real keys so they act the way the keys do.
+/// Cut `text` into key events: ASCII as real keys, everything else in unicode runs of at most
+/// `max_units` (never splitting a surrogate pair), with newlines and tabs as real keys so they act
+/// the way the keys do.
 pub(crate) fn plan_typing(text: &str, max_units: usize) -> Vec<TypeStep> {
     let max_units = max_units.max(2);
     let mut steps = Vec::new();
@@ -49,6 +75,15 @@ pub(crate) fn plan_typing(text: &str, max_units: usize) -> Vec<TypeStep> {
             '\t' => {
                 flush(&mut steps, &mut run);
                 steps.push(TypeStep::Tab);
+            }
+            c if ascii_key(c).is_some() => {
+                flush(&mut steps, &mut run);
+                let (code, shift) = ascii_key(c).unwrap_or((0, false));
+                steps.push(TypeStep::Key {
+                    code,
+                    shift,
+                    unit: c as u16,
+                });
             }
             _ => {
                 if run.len() + ch.len_utf16() > max_units {
@@ -246,15 +281,35 @@ mod tests {
         s.encode_utf16().collect()
     }
 
+    fn key(c: char) -> TypeStep {
+        let (code, shift) = ascii_key(c).unwrap();
+        TypeStep::Key {
+            code,
+            shift,
+            unit: c as u16,
+        }
+    }
+
     #[test]
-    fn short_text_is_one_run() {
-        assert_eq!(plan_typing("hello", 20), [TypeStep::Units(units("hello"))]);
+    fn ascii_text_is_typed_as_real_keys() {
+        assert_eq!(
+            plan_typing("Hi+2", 20),
+            [key('H'), key('i'), key('+'), key('2')]
+        );
         assert!(plan_typing("", 20).is_empty());
     }
 
     #[test]
+    fn other_characters_go_in_unicode_runs_between_keys() {
+        assert_eq!(
+            plan_typing("a é😀b", 20),
+            [key('a'), key(' '), TypeStep::Units(units("é😀")), key('b')]
+        );
+    }
+
+    #[test]
     fn long_text_splits_at_the_unit_limit() {
-        let text = "abcdefghij".repeat(5);
+        let text = "éèêëīïîí".repeat(7);
         let steps = plan_typing(&text, 20);
         assert_eq!(steps.len(), 3);
         for s in &steps {
@@ -275,8 +330,8 @@ mod tests {
 
     #[test]
     fn surrogate_pairs_are_never_split() {
-        // 19 plain units then an emoji (2 units) would straddle the 20 unit limit.
-        let text = format!("{}😀tail", "a".repeat(19));
+        // 19 accented units then an emoji (2 units) would straddle the 20 unit limit.
+        let text = format!("{}😀é", "é".repeat(19));
         let steps = plan_typing(&text, 20);
         assert_eq!(steps.len(), 2);
         let TypeStep::Units(first) = &steps[0] else {
@@ -286,7 +341,7 @@ mod tests {
         let TypeStep::Units(second) = &steps[1] else {
             panic!()
         };
-        assert_eq!(String::from_utf16(second).unwrap(), "😀tail");
+        assert_eq!(String::from_utf16(second).unwrap(), "😀é");
     }
 
     #[test]
@@ -294,13 +349,13 @@ mod tests {
         assert_eq!(
             plan_typing("a\r\nb\tc\nd", 20),
             [
-                TypeStep::Units(units("a")),
+                key('a'),
                 TypeStep::Return,
-                TypeStep::Units(units("b")),
+                key('b'),
                 TypeStep::Tab,
-                TypeStep::Units(units("c")),
+                key('c'),
                 TypeStep::Return,
-                TypeStep::Units(units("d")),
+                key('d'),
             ]
         );
         assert_eq!(
@@ -423,5 +478,12 @@ mod tests {
         assert_eq!(*short.last().unwrap(), Point::new(5, 6));
         let long = drag_path(Point::new(0, 0), Point::new(5000, 0));
         assert_eq!(long.len(), 24);
+    }
+
+    #[test]
+    fn bidi_marks_are_stripped_from_names() {
+        assert_eq!(strip_bidi("\u{200E}753"), "753");
+        assert_eq!(strip_bidi("a\u{202B}b\u{2069}c"), "abc");
+        assert_eq!(strip_bidi("plain é"), "plain é");
     }
 }

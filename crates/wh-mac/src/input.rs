@@ -21,7 +21,9 @@ use wh_core::backend::{
 use wh_core::keys::Key;
 
 use crate::cf::Shared;
-use crate::keymap::{FLAG_CAPS_LOCK, VK_RETURN, VK_TAB, implied_flags, keycode, modifier_flag};
+use crate::keymap::{
+    FLAG_CAPS_LOCK, FLAG_SHIFT, VK_RETURN, VK_TAB, implied_flags, keycode, modifier_flag,
+};
 use crate::perm;
 use crate::textops::{ClickChain, TYPE_CHUNK_UNITS, TypeStep, drag_path, plan_typing, scroll_step};
 
@@ -397,6 +399,19 @@ impl Input {
                 TypeStep::Tab => {
                     self.key_event(VK_TAB, true, flags)?;
                     self.key_event(VK_TAB, false, flags)?;
+                }
+                TypeStep::Key { code, shift, unit } => {
+                    let flags = if shift { flags | FLAG_SHIFT } else { flags };
+                    for down in [true, false] {
+                        let ev = CGEvent::new_keyboard_event(self.src(), code, down)
+                            .ok_or_else(|| os("could not create a key event"))?;
+                        CGEvent::set_flags(Some(&ev), CGEventFlags(flags));
+                        // SAFETY: `unit` outlives the call and the length passed is 1.
+                        unsafe {
+                            CGEvent::keyboard_set_unicode_string(Some(&ev), 1, &unit);
+                        }
+                        self.post(&ev);
+                    }
                 }
                 TypeStep::Units(units) => {
                     for down in [true, false] {

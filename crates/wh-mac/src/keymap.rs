@@ -168,6 +168,45 @@ fn char_key(c: char) -> Option<u16> {
     })
 }
 
+/// The US-layout key that types an ASCII character, with whether Shift is part of it. `None`
+/// for anything else (accents, emoji, control characters).
+pub(crate) fn ascii_key(c: char) -> Option<(u16, bool)> {
+    if c == ' ' {
+        return Some((0x31, false));
+    }
+    if !c.is_ascii_graphic() {
+        return None;
+    }
+    if c.is_ascii_uppercase() {
+        return char_key(c).map(|code| (code, true));
+    }
+    let unshifted = match c {
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        ')' => '0',
+        '_' => '-',
+        '+' => '=',
+        '{' => '[',
+        '}' => ']',
+        '|' => '\\',
+        ':' => ';',
+        '"' => '\'',
+        '<' => ',',
+        '>' => '.',
+        '?' => '/',
+        '~' => '`',
+        other => return char_key(other).map(|code| (code, false)),
+    };
+    char_key(unshifted).map(|code| (code, true))
+}
+
 /// The W3C `KeyboardEvent.code` name of a key (what the hotkey crate parses), `None` for the
 /// modifiers and for keys with no such name.
 pub(crate) fn w3c_code_name(key: Key) -> Option<String> {
@@ -359,5 +398,30 @@ mod tests {
         assert_eq!(implied_flags(Key::Home), FLAG_SECONDARY_FN);
         assert_eq!(implied_flags(Key::Char('a')), 0);
         assert_eq!(implied_flags(Key::Enter), 0);
+    }
+
+    #[test]
+    fn ascii_characters_map_to_a_key_and_shift() {
+        assert_eq!(ascii_key('a'), Some((0x00, false)));
+        assert_eq!(ascii_key('A'), Some((0x00, true)));
+        assert_eq!(ascii_key('5'), Some((0x17, false)));
+        assert_eq!(ascii_key('%'), Some((0x17, true)));
+        assert_eq!(ascii_key('='), Some((0x18, false)));
+        assert_eq!(ascii_key('+'), Some((0x18, true)));
+        assert_eq!(ascii_key(' '), Some((0x31, false)));
+        assert_eq!(ascii_key('?'), Some((0x2C, true)));
+        assert_eq!(ascii_key('"'), Some((0x27, true)));
+        assert_eq!(ascii_key('|'), Some((0x2A, true)));
+        assert_eq!(ascii_key('~'), Some((0x32, true)));
+        assert_eq!(ascii_key('\n'), None);
+        assert_eq!(ascii_key('é'), None);
+        assert_eq!(ascii_key('😀'), None);
+    }
+
+    #[test]
+    fn every_printable_ascii_character_has_a_key() {
+        for c in (0x20u8..0x7F).map(char::from) {
+            assert!(ascii_key(c).is_some(), "{c:?}");
+        }
     }
 }

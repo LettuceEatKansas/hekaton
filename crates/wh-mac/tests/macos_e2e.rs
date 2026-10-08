@@ -146,6 +146,9 @@ fn calculator_end_to_end() {
     show("foreground_window", b.foreground_window());
     show("root_window", b.root_window(win.window));
     let center = win.rect.center();
+    for line in b.debug_windows_at(center) {
+        eprintln!("E2E   at center: {line}");
+    }
     show("window_at_point(center)", b.window_at_point(center));
     show(
         "visible_fraction",
@@ -206,7 +209,11 @@ fn calculator_end_to_end() {
     }
 
     // Typed keys.
-    show("type_text(+2=)", b.type_text("+2=", &no_guard));
+    show(
+        "key_chord(clear)",
+        b.key_chord(&[Key::Escape], 1, &no_guard),
+    );
+    show("type_text(8*9=)", b.type_text("8*9=", &no_guard));
     sleep(Duration::from_millis(400));
     if let Ok(snap) = b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))) {
         eprintln!("E2E display after typing: {:?}", texts(&snap.root));
@@ -216,6 +223,7 @@ fn calculator_end_to_end() {
         "focused_element",
         b.focused_element().map(|e| e.map(|e| (e.role, e.name))),
     );
+    eprintln!("E2E focus: {}", b.debug_focus());
     show("focus_token", b.focus_token());
 
     // Pixels.
@@ -374,6 +382,61 @@ fn textedit_end_to_end() {
         "restore_window(noop)",
         b.restore_window(doc.window, Duration::from_secs(2)),
     );
+
+    // Context menu.
+    if let Some(a) = area
+        && let Some(r) = a.rect
+    {
+        show(
+            "right click",
+            b.mouse_click(
+                Point::new(r.left + 100, r.top + 60),
+                MouseButton::Right,
+                1,
+                &no_guard,
+            ),
+        );
+        sleep(Duration::from_millis(700));
+        show("popup_menus", b.popup_menus());
+        show(
+            "menu_items",
+            b.menu_items(Duration::from_secs(1))
+                .map(|v| v.into_iter().map(|m| m.name).collect::<Vec<_>>()),
+        );
+        show("esc", b.key_chord(&[Key::Escape], 1, &no_guard));
+        sleep(Duration::from_millis(300));
+    }
+
+    // Minimise with Cmd+M, find it still listed, bring it back.
+    show(
+        "cmd+M",
+        b.key_chord(&[Key::Meta, Key::Char('m')], 1, &no_guard),
+    );
+    sleep(Duration::from_millis(1200));
+    show(
+        "minimised window_info",
+        b.window_info(doc.window)
+            .map(|i| (i.minimized, i.hidden, i.foreground)),
+    );
+    show(
+        "listed while minimised",
+        b.list_windows(false).map(|l| {
+            l.iter()
+                .filter(|w| w.window == doc.window)
+                .map(|w| w.minimized)
+                .collect::<Vec<_>>()
+        }),
+    );
+    show(
+        "restore_window",
+        b.restore_window(doc.window, Duration::from_secs(3)),
+    );
+    show(
+        "restored window_info",
+        b.window_info(doc.window)
+            .map(|i| (i.minimized, i.hidden, i.foreground)),
+    );
+    show("bring_to_foreground", b.bring_to_foreground(doc.window));
     if let Some(AppTarget::Shortcut(p)) = b.resolve_app("TextEdit").ok().flatten() {
         eprintln!("E2E TextEdit bundle: {p}");
     }

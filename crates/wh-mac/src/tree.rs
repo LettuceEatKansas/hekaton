@@ -120,7 +120,7 @@ pub(crate) fn make_element(id: ElementId, props: &Props, window_rect: Option<Rec
                 }
             }),
     }
-    .map(|s| cap_chars(s, 300))
+    .map(|s| cap_chars(crate::textops::strip_bidi(&s), 300))
     .unwrap_or_default();
 
     let rect = match (props.position, props.size) {
@@ -770,4 +770,42 @@ pub(crate) fn menu_items(budget: Duration) -> BackendResult<Vec<MenuItem>> {
         }
     }
     Ok(out)
+}
+
+/// Diagnostics for the end-to-end tests: what Accessibility says about the focused element.
+pub(crate) fn debug_focus() -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let front = apps::frontmost_pid();
+    let _ = write!(out, "frontmost pid={front:?}; ");
+    let sys = Ax::system_wide();
+    for (label, el) in [
+        ("system-wide", sys.element("AXFocusedUIElement")),
+        (
+            "app",
+            front.and_then(|p| Ax::app(p).element("AXFocusedUIElement")),
+        ),
+        (
+            "app window",
+            front.and_then(|p| Ax::app(p).element("AXFocusedWindow")),
+        ),
+    ] {
+        match el {
+            None => {
+                let _ = write!(out, "{label}: none; ");
+            }
+            Some(el) => {
+                let role = el.copy("AXRole").map(|v| crate::cf::string_of(&v));
+                let fetched = el
+                    .fetch()
+                    .map(|p| (p.role, p.subrole, p.title, p.children.len()));
+                let _ = write!(
+                    out,
+                    "{label}: pid={:?} role={role:?} fetch={fetched:?}; ",
+                    el.pid()
+                );
+            }
+        }
+    }
+    out
 }
