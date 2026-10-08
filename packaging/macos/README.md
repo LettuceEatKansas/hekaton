@@ -38,17 +38,20 @@ to the responsible process. A daemon spawned by `winhands mcp` would be charged 
 fail with "not allowed". A daemon started by launchd is its own responsible process, so the grants on
 `winhands.app` apply.
 
-What `crates/winhands` must do to match:
+What `crates/winhands` does to match (`src/start.rs`, `src/cli.rs`, `src/platform.rs`, `wh_mac::perm`):
 
-- `winhands mcp`, when `127.0.0.1:47811` is not answering, runs
+- `winhands mcp` (and `wh`, `start`), when `127.0.0.1:47811` is not answering and the executable runs from
+  inside a `winhands.app` bundle (or `daemon_launchd_label` / `WINHANDS_DAEMON_LAUNCHD_LABEL` is set), runs
   `launchctl kickstart gui/<getuid>/com.lettuceatkansas.winhands` (no `-k`), then polls the port. Only if the
-  agent is not loaded (a development build run from `cargo run`) may it spawn `winhands daemon` itself, with a
-  warning that permissions then belong to its parent app.
+  agent is not loaded (`launchctl print` fails) does it spawn `winhands daemon` itself, with a warning on
+  stderr and in `daemon.log` that permissions then belong to its parent app. `--daemon-cmd` and
+  `--daemon-task` still win.
 - `winhands daemon` serves HTTP on a worker thread and calls `wh_mac::run_main_run_loop` on the main thread.
 - `winhands doctor` prints the status and exits. `install.sh` runs it as the app with
   `open -W -n -a winhands.app --stdout FILE --args doctor`, so the result reflects winhands.app's grants and
-  not Terminal's. It should also trigger the system prompts (`AXIsProcessTrustedWithOptions` with the prompt
-  option, `CGRequestScreenCaptureAccess`) so winhands shows up in the two Settings lists without a manual `+`.
+  not Terminal's. `doctor --prompt` also triggers the system prompts (`AXIsProcessTrustedWithOptions` with the
+  prompt option, `CGRequestPostEventAccess`, `CGRequestScreenCaptureAccess`) so winhands shows up in the two
+  Settings lists without a manual `+`; `install.sh` runs `doctor --prompt` once, before it opens the panes.
 - `winhands --version` (or `--help`) exits 0; CI and `verify-app.sh` run it on both CPU slices.
 
 ## CI

@@ -239,6 +239,10 @@ cat <<EOF
 EOF
 
 if [ "$NO_OPEN" = 0 ]; then
+  # `doctor --prompt`, run as the app, makes macOS list winhands in both panes and may pop up its own
+  # "winhands would like to ..." boxes: choose "Open System Settings" there.
+  info "Asking macOS to list winhands under Accessibility and Screen Recording"
+  run_as_app "$DEST_APP" doctor --prompt >/dev/null || note "(could not trigger the prompts; use the + button in each list)"
   open -R "$DEST_APP" || true
   echo
   info "Opening System Settings: Accessibility"

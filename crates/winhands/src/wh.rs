@@ -43,8 +43,8 @@ with no key=value parsing (the tool defaults to `computer`), and --json - reads 
 nothing needs shell escaping. key=value after --json overrides that key.
 
 The `computer` tool gets the configured defaults the MCP shim sends: only_apps (WINHANDS_ONLY_APPS or
-config.json) and coords. If no daemon answers, wh starts it (daemon_cmd, daemon_task or this executable's
-`daemon`, see start.rs) and retries once. Exit code 1 and the error on stderr when the daemon
+config.json) and coords. If no daemon answers, wh starts it (daemon_cmd, daemon_task, on macOS the
+winhands.app LaunchAgent, or this executable's `daemon`, see start.rs) and retries once. Exit code 1 and the error on stderr when the daemon
 refuses. Screenshots are written to a file and the path is printed."#;
 
 /// Keys whose value is a number when it parses as one.

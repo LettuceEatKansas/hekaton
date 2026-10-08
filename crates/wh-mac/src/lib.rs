@@ -69,6 +69,23 @@ pub fn run_main_run_loop(seconds: f64) {
     CFRunLoop::run_in_mode(mode, seconds, false);
 }
 
+/// Trigger the system permission prompts (Accessibility, posting input, Screen Recording) so this
+/// app shows up in the System Settings Privacy lists, then turn the run loop briefly so the requests
+/// reach the system before the process exits. For `winhands doctor --prompt`; never called by the
+/// daemon.
+#[cfg(target_os = "macos")]
+pub fn request_permission_prompts() {
+    perm::request_all();
+    run_main_run_loop(1.5);
+}
+
+/// The real user id of this process, for `gui/<uid>` launchd targets.
+#[cfg(target_os = "macos")]
+pub fn current_uid() -> u32 {
+    // SAFETY: getuid takes no arguments, has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
+}
+
 /// Park the calling thread in the main run loop until the process exits.
 #[cfg(target_os = "macos")]
 pub fn run_main_run_loop_forever() -> ! {

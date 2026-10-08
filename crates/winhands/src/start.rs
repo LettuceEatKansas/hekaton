@@ -8,9 +8,16 @@
 //!    that command detached (for example `"C:\Program Files\winhands\winhands.exe" daemon`);
 //! 2. `--daemon-task <name>` or `daemon_task` / `WINHANDS_DAEMON_TASK`: `schtasks /run /tn <name>`
 //!    (Windows only; this is how an elevated daemon is started without a prompt);
-//! 3. on Windows, `winhandsd.exe` next to this executable, detached: the same daemon built for the
+//! 3. on macOS, `launchctl kickstart gui/<uid>/<label>` when `daemon_launchd_label` /
+//!    `WINHANDS_DAEMON_LAUNCHD_LABEL` is set, or when this executable runs from inside a
+//!    `winhands.app` bundle (label `com.lettuceatkansas.winhands`, the LaunchAgent that
+//!    `packaging/macos/install.sh` installs). launchd then starts the daemon as its own process, so
+//!    macOS charges the Accessibility and Screen Recording grants to winhands.app and not to Claude or
+//!    Terminal. Only when no such agent is loaded does it fall back to spawning the daemon (5), with a
+//!    warning;
+//! 4. on Windows, `winhandsd.exe` next to this executable, detached: the same daemon built for the
 //!    GUI subsystem, so no console window appears;
-//! 4. otherwise: this same executable with the argument `daemon`, detached, running as the user who
+//! 5. otherwise: this same executable with the argument `daemon`, detached, running as the user who
 //!    started the shim.
 
 use std::fs::OpenOptions;
@@ -20,6 +27,9 @@ use std::process::{Command, Stdio};
 
 use wh_core::config::{Config, to_text};
 
+/// The LaunchAgent `packaging/macos/install.sh` installs (also the app's bundle id).
+pub const LAUNCHD_LABEL: &str = "com.lettuceatkansas.winhands";
+
 /// How a missing daemon gets started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Starter {
@@ -27,10 +37,37 @@ pub enum Starter {
     Command(Vec<String>),
     /// Run this scheduled task (`schtasks /run /tn NAME`).
     Task(String),
+    /// Start this LaunchAgent (`launchctl kickstart gui/<uid>/<label>`, macOS). `exe` is what runs
+    /// as `exe daemon`, detached, when no such agent is loaded.
+    Launchd { label: String, exe: PathBuf },
     /// Run the console-less `winhandsd` found next to this executable, detached (Windows).
     Hidden(PathBuf),
     /// Run this executable's `daemon` subcommand, detached.
     SelfDaemon(PathBuf),
+}
+
+/// Is `exe` inside a `winhands.app` bundle (`.../winhands.app/Contents/MacOS/winhands`)?
+pub fn inside_app_bundle(exe: &Path) -> bool {
+    exe.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case("winhands.app"))
+    })
+}
+
+/// The LaunchAgent to kickstart, if any: `daemon_launchd_label` from the config, else the default
+/// label when `exe` runs from inside the app bundle. Always `None` off macOS.
+fn launchd_label(cfg: &Config, exe: &Path, macos: bool) -> Option<String> {
+    if !macos {
+        return None;
+    }
+    setting(cfg, "daemon_launchd_label")
+        .or_else(|| inside_app_bundle(exe).then(|| LAUNCHD_LABEL.to_string()))
+}
+
+/// The launchd service target of a LaunchAgent in a user's graphical session.
+pub fn launchd_target(uid: u32, label: &str) -> String {
+    format!("gui/{uid}/{label}")
 }
 
 /// A command line split into words: whitespace separates, double quotes group, nothing else is
@@ -78,6 +115,17 @@ impl Starter {
         cmd_flag: Option<&str>,
         task_flag: Option<&str>,
     ) -> Starter {
+        Self::resolve_for(cfg, exe, cmd_flag, task_flag, cfg!(target_os = "macos"))
+    }
+
+    /// [`Starter::resolve`] with the OS given, so the macOS choice is testable everywhere.
+    fn resolve_for(
+        cfg: &Config,
+        exe: PathBuf,
+        cmd_flag: Option<&str>,
+        task_flag: Option<&str>,
+        macos: bool,
+    ) -> Starter {
         let cmd = cmd_flag
             .map(str::to_string)
             .filter(|c| !c.trim().is_empty())
@@ -94,6 +142,9 @@ impl Starter {
             .or_else(|| setting(cfg, "daemon_task"));
         if let Some(task) = task {
             return Starter::Task(task);
+        }
+        if let Some(label) = launchd_label(cfg, &exe, macos) {
+            return Starter::Launchd { label, exe };
         }
         match hidden_daemon_next_to(&exe, cfg!(windows)) {
             Some(hidden) => Starter::Hidden(hidden),
@@ -116,6 +167,9 @@ impl Starter {
                 .collect::<Vec<_>>()
                 .join(" "),
             Starter::Task(name) => format!("schtasks /run /tn \"{name}\""),
+            Starter::Launchd { label, .. } => {
+                format!("launchctl kickstart gui/$(id -u)/{label}")
+            }
             Starter::Hidden(path) => format!("\"{}\"", path.display()),
             Starter::SelfDaemon(exe) => format!("\"{}\" daemon", exe.display()),
         }
@@ -131,8 +185,57 @@ impl Starter {
             }
             Starter::Hidden(path) => spawn_detached(&[path.to_string_lossy().into_owned()], log),
             Starter::Task(name) => run_task(name),
+            Starter::Launchd { label, exe } => start_launchd(label, exe, log),
         }
     }
+}
+
+/// Run `launchctl` with `args`; an error when it cannot run or exits non-zero.
+fn launchctl(args: &[&str]) -> io::Result<()> {
+    let status = Command::new("launchctl")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "launchctl {} exited with {status}",
+            args.first().copied().unwrap_or("")
+        )))
+    }
+}
+
+/// Start the LaunchAgent with `launchctl kickstart` (no `-k`: a running daemon is left alone), so
+/// launchd, not this process, is the daemon's parent and macOS charges the privacy grants to the
+/// app. A failed kickstart with the agent loaded is returned as an error (the caller polls anyway:
+/// it is also what "already running" can look like). With no agent loaded the daemon is spawned
+/// as a child instead, with a warning on stderr and in the log.
+fn start_launchd(label: &str, exe: &Path, log: &Path) -> io::Result<()> {
+    let Some(uid) = crate::platform::user_id() else {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "launchd exists on macOS only",
+        ));
+    };
+    let target = launchd_target(uid, label);
+    let why = match launchctl(&["kickstart", &target]) {
+        Ok(()) => return Ok(()),
+        Err(why) => why,
+    };
+    if launchctl(&["print", &target]).is_ok() {
+        return Err(why);
+    }
+    let warning = format!(
+        "warning: the LaunchAgent {label} is not loaded ({why}), so the daemon is started as a \
+         child of this process. macOS then charges Accessibility and Screen Recording to the app \
+         that started it (Claude or Terminal), not to winhands.app. Run packaging/macos/install.sh"
+    );
+    eprintln!("winhands: {warning}");
+    crate::serve::append_log(log, &warning);
+    spawn_detached(&[exe.to_string_lossy().into_owned(), "daemon".into()], log)
 }
 
 /// The name of the console-less daemon executable.
@@ -360,6 +463,104 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    fn app_exe() -> PathBuf {
+        PathBuf::from("/Users/jon/Applications/winhands.app/Contents/MacOS/winhands")
+    }
+
+    #[test]
+    fn inside_the_app_bundle_macos_kickstarts_the_launch_agent() {
+        let (c, _) = cfg(MapEnv::new(), None);
+        let s = Starter::resolve_for(&c, app_exe(), None, None, true);
+        assert_eq!(
+            s,
+            Starter::Launchd {
+                label: LAUNCHD_LABEL.into(),
+                exe: app_exe()
+            }
+        );
+        assert_eq!(
+            s.describe(),
+            "launchctl kickstart gui/$(id -u)/com.lettuceatkansas.winhands"
+        );
+    }
+
+    #[test]
+    fn launchd_is_for_macos_only_and_needs_the_bundle_or_a_label() {
+        let (c, _) = cfg(MapEnv::new(), None);
+        assert_eq!(
+            Starter::resolve_for(&c, app_exe(), None, None, false),
+            Starter::SelfDaemon(app_exe()),
+            "not off macOS"
+        );
+        let dev = PathBuf::from("/Users/jon/src/winhands-rs/target/debug/winhands");
+        assert_eq!(
+            Starter::resolve_for(&c, dev.clone(), None, None, true),
+            Starter::SelfDaemon(dev),
+            "a development build outside the bundle spawns itself"
+        );
+    }
+
+    #[test]
+    fn a_configured_launchd_label_works_outside_the_bundle_and_loses_to_cmd_and_task() {
+        let dev = PathBuf::from("/opt/winhands/winhands");
+        let (c, _) = cfg(
+            MapEnv::new(),
+            Some(r#"{"daemon_launchd_label": "org.example.wh"}"#),
+        );
+        assert_eq!(
+            Starter::resolve_for(&c, dev.clone(), None, None, true),
+            Starter::Launchd {
+                label: "org.example.wh".into(),
+                exe: dev.clone()
+            }
+        );
+        assert_eq!(
+            Starter::resolve_for(&c, dev.clone(), None, Some("t"), true),
+            Starter::Task("t".into())
+        );
+        assert_eq!(
+            Starter::resolve_for(&c, dev, Some("x daemon"), None, true),
+            Starter::Command(vec!["x".into(), "daemon".into()])
+        );
+        let (c, _) = cfg(
+            MapEnv::new().with("WINHANDS_DAEMON_LAUNCHD_LABEL", "env.label"),
+            Some(r#"{"daemon_launchd_label": "file.label"}"#),
+        );
+        assert_eq!(
+            Starter::resolve_for(&c, app_exe(), None, None, true),
+            Starter::Launchd {
+                label: "env.label".into(),
+                exe: app_exe()
+            },
+            "the environment beats the file, and both beat the default label"
+        );
+    }
+
+    #[test]
+    fn the_app_bundle_is_found_by_its_folder_name_in_any_case() {
+        assert!(inside_app_bundle(&app_exe()));
+        assert!(inside_app_bundle(Path::new(
+            "/Applications/Winhands.App/Contents/MacOS/winhands"
+        )));
+        assert!(!inside_app_bundle(Path::new("/usr/local/bin/winhands")));
+        assert!(!inside_app_bundle(Path::new("/x/notwinhands.app/y")));
+        assert_eq!(
+            launchd_target(501, LAUNCHD_LABEL),
+            "gui/501/com.lettuceatkansas.winhands"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn launchd_is_refused_off_macos() {
+        let log = std::env::temp_dir().join("wh-start-unused-launchd.log");
+        let s = Starter::Launchd {
+            label: "x".into(),
+            exe: PathBuf::from("winhands"),
+        };
+        assert!(s.start(&log).is_err());
     }
 
     #[test]

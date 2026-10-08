@@ -104,6 +104,25 @@ pub(crate) fn report() -> Vec<PermissionStatus> {
     ]
 }
 
+/// Ask macOS to show its permission prompts for this process, so the app appears in the Privacy
+/// lists in System Settings without a manual "+": Accessibility (`AXIsProcessTrustedWithOptions`
+/// with the prompt option), posting input events and Screen Recording. Each call returns at once and
+/// the prompt appears asynchronously; the return values are ignored because [`report`] is the truth.
+pub(crate) fn request_all() {
+    use objc2_application_services::{AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt};
+    use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
+    use objc2_core_graphics::{CGRequestPostEventAccess, CGRequestScreenCaptureAccess};
+
+    // SAFETY: reading an immutable CoreFoundation constant.
+    let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };
+    let options = CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[CFBoolean::new(true)]);
+    let options: &CFDictionary = options.as_ref();
+    // SAFETY: `options` maps a CFString key to a CFBoolean, which is what the API documents.
+    let _ = unsafe { AXIsProcessTrustedWithOptions(Some(options)) };
+    let _ = CGRequestPostEventAccess();
+    let _ = CGRequestScreenCaptureAccess();
+}
+
 /// The error for a click or keystroke aimed at a system prompt that ignores software input.
 pub(crate) fn protected_prompt_error(app: &str) -> BackendError {
     BackendError::Denied(format!(

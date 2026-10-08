@@ -23,6 +23,32 @@ pub fn backend() -> Result<Arc<dyn Backend>, String> {
     Err("winhands drives a Windows or macOS desktop; this OS has no backend".to_string())
 }
 
+/// Ask the OS to show its permission prompts (macOS: Accessibility, Screen Recording) so this app
+/// appears in the System Settings lists. False where the OS has no such prompts.
+#[cfg(target_os = "macos")]
+pub fn request_permission_prompts() -> bool {
+    wh_mac::request_permission_prompts();
+    true
+}
+
+/// See the macOS version.
+#[cfg(not(target_os = "macos"))]
+pub fn request_permission_prompts() -> bool {
+    false
+}
+
+/// The real user id, for the launchd `gui/<uid>` domain; `None` off macOS.
+#[cfg(target_os = "macos")]
+pub fn user_id() -> Option<u32> {
+    Some(wh_mac::current_uid())
+}
+
+/// See the macOS version.
+#[cfg(not(target_os = "macos"))]
+pub fn user_id() -> Option<u32> {
+    None
+}
+
 /// Run `work` (the daemon) and return its exit code.
 ///
 /// On macOS the backend needs the main thread to turn its run loop (Carbon hotkeys and `NSWorkspace`

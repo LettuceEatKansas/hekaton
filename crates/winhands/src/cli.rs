@@ -121,7 +121,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "pause" => cmd_pause(true),
         "resume" => cmd_pause(false),
         "acknowledge" => cmd_acknowledge(),
-        "doctor" => cmd_doctor(),
+        "doctor" => cmd_doctor(rest),
         other => {
             println!("winhands: unknown command {:?}", other);
             2
@@ -580,7 +580,9 @@ pub fn doctor_lines(
                 .get("version")
                 .map_or_else(|| "None".to_string(), wh_core::textutil::py_str);
             ok(&mut lines, format!("daemon: reachable (version {version})"));
-            if h.get("elevated").is_some_and(wh_core::config::truthy) {
+            if facts.is_some_and(|f| f.name == "macos") {
+                // no UAC-style boundary on macOS: nothing to report
+            } else if h.get("elevated").is_some_and(wh_core::config::truthy) {
                 ok(&mut lines, "elevation: daemon is elevated".into());
             } else {
                 bad(
@@ -635,7 +637,40 @@ pub fn doctor_lines(
     (lines, warn)
 }
 
-fn cmd_doctor() -> i32 {
+/// On macOS, a line saying whose privacy grants a `doctor` run reflects: macOS charges them to the
+/// app that started the process, so outside `winhands.app` they are Terminal's, not winhands's.
+pub fn bundle_note(exe: &std::path::Path, macos: bool) -> Option<String> {
+    (macos && !crate::start::inside_app_bundle(exe)).then(|| {
+        format!(
+            "NOTE not running from winhands.app ({}): macOS shows the privacy grants of the app \
+             that started this process (Terminal), not winhands.app's. packaging/macos/install.sh \
+             runs doctor as the app for you",
+            exe.display()
+        )
+    })
+}
+
+fn cmd_doctor(mut rest: Vec<String>) -> i32 {
+    let prompt = take_flag(&mut rest, "--prompt");
+    if let Some(extra) = rest.first() {
+        eprintln!(
+            "winhands doctor: unexpected argument {extra:?}. usage: winhands doctor [--prompt]"
+        );
+        return 2;
+    }
+    if let Some(note) = bundle_note(&exe_path(), cfg!(target_os = "macos")) {
+        println!("{note}");
+    }
+    if prompt {
+        if platform::request_permission_prompts() {
+            println!(
+                "NOTE asked macOS to show its permission prompts for this app. In System Settings > \
+                 Privacy & Security, switch winhands ON under Accessibility and Screen & System Audio Recording"
+            );
+        } else {
+            println!("NOTE --prompt does nothing on this OS (it has no permission prompts)");
+        }
+    }
     let cfg = Config::from_system();
     let link = local_link(
         &cfg,

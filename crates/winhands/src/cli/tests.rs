@@ -148,6 +148,38 @@ fn doctor_reports_each_os_permission_and_how_to_fix_a_missing_one() {
 }
 
 #[test]
+fn doctor_on_macos_does_not_ask_for_an_elevated_daemon() {
+    let mut f = facts();
+    f.name = "macos".into();
+    let c = cfg(MapEnv::new()
+        .with("WINHANDS_ONLY_APPS", "a.exe")
+        .with("WINHANDS_ACKNOWLEDGED", "1"));
+    let health = json!({"version": "x", "elevated": false});
+    let (lines, warn) = doctor_lines(Some(&f), Some(&health), true, "t", &c);
+    assert!(!warn, "{}", joined(&lines));
+    assert!(!joined(&lines).contains("elevat"), "{}", joined(&lines));
+}
+
+#[test]
+fn doctor_says_when_it_runs_outside_the_app_bundle_on_macos() {
+    use std::path::Path;
+    let outside = Path::new("/Users/jon/src/winhands-rs/target/release/winhands");
+    let note = bundle_note(outside, true).expect("outside the bundle on macOS");
+    assert!(
+        note.starts_with("NOTE not running from winhands.app"),
+        "{note}"
+    );
+    assert!(note.contains("install.sh"));
+    let inside = Path::new("/Users/jon/Applications/winhands.app/Contents/MacOS/winhands");
+    assert_eq!(bundle_note(inside, true), None);
+    assert_eq!(
+        bundle_note(outside, false),
+        None,
+        "nothing to say off macOS"
+    );
+}
+
+#[test]
 fn doctor_reports_elevation_of_this_shell_on_windows() {
     let mut f = facts();
     f.name = "windows".into();
