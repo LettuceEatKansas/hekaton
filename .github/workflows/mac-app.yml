@@ -1,0 +1,102 @@
+name: mac-app
+
+# Builds the universal winhands.app with the same scripts the owner runs on the Mac, checks it, and
+# uploads winhands.app.zip. The CI build is signed ad hoc (no certificate on a CI runner), so it is a
+# test artifact. For daily use, build on the Mac with packaging/macos/install.sh, which signs with the
+# stable local identity so the macOS permissions survive updates.
+
+on:
+  push:
+    branches: [mac, main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  app:
+    name: winhands.app (universal, macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck the packaging scripts
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          shellcheck --version
+          shellcheck -x --source-path=SCRIPTDIR packaging/macos/*.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: build winhands.app (ad hoc signature)
+        run: packaging/macos/build-app.sh
+
+      - name: verify the bundle
+        run: packaging/macos/verify-app.sh target/macos/winhands.app
+
+      - name: zip
+        run: |
+          cd target/macos
+          ditto -c -k --keepParent winhands.app winhands.app.zip
+          ls -l winhands.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winhands-app
+          path: target/macos/winhands.app.zip
+          if-no-files-found: error
+
+      # The next steps prove the flow the owner uses: a stable identity, rebuilds that keep the same
+      # signing identity, and install/uninstall. They use a throwaway keychain, not the runner's own.
+      - name: stable signing identity (throwaway keychain)
+        env:
+          WINHANDS_KEYCHAIN: ${{ runner.temp }}/winhands-ci.keychain-db
+          WINHANDS_KEYCHAIN_PASSWORD: ci-throwaway-password
+        run: |
+          set -euxo pipefail
+          security create-keychain -p "$WINHANDS_KEYCHAIN_PASSWORD" "$WINHANDS_KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$WINHANDS_KEYCHAIN"
+          security unlock-keychain -p "$WINHANDS_KEYCHAIN_PASSWORD" "$WINHANDS_KEYCHAIN"
+          existing=$(security list-keychains -d user | sed 's/"//g')
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$WINHANDS_KEYCHAIN" $existing
+
+          packaging/macos/make-signing-identity.sh --yes
+          packaging/macos/make-signing-identity.sh --yes   # second run must be a no-op
+          security find-identity -p codesigning "$WINHANDS_KEYCHAIN"
+
+          # Two builds from two different executables, same identity: the designated requirement
+          # (what macOS stores for the permission grants) must be identical.
+          BIN=target/macos/winhands.app/Contents/MacOS/winhands
+          lipo -thin arm64 "$BIN" -output "$RUNNER_TEMP/winhands-thin"
+          packaging/macos/build-app.sh --binary "$BIN" --out target/macos-local-1
+          packaging/macos/build-app.sh --binary "$RUNNER_TEMP/winhands-thin" --out target/macos-local-2
+          dr1=$(codesign -d -r- target/macos-local-1/winhands.app 2>&1 | grep 'designated =>')
+          dr2=$(codesign -d -r- target/macos-local-2/winhands.app 2>&1 | grep 'designated =>')
+          echo "build 1: $dr1"
+          echo "build 2: $dr2"
+          test "$dr1" = "$dr2"
+          echo "$dr1" | grep 'certificate leaf' >/dev/null
+          codesign -dv target/macos-local-1/winhands.app 2>&1 | grep -i 'flags=.*runtime'
+
+      - name: install, then uninstall
+        env:
+          WINHANDS_KEYCHAIN: ${{ runner.temp }}/winhands-ci.keychain-db
+        run: |
+          set -euxo pipefail
+          LABEL=com.lettuceatkansas.winhands
+          # Install the ad hoc CI artifact: install.sh must re-sign it with the local identity.
+          packaging/macos/install.sh --app target/macos/winhands.app --yes --no-open
+          test -x "$HOME/Applications/winhands.app/Contents/MacOS/winhands"
+          codesign -d -r- "$HOME/Applications/winhands.app" 2>&1 | grep 'certificate leaf'
+          codesign --verify --strict --deep "$HOME/Applications/winhands.app"
+          plutil -lint "$HOME/Library/LaunchAgents/$LABEL.plist"
+          /usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$HOME/Library/LaunchAgents/$LABEL.plist" | grep Aqua
+          /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "$HOME/Library/LaunchAgents/$LABEL.plist" | grep daemon
+          launchctl print "gui/$(id -u)/$LABEL" | head -20 || echo "launchctl print failed (runner has no GUI session?)"
+          packaging/macos/uninstall.sh --yes
+          test ! -e "$HOME/Applications/winhands.app"
+          test ! -e "$HOME/Library/LaunchAgents/$LABEL.plist"
