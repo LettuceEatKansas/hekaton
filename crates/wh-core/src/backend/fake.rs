@@ -56,6 +56,13 @@ pub enum InputEvent {
     Type(char),
 }
 
+/// Called after a key chord is pressed, with the chord's keys. A test uses it to script what the
+/// shortcut does (open a tab, copy to the clipboard, paste into a field).
+pub type ChordHook = Arc<dyn Fn(&FakeBackend, &[Key]) + Send + Sync>;
+
+/// Called after a launch is recorded, so a test can make the launched app's window appear.
+pub type LaunchHook = Arc<dyn Fn(&FakeBackend, &LaunchSpec) + Send + Sync>;
+
 struct State {
     windows: Vec<WindowInfo>,
     next_window: u64,
@@ -75,6 +82,7 @@ struct State {
     line_at: HashMap<(WindowRef, i32, i32), String>,
     caret: Option<Caret>,
     has_caret: bool,
+    window_carets: HashMap<WindowRef, bool>,
     focus_token: u64,
     popups: Vec<WindowRef>,
     menu_items: Vec<MenuItem>,
@@ -95,6 +103,14 @@ struct State {
     launches: Vec<LaunchSpec>,
     blocked_hotkeys: Vec<String>,
     hotkey: Option<Arc<dyn Fn() + Send + Sync>>,
+    chord_hook: Option<ChordHook>,
+    launch_hook: Option<LaunchHook>,
+    popup_delay: u32,
+    menu_delay: u32,
+    doc_rects: HashMap<(WindowRef, usize), (Rect, Rect)>,
+    chromium_empty: Vec<WindowRef>,
+    wakes: Vec<WindowRef>,
+    utc_offset: Option<i32>,
     inits: u32,
     capabilities: Capabilities,
 }
@@ -139,6 +155,7 @@ impl FakeBackend {
                 line_at: HashMap::new(),
                 caret: None,
                 has_caret: false,
+                window_carets: HashMap::new(),
                 focus_token: 0,
                 popups: Vec::new(),
                 menu_items: Vec::new(),
@@ -159,6 +176,14 @@ impl FakeBackend {
                 launches: Vec::new(),
                 blocked_hotkeys: Vec::new(),
                 hotkey: None,
+                chord_hook: None,
+                launch_hook: None,
+                popup_delay: 0,
+                menu_delay: 0,
+                doc_rects: HashMap::new(),
+                chromium_empty: Vec::new(),
+                wakes: Vec::new(),
+                utc_offset: None,
                 inits: 0,
                 capabilities: Capabilities::all(),
             }),
@@ -241,6 +266,13 @@ impl FakeBackend {
         self.st().last_screen = Some(image);
     }
 
+    /// Forget the scripted screen: every capture is a flat grey picture of the size asked for.
+    pub fn clear_screen(&self) {
+        let mut s = self.st();
+        s.last_screen = None;
+        s.screens.clear();
+    }
+
     /// The next captures return these images in order; the last one then repeats. Used to script
     /// a screen that changes under a settle loop.
     pub fn queue_screens(&self, images: Vec<Image>) {
@@ -289,6 +321,12 @@ impl FakeBackend {
         let mut s = self.st();
         s.has_caret = caret.is_some();
         s.caret = caret;
+    }
+
+    /// Script whether one particular window's GUI thread shows a caret (a read of that window wins
+    /// over the general answer).
+    pub fn set_window_caret(&self, window: WindowRef, value: bool) {
+        self.st().window_carets.insert(window, value);
     }
 
     /// Script `has_caret` without a position.
@@ -407,6 +445,68 @@ impl FakeBackend {
             }
             None => false,
         }
+    }
+
+    /// Run `hook` after every key chord, with the keys that were pressed.
+    pub fn set_chord_hook(&self, hook: impl Fn(&FakeBackend, &[Key]) + Send + Sync + 'static) {
+        self.st().chord_hook = Some(Arc::new(hook));
+    }
+
+    /// Run `hook` after every launch is recorded.
+    pub fn set_launch_hook(
+        &self,
+        hook: impl Fn(&FakeBackend, &LaunchSpec) + Send + Sync + 'static,
+    ) {
+        self.st().launch_hook = Some(Arc::new(hook));
+    }
+
+    /// Make `popup_menus` answer empty for its next `polls` calls, as a menu that opens late.
+    pub fn set_popup_delay(&self, polls: u32) {
+        self.st().popup_delay = polls;
+    }
+
+    /// Make `menu_items` answer empty for its next `reads` calls, as a menu that builds late.
+    pub fn set_menu_delay(&self, reads: u32) {
+        self.st().menu_delay = reads;
+    }
+
+    /// Say where line `line_index` (0-based) of a window's document is on screen: the match's own
+    /// box and the whole line's box. Without it a document hit reads as scrolled out of view.
+    pub fn set_document_rects(
+        &self,
+        window: WindowRef,
+        line_index: usize,
+        match_rect: Rect,
+        line_rect: Rect,
+    ) {
+        self.st()
+            .doc_rects
+            .insert((window, line_index), (match_rect, line_rect));
+    }
+
+    /// Make a window read as an empty Chromium tree until a read allows waking it.
+    pub fn set_chromium_empty(&self, window: WindowRef) {
+        self.st().chromium_empty.push(window);
+    }
+
+    /// The windows `element_tree` woke by raising them.
+    pub fn wakes(&self) -> Vec<WindowRef> {
+        self.st().wakes.clone()
+    }
+
+    /// Change the value of an element that is in a scripted tree.
+    pub fn set_element_value(&self, id: &ElementId, value: &str) {
+        let mut s = self.st();
+        for tree in s.trees.values_mut() {
+            if let Some(el) = find_element_mut(tree, id) {
+                el.value = Some(value.to_string());
+            }
+        }
+    }
+
+    /// Script `local_utc_offset` (seconds east of UTC). Unset, it is unsupported.
+    pub fn set_utc_offset(&self, seconds: i32) {
+        self.st().utc_offset = Some(seconds);
     }
 
     /// Script `capabilities`.
@@ -713,21 +813,45 @@ impl Backend for FakeBackend {
     }
 
     fn popup_menus(&self) -> BackendResult<Vec<WindowRef>> {
-        Ok(self.st().popups.clone())
+        let mut s = self.st();
+        if s.popup_delay > 0 {
+            s.popup_delay -= 1;
+            return Ok(Vec::new());
+        }
+        Ok(s.popups.clone())
     }
 
     fn menu_items(&self, _budget: Duration) -> BackendResult<Vec<MenuItem>> {
-        Ok(self.st().menu_items.clone())
+        let mut s = self.st();
+        if s.menu_delay > 0 {
+            s.menu_delay -= 1;
+            return Ok(Vec::new());
+        }
+        Ok(s.menu_items.clone())
     }
 
     fn element_tree(&self, window: WindowRef, limits: &TreeLimits) -> BackendResult<TreeSnapshot> {
-        let s = self.st();
+        let mut s = self.st();
         let info = s
             .windows
             .iter()
             .find(|w| w.window == window)
             .ok_or(BackendError::WindowGone)?;
         let title = info.title.clone();
+        if s.chromium_empty.contains(&window) {
+            // An empty Chromium tree: only a raise wakes it; the tree then stays built.
+            if limits.wake == WakePolicy::Never {
+                return Ok(TreeSnapshot {
+                    window,
+                    title: title.clone(),
+                    root: Element::new(&format!("win-{}", window.raw()), Role::Window, &title),
+                    truncated: false,
+                    wake_hint: true,
+                });
+            }
+            s.chromium_empty.retain(|w| *w != window);
+            s.wakes.push(window);
+        }
         let tree = s.trees.get(&window).cloned().unwrap_or_else(|| {
             Element::new(&format!("win-{}", window.raw()), Role::Window, &title)
         });
@@ -863,12 +987,16 @@ impl Backend for FakeBackend {
         let needle = query.to_lowercase();
         Ok(text
             .lines()
-            .filter(|l| l.to_lowercase().contains(&needle))
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&needle))
             .take(max_hits)
-            .map(|l| DocumentHit {
-                line: l.split_whitespace().collect::<Vec<_>>().join(" "),
-                match_rect: None,
-                line_rect: None,
+            .map(|(i, l)| {
+                let rects = s.doc_rects.get(&(window, i));
+                DocumentHit {
+                    line: l.split_whitespace().collect::<Vec<_>>().join(" "),
+                    match_rect: rects.map(|r| r.0),
+                    line_rect: rects.map(|r| r.1),
+                }
             })
             .collect())
     }
@@ -881,8 +1009,11 @@ impl Backend for FakeBackend {
         Ok(self.st().caret)
     }
 
-    fn has_caret(&self, _window: Option<WindowRef>) -> BackendResult<bool> {
-        Ok(self.st().has_caret)
+    fn has_caret(&self, window: Option<WindowRef>) -> BackendResult<bool> {
+        let s = self.st();
+        Ok(window
+            .and_then(|w| s.window_carets.get(&w).copied())
+            .unwrap_or(s.has_caret))
     }
 
     fn focus_token(&self) -> BackendResult<u64> {
@@ -965,6 +1096,23 @@ impl Backend for FakeBackend {
         Ok(())
     }
 
+    fn key_chord(&self, keys: &[Key], repeat: u32, guard: InputGuard<'_>) -> BackendResult<()> {
+        for _ in 0..repeat.max(1) {
+            guard()?;
+            for key in keys {
+                self.key_down(*key)?;
+            }
+            for key in keys.iter().rev() {
+                self.key_up(*key)?;
+            }
+            let hook = self.st().chord_hook.clone();
+            if let Some(hook) = hook {
+                hook(self, keys);
+            }
+        }
+        Ok(())
+    }
+
     fn type_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()> {
         for ch in text.chars() {
             guard()?;
@@ -1034,12 +1182,22 @@ impl Backend for FakeBackend {
     }
 
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
-        let mut s = self.st();
-        s.launches.push(spec.clone());
-        s.next_window += 1;
-        Ok(LaunchOutcome {
-            pid: Some(s.next_window as u32),
-        })
+        let (pid, hook) = {
+            let mut s = self.st();
+            s.launches.push(spec.clone());
+            s.next_window += 1;
+            (s.next_window as u32, s.launch_hook.clone())
+        };
+        if let Some(hook) = hook {
+            hook(self, spec);
+        }
+        Ok(LaunchOutcome { pid: Some(pid) })
+    }
+
+    fn local_utc_offset(&self, _unix_secs: i64) -> BackendResult<i32> {
+        self.st()
+            .utc_offset
+            .ok_or_else(|| BackendError::Unsupported("local time zone".into()))
     }
 
     fn register_kill_hotkey(

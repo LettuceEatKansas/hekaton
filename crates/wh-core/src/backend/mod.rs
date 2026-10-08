@@ -421,6 +421,17 @@ pub trait Backend: Send + Sync {
     /// branches of `do_open`.
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome>;
 
+    // ------------------------------------------------------------------ local time
+
+    /// The local time zone's offset from UTC, in seconds east, at a Unix time. `list_files` prints
+    /// file times the way the owner's clock shows them. A backend that cannot say leaves the default,
+    /// and the core prints UTC.
+    ///
+    /// Replaces `datetime.fromtimestamp` (local time) in `fast.py:do_files`.
+    fn local_utc_offset(&self, _unix_secs: i64) -> BackendResult<i32> {
+        Err(BackendError::Unsupported("local time zone".into()))
+    }
+
     // ------------------------------------------------------------------ kill hotkey
 
     /// Register the first chord of `candidates` the OS accepts as a global hotkey and call

@@ -137,6 +137,25 @@ pub fn resize(img: &Image, out_w: u32, out_h: u32) -> Result<Image, ImageError> 
     Ok(out.with_scale(img.scale() * k))
 }
 
+/// Resize to exactly `(out_w, out_h)` with a bicubic filter, whichever way: what an OCR input is
+/// enlarged with (Python `img.resize((w * k, h * k), Image.BICUBIC)`). Unlike [`resize`], which
+/// enlarges by nearest neighbour as a screenshot does, this keeps glyph edges smooth for the engine.
+pub fn resize_bicubic(img: &Image, out_w: u32, out_h: u32) -> Result<Image, ImageError> {
+    if (img.width(), img.height()) == (out_w, out_h) {
+        return Ok(img.clone());
+    }
+    let bytes = resize_raw(
+        img.rgba().to_vec(),
+        (img.width(), img.height()),
+        (out_w, out_h),
+        PixelType::U8x4,
+        ResizeAlg::Convolution(FilterType::CatmullRom),
+    )?;
+    let out = Image::new(out_w, out_h, bytes).map_err(|e| ImageError(e.to_string()))?;
+    let k = f64::from(out_w) / f64::from(img.width());
+    Ok(out.with_origin(img.origin()).with_scale(img.scale() * k))
+}
+
 // ------------------------------------------------------------------------------------ encoding
 
 fn rgb_bytes(img: &Image) -> Vec<u8> {
