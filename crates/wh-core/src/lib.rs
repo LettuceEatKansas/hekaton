@@ -29,5 +29,11 @@ pub mod state;
 pub mod textutil;
 pub mod token;
 
+// Later phases. Each stub says what it will port.
+pub mod caller;
+pub mod daemon;
+pub mod mcp;
+pub mod orchestrate;
+
 #[cfg(test)]
 pub(crate) mod testutil;
