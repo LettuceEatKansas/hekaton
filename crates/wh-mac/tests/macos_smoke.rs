@@ -21,6 +21,8 @@ fn identity_and_permission_report() {
     assert_eq!(b.name(), "macos");
     let caps = b.capabilities();
     assert!(caps.accessibility_tree && caps.ocr && caps.kill_hotkey && !caps.elevation);
+    let offset = b.local_utc_offset(1_700_000_000).expect("time zone");
+    assert!((-14 * 3600..=14 * 3600).contains(&offset), "{offset}");
     let perms = b.permissions().expect("permissions never fail");
     for p in &perms {
         eprintln!(

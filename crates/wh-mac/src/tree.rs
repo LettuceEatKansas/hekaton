@@ -412,7 +412,7 @@ pub(crate) fn element_tree(
     let win = found.el;
     let chromium = apps::is_chromium_like(pid);
     let mut wake_hint = false;
-    let (mut root, mut visited, mut kept, mut truncated) =
+    let (mut root, visited, kept, mut truncated) =
         walk_window(reg, &win, window, limits, limits.deadline)?;
     if chromium && visited <= EMPTY_TREE && kept == 0 {
         match limits.wake {
@@ -428,18 +428,17 @@ pub(crate) fn element_tree(
                     }
                 }
                 let left = limits.deadline.saturating_sub(started.elapsed());
-                (root, visited, kept, truncated) = walk_window(
+                (root, _, _, truncated) = walk_window(
                     reg,
                     &win,
                     window,
                     limits,
                     left.max(Duration::from_millis(300)),
                 )?;
-                wake_hint = visited <= EMPTY_TREE && kept == 0;
+                // `wake_hint` stays false: it means "left alone because the policy said never".
             }
         }
     }
-    let _ = (visited, kept);
     Ok(TreeSnapshot {
         window,
         title: info.title,

@@ -33,6 +33,20 @@ pub struct MacBackend {
     hotkeys: Hotkeys,
 }
 
+/// Seconds east of UTC in the user's time zone at a Unix time.
+fn local_offset(unix_secs: i64) -> BackendResult<i32> {
+    let t: libc::time_t = unix_secs;
+    // SAFETY: an all-zero `tm` is a valid value (the zone name pointer is just null).
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are valid for the call, and localtime_r is thread-safe.
+    let done = unsafe { libc::localtime_r(&t, &mut tm) };
+    if done.is_null() {
+        return Err(BackendError::Os("localtime_r failed".into()));
+    }
+    i32::try_from(tm.tm_gmtoff)
+        .map_err(|_| BackendError::Os("time zone offset out of range".into()))
+}
+
 impl Default for MacBackend {
     fn default() -> Self {
         Self::new()
@@ -415,6 +429,12 @@ impl Backend for MacBackend {
 
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
         launch::launch(spec)
+    }
+
+    // ------------------------------------------------------------------ local time
+
+    fn local_utc_offset(&self, unix_secs: i64) -> BackendResult<i32> {
+        local_offset(unix_secs)
     }
 
     // ------------------------------------------------------------------ kill hotkey

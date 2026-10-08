@@ -162,13 +162,13 @@ mod tests {
     fn long_text_is_pasted_and_the_owners_clipboard_comes_back() {
         let backend = FakeBackend::new();
         backend.set_clipboard(ClipboardContent::Text("jon's clipboard".into()));
-        let out = type_text(
-            &backend,
-            OFF,
-            "a long sentence to paste",
-            &TypeOptions::new(6),
-        )
-        .unwrap();
+        // Pinned to Windows: this test asserts Ctrl+V, and `TypeOptions::new` follows the OS the
+        // tests run on (a_mac_pastes_with_command covers the other half).
+        let opts = TypeOptions {
+            paste_over: 6,
+            platform: Platform::Windows,
+        };
+        let out = type_text(&backend, OFF, "a long sentence to paste", &opts).unwrap();
         assert_eq!(out, TypeOutcome::Pasted);
         assert_eq!(out.note_suffix(), " (pasted)");
         assert_eq!(backend.typed_text(), "", "nothing was keyed");
