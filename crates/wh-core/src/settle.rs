@@ -152,7 +152,12 @@ impl UiaProbe {
     /// long floor. Python `_exposes_uia`.
     pub fn exposes_uia(&self, backend: &dyn Backend, clock: &dyn Clock, window: WindowRef) -> bool {
         let now = clock.now();
-        if let Some((at, rich)) = self.cache.lock().expect("uia cache").get(&window).copied()
+        if let Some((at, rich)) = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&window)
+            .copied()
             && now.saturating_sub(at) < UIA_RICH_TTL
         {
             return rich;
@@ -169,7 +174,10 @@ impl UiaProbe {
             .element_tree(window, &limits)
             .map(|t| t.root.children.len() >= UIA_RICH_MIN)
             .unwrap_or(false);
-        let mut cache = self.cache.lock().expect("uia cache");
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if cache.len() > 32 {
             cache.clear();
         }
@@ -179,7 +187,10 @@ impl UiaProbe {
 
     /// Forget everything.
     pub fn clear(&self) {
-        self.cache.lock().expect("uia cache").clear();
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }
 

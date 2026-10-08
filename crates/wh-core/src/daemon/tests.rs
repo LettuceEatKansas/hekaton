@@ -517,6 +517,70 @@ fn batch_keeps_the_images_of_earlier_steps() {
     assert_eq!(kinds, ["text", "text", "image", "text"]);
 }
 
+// ---------------------------------------------------------------------------------- panics
+
+fn click(r: &Rig) -> Response {
+    r.post(
+        "/computer",
+        json!({"action": "left_click", "coordinate": [50, 50], "shot": false}),
+    )
+}
+
+#[test]
+fn a_panic_in_the_core_is_an_error_answer_and_the_daemon_keeps_serving() {
+    let r = rig();
+    r.window("Notepad", "notepad.exe");
+    r.fake.set_click_hook(|_, _| panic!("the backend blew up"));
+    let res = click(&r);
+    assert_eq!(res.status, 500);
+    let data = body(&res);
+    assert_eq!(data["ok"], false);
+    let error = data["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("internal error: ") && error.contains("the backend blew up"),
+        "{error}"
+    );
+    // the panic was logged like any failed call
+    let log = std::fs::read_to_string(r.paths.audit_log()).unwrap();
+    assert!(log.contains("the backend blew up"), "{log}");
+    // still serving: the same route, other routes, auth, and the tool lock the panic poisoned
+    assert_eq!(r.get("/health", Some(TOKEN)).status, 200);
+    assert_eq!(r.get("/health", Some("wrong")).status, 401);
+    assert_eq!(
+        r.post("/computer", json!({"action": "list_windows"}))
+            .status,
+        200
+    );
+    assert_eq!(click(&r).status, 500, "a second panic is caught too");
+    r.fake.set_click_hook(|_, _| {});
+    let res = click(&r);
+    assert_eq!(res.status, 200, "{:?}", body(&res));
+    assert_eq!(body(&res)["ok"], true);
+}
+
+#[test]
+fn a_panic_inside_a_batch_is_an_error_answer_for_that_request_only() {
+    let r = rig();
+    r.window("Notepad", "notepad.exe");
+    r.fake
+        .set_click_hook(|_, _| panic!("batch member exploded"));
+    let res = r.post(
+        "/batch",
+        json!({"actions": [
+            {"tool": "computer", "args": {"action": "list_windows"}},
+            {"tool": "computer", "args": {"action": "left_click", "coordinate": [50, 50], "shot": false}},
+        ]}),
+    );
+    assert_eq!(res.status, 500);
+    assert!(
+        body(&res)["error"]
+            .as_str()
+            .unwrap()
+            .contains("batch member exploded")
+    );
+    assert_eq!(r.get("/health", Some(TOKEN)).status, 200);
+}
+
 // ---------------------------------------------------------------------------------- shutdown, unknown
 
 #[test]

@@ -79,7 +79,10 @@ impl RepeatNote {
         }
         let key = call_key(path, args);
         let now = clock.now();
-        let mut last = self.last.lock().expect("repeat memory");
+        let mut last = self
+            .last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = last.insert(key, (now, text.to_string()));
         if last.len() > 50 {
             last.retain(|_, (t, _)| now.saturating_sub(*t) <= Duration::from_secs(60));
@@ -109,7 +112,10 @@ impl FailureCounter {
     /// approach once the same call has failed [`REPEAT_FAIL_LIMIT`] times. Python `_count_failure`.
     pub fn note_failure(&self, path: &str, args: &Value, error: &str) -> String {
         let key = call_key(path, args);
-        let mut counts = self.counts.lock().expect("failure counts");
+        let mut counts = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let n = counts.entry(key).or_insert(0);
         *n += 1;
         if *n >= REPEAT_FAIL_LIMIT {

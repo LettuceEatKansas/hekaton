@@ -24,7 +24,7 @@ use wh_core::token;
 use winhands_lib::client::{self, ClientError, Reply, Timeouts};
 use winhands_lib::link::{DaemonLink, Failure};
 use winhands_lib::serve::{bind, serve};
-use winhands_lib::shim::forward;
+use winhands_lib::shim::{forward, guarded};
 use winhands_lib::wh;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -436,6 +436,91 @@ fn the_shim_forwards_a_call_and_returns_text_and_image_blocks() {
         panic!("text")
     };
     assert!(t.contains("unknown action"), "{t}");
+}
+
+// A panic in the core must cost one call, not the daemon: the request gets a 500 error answer over the
+// wire, the shim turns it into an error result, and the next call is answered normally.
+#[test]
+fn a_panicking_core_call_is_an_error_over_the_wire_and_the_daemon_keeps_serving() {
+    let live = Live::start();
+    live.window("Notepad", "notepad.exe");
+    live.fake
+        .set_click_hook(|_, _| panic!("core panic over the wire"));
+    let click = json!({"action": "left_click", "coordinate": [50, 50], "shot": false});
+    let reply = live.post("/computer", click.clone());
+    assert_eq!(reply.status, 500);
+    let data = json_of(&reply);
+    assert_eq!(data["ok"], false);
+    assert!(
+        data["error"]
+            .as_str()
+            .unwrap()
+            .contains("internal error: core panic over the wire"),
+        "{data}"
+    );
+    // the shim reports it as an error result instead of failing
+    let defaults = ShimDefaults {
+        coords: "pixels".into(),
+        only_apps: Vec::new(),
+    };
+    let link = live.link();
+    let reply = forward(&link, &defaults, click.as_object().unwrap());
+    assert!(reply.is_error, "{reply:?}");
+    let Block::Text(t) = &reply.blocks[0] else {
+        panic!("text")
+    };
+    assert!(t.contains("core panic over the wire"), "{t}");
+    // and the daemon is still there for the next caller, several threads at once
+    assert_eq!(live.get("/health").status, 200);
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let (port, token) = (live.port, live.token.clone());
+            thread::spawn(move || {
+                client::request(
+                    "127.0.0.1",
+                    port,
+                    "POST",
+                    "/computer",
+                    &token,
+                    Some(br#"{"action":"list_windows"}"#),
+                    Timeouts::for_host("127.0.0.1", Duration::from_secs(20)),
+                )
+                .unwrap()
+                .status
+            })
+        })
+        .collect();
+    for h in handles {
+        assert_eq!(h.join().unwrap(), 200);
+    }
+}
+
+// catch_unwind only works if the release build unwinds; "abort" would turn every caught panic back
+// into a dead daemon.
+#[test]
+fn the_release_profile_unwinds_so_that_panics_can_be_caught() {
+    let manifest = include_str!("../../../Cargo.toml");
+    let release = manifest
+        .split("[profile.release]")
+        .nth(1)
+        .expect("a release profile");
+    assert!(release.contains("panic = \"unwind\""), "{release}");
+    assert!(!release.contains("panic = \"abort\""));
+}
+
+#[test]
+fn the_shim_guard_turns_a_panic_into_an_error_reply() {
+    let reply = guarded(|| panic!("tool call exploded"));
+    assert!(reply.is_error);
+    let Block::Text(t) = &reply.blocks[0] else {
+        panic!("text")
+    };
+    assert_eq!(
+        t,
+        "winhands shim failed: internal error: tool call exploded"
+    );
+    let fine = guarded(|| wh_core::mcp::Reply::error("plain".to_string()));
+    assert!(matches!(&fine.blocks[0], Block::Text(t) if t == "plain"));
 }
 
 #[test]

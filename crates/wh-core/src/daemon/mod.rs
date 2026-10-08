@@ -20,13 +20,16 @@
 //! Status codes: 401 `{"error": "unauthorized"}` without the token (every POST, and `/health`), 404
 //! `{"error": "not found"}` for any other GET, 400 `{"error": "bad json: ..."}` for an unparsable body,
 //! 200 for a call that ran (a failed step inside a batch is still 200 with `failed_step`), 400
-//! `{"ok": false, "error": ...}` for a refused or failed call.
+//! `{"ok": false, "error": ...}` for a refused or failed call, 500 `{"ok": false, "error": "internal
+//! error: ..."}` when the core panicked (the panic is caught, logged, and the daemon keeps serving).
 
 pub mod legacy;
 pub mod warm;
 
+use std::any::Any;
 use std::cell::OnceCell;
 use std::net::SocketAddr;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
@@ -240,13 +243,36 @@ impl Daemon {
 
     // ------------------------------------------------------------------------------ routing
 
-    /// Answer one request.
+    /// Answer one request. A panic anywhere in the core while answering is caught here and becomes a
+    /// 500 error answer, so one bad call never takes the daemon down (the release profile unwinds
+    /// instead of aborting for exactly this reason).
     pub fn handle(&self, req: &Request<'_>) -> Response {
+        match catch_unwind(AssertUnwindSafe(|| self.route(req))) {
+            Ok(response) => response,
+            Err(payload) => self.panicked(req, payload.as_ref()),
+        }
+    }
+
+    fn route(&self, req: &Request<'_>) -> Response {
         match req.method {
             "GET" => self.get(req),
             "POST" => self.post(req),
             _ => Response::json(501, &json!({"error": "unsupported method"})),
         }
+    }
+
+    /// The answer for a request whose handling panicked: logged like any failed call, worded as an
+    /// internal error, and never carrying more than the panic message.
+    fn panicked(&self, req: &Request<'_>, payload: &(dyn Any + Send)) -> Response {
+        let message = panic_message(payload);
+        let error = format!("internal error: {message}");
+        let path = req.path.trim_matches('/');
+        let args = parse_body(req.body).unwrap_or(Value::Null);
+        // logging must not be able to panic the handler a second time
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            log_action(self.computer.config().paths(), path, &args, &error, false);
+        }));
+        Response::json(500, &json!({"ok": false, "error": error}))
     }
 
     /// Does this `X-Winhands-Token` header value open the daemon? The HTTP layer asks before it reads a
@@ -540,6 +566,17 @@ impl Daemon {
             }
             other => Err(format!("unknown action: {other}")),
         }
+    }
+}
+
+/// The text of a panic payload (`panic!("..")` carries a `&str` or a `String`).
+pub fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a panic with no message".to_string()
     }
 }
 

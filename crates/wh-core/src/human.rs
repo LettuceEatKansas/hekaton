@@ -56,7 +56,10 @@ impl HumanGate {
 
     /// Record that we just injected input. Python `_mark_ours`.
     pub fn mark_ours(&self, clock: &dyn Clock) {
-        *self.last_ours.lock().expect("human gate") = Some(clock.now());
+        *self
+            .last_ours
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(clock.now());
     }
 
     /// Wait for a person who is using the mouse or keyboard to stop, or refuse. With `enabled` false
@@ -79,7 +82,10 @@ impl HumanGate {
             let Ok(idle) = backend.human_input_idle() else {
                 return Ok(());
             };
-            let ours = *self.last_ours.lock().expect("human gate");
+            let ours = *self
+                .last_ours
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // last input = now - idle; ours = now - ours_age; "newer than ours + slack" is
             // idle + slack < ours_age.
             let human = match ours {

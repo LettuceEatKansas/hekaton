@@ -120,7 +120,10 @@ impl<'a> WindowRefs<'a> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'a, RefTables> {
-        self.0.refs.lock().expect("ref tables")
+        self.0
+            .refs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The ref of a window, if it has been listed.
@@ -297,7 +300,10 @@ impl<'a> ElementRefs<'a> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'a, RefTables> {
-        self.0.refs.lock().expect("ref tables")
+        self.0
+            .refs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Replace one window's refs with a fresh snapshot (and remember it as the latest).

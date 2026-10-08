@@ -74,6 +74,18 @@ pub fn forward(link: &DaemonLink, defaults: &ShimDefaults, args: &Map<String, Va
     }
 }
 
+/// Run one tool call, turning a panic into an error reply so the MCP server keeps answering. Nothing
+/// in `forward` is meant to panic; this is the net under it (and under `build_payload`).
+pub fn guarded(call: impl FnOnce() -> Reply) -> Reply {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(reply) => reply,
+        Err(payload) => Reply::error(format!(
+            "winhands shim failed: internal error: {}",
+            wh_core::daemon::panic_message(payload.as_ref())
+        )),
+    }
+}
+
 fn to_result(reply: Reply) -> CallToolResult {
     let blocks = reply
         .blocks
@@ -137,7 +149,7 @@ impl ServerHandler for Shim {
             let defaults = self.defaults.clone();
             let args = request.arguments.unwrap_or_default();
             // the daemon call blocks for as long as the action takes; keep the MCP loop free
-            tokio::task::spawn_blocking(move || forward(&link, &defaults, &args))
+            tokio::task::spawn_blocking(move || guarded(|| forward(&link, &defaults, &args)))
                 .await
                 .unwrap_or_else(|e| Reply::error(format!("winhands shim failed: {e}")))
         };

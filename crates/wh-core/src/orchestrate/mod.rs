@@ -195,7 +195,9 @@ impl Computer {
     }
 
     pub(crate) fn mem(&self) -> std::sync::MutexGuard<'_, Memory> {
-        self.mem.lock().expect("computer memory")
+        self.mem
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

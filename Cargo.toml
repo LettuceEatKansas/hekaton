@@ -64,4 +64,6 @@ all = { level = "warn", priority = -1 }
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
+# unwind, not abort: the daemon and the MCP server catch a panic per request and answer with an error
+# instead of dying (wh_core::daemon::Daemon::handle, winhands::shim::guarded).
+panic = "unwind"

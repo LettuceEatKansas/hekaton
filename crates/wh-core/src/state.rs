@@ -68,13 +68,20 @@ impl IdleTimer {
 
     /// Change the timeout. Zero or negative disables the timer.
     pub fn set_timeout(&self, seconds: i64) {
-        *self.timeout.lock().expect("idle timeout") = Duration::from_secs(seconds.max(0) as u64);
+        *self
+            .timeout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Duration::from_secs(seconds.max(0) as u64);
         self.disabled.store(seconds <= 0, Ordering::SeqCst);
     }
 
     /// Any handled call resets the countdown. Python `State.touch`.
     pub fn touch(&self, clock: &dyn Clock) {
-        *self.last_activity.lock().expect("idle activity") = clock.now();
+        *self
+            .last_activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = clock.now();
     }
 
     /// Seconds left before shutdown, 0.0 once passed, `-1.0` when idle shutdown is disabled.
@@ -83,8 +90,14 @@ impl IdleTimer {
         if self.disabled.load(Ordering::SeqCst) {
             return -1.0;
         }
-        let timeout = *self.timeout.lock().expect("idle timeout");
-        let last = *self.last_activity.lock().expect("idle activity");
+        let timeout = *self
+            .timeout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let last = *self
+            .last_activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let idle = clock.now().saturating_sub(last);
         timeout.saturating_sub(idle).as_secs_f64()
     }
@@ -123,7 +136,10 @@ impl RateLimiter {
     /// in Python, so a flood does not slip through by being refused.
     pub fn check(&self, clock: &dyn Clock) -> bool {
         let now = clock.now();
-        let mut times = self.times.lock().expect("rate window");
+        let mut times = self
+            .times
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         times.push_back(now);
         while times
             .front()
