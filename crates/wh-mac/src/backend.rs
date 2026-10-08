@@ -453,6 +453,7 @@ impl Backend for MacBackend {
         // One window-server snapshot for all samples instead of one per sample.
         Ok(crate::wininfo::visible_fraction(
             &winlist::on_screen_list(),
+            &self.display_rects(),
             window_parts(window),
             rect,
             grid,
@@ -462,12 +463,7 @@ impl Backend for MacBackend {
     fn window_exists(&self, window: WindowRef) -> bool {
         // Cheaper than a full `window_info`: one window-server lookup, no Accessibility.
         let (pid, id) = window_parts(window);
-        winlist::copy_list(
-            objc2_core_graphics::CGWindowListOption::OptionIncludingWindow,
-            id,
-        )
-        .iter()
-        .any(|r| r.id == id && r.pid == pid)
+        winlist::lookup(pid, id).is_some()
     }
 }
 

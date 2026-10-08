@@ -84,20 +84,32 @@ impl RawWindow {
 
     /// Something a click can land on, for hit testing. Skips the window server's own overlays
     /// and invisible windows.
-    pub(crate) fn is_hit_target(&self) -> bool {
+    pub(crate) fn is_hit_target(&self, displays: &[Rect]) -> bool {
         self.on_screen
             && self.alpha > 0.01
             && !self.bounds.is_empty()
             && self.owner_name != "Window Server"
             && self.layer >= 0
+            // The Dock keeps a transparent window the size of the screen; so do other overlays.
+            // Only a layer 0 window (a full screen app) may cover a whole display and still count.
+            && (self.layer == 0 || !covers_a_display(self.bounds, displays))
     }
 }
 
+/// Does `bounds` cover the whole of any one display?
+fn covers_a_display(bounds: Rect, displays: &[Rect]) -> bool {
+    displays.iter().any(|d| bounds.covers(d))
+}
+
 /// The topmost hit target under `p`, given windows in front-to-back order.
-pub(crate) fn window_at_point(windows: &[RawWindow], p: Point) -> Option<&RawWindow> {
+pub(crate) fn window_at_point<'a>(
+    windows: &'a [RawWindow],
+    p: Point,
+    displays: &[Rect],
+) -> Option<&'a RawWindow> {
     windows
         .iter()
-        .find(|w| w.is_hit_target() && w.bounds.contains(p))
+        .find(|w| w.is_hit_target(displays) && w.bounds.contains(p))
 }
 
 /// The frontmost app's frontmost application window, the fallback when its AX focused window
@@ -112,6 +124,7 @@ pub(crate) fn frontmost_app_window(windows: &[RawWindow], pid: i32) -> Option<&R
 /// screen, from one snapshot of the window server's list (front to back).
 pub(crate) fn visible_fraction(
     windows: &[RawWindow],
+    displays: &[Rect],
     target: (i32, u32),
     rect: Rect,
     grid: u32,
@@ -127,7 +140,9 @@ pub(crate) fn visible_fraction(
             let y = rect.top
                 + (f64::from(rect.height()) * (f64::from(j) + 0.5) / f64::from(grid)) as i32;
             total += 1;
-            if window_at_point(windows, Point { x, y }).is_some_and(|w| (w.pid, w.id) == target) {
+            if window_at_point(windows, Point { x, y }, displays)
+                .is_some_and(|w| (w.pid, w.id) == target)
+            {
                 hits += 1;
             }
         }
@@ -137,7 +152,7 @@ pub(crate) fn visible_fraction(
 
 /// Does the window cover the whole of any one display (native full screen, a game)?
 pub(crate) fn is_fullscreen(bounds: Rect, displays: &[Rect]) -> bool {
-    !bounds.is_empty() && displays.iter().any(|d| bounds.covers(d))
+    !bounds.is_empty() && covers_a_display(bounds, displays)
 }
 
 /// Build the neutral record.
@@ -229,9 +244,15 @@ mod tests {
         let front = raw(1, 1, 0, Rect::from_xywh(50, 50, 100, 100));
         let back = raw(2, 2, 0, Rect::from_xywh(0, 0, 400, 400));
         let all = [front.clone(), back.clone()];
-        assert_eq!(window_at_point(&all, Point::new(60, 60)).unwrap().id, 1);
-        assert_eq!(window_at_point(&all, Point::new(10, 10)).unwrap().id, 2);
-        assert!(window_at_point(&all, Point::new(900, 900)).is_none());
+        assert_eq!(
+            window_at_point(&all, Point::new(60, 60), &[]).unwrap().id,
+            1
+        );
+        assert_eq!(
+            window_at_point(&all, Point::new(10, 10), &[]).unwrap().id,
+            2
+        );
+        assert!(window_at_point(&all, Point::new(900, 900), &[]).is_none());
     }
 
     #[test]
@@ -243,7 +264,7 @@ mod tests {
         clear.alpha = 0.0;
         let real = raw(4, 6, 0, Rect::from_xywh(0, 0, 800, 600));
         let all = [overlay, wallpaper, clear, real];
-        assert_eq!(window_at_point(&all, Point::new(5, 5)).unwrap().id, 4);
+        assert_eq!(window_at_point(&all, Point::new(5, 5), &[]).unwrap().id, 4);
     }
 
     #[test]
@@ -345,10 +366,37 @@ mod tests {
         let cover = raw(2, 2, 0, Rect::from_xywh(0, 0, 50, 100));
         let all = [cover, target.clone()];
         let whole = Rect::from_xywh(0, 0, 100, 100);
-        let f = visible_fraction(&all, (1, 1), whole, 4);
+        let f = visible_fraction(&all, &[], (1, 1), whole, 4);
         assert!((f - 0.5).abs() < 1e-9, "{f}");
-        assert_eq!(visible_fraction(&[target], (1, 1), whole, 4), 1.0);
-        assert_eq!(visible_fraction(&all, (1, 1), Rect::default(), 4), 0.0);
-        assert_eq!(visible_fraction(&all, (9, 9), whole, 4), 0.0);
+        assert_eq!(visible_fraction(&[target], &[], (1, 1), whole, 4), 1.0);
+        assert_eq!(visible_fraction(&all, &[], (1, 1), Rect::default(), 4), 0.0);
+        assert_eq!(visible_fraction(&all, &[], (9, 9), whole, 4), 0.0);
+    }
+
+    #[test]
+    fn a_screen_sized_overlay_above_the_app_does_not_catch_clicks() {
+        // The Dock's transparent window covers the display on layer 20.
+        let displays = [Rect::from_xywh(0, 0, 1024, 768)];
+        let mut dock = raw(1, 382, 20, Rect::from_xywh(0, 0, 1024, 768));
+        dock.owner_name = "Dock".into();
+        let app = raw(2, 2554, 0, Rect::from_xywh(62, 352, 230, 408));
+        let all = [dock.clone(), app];
+        let centre = Point::new(100, 500);
+        assert_eq!(window_at_point(&all, centre, &displays).unwrap().id, 2);
+        // Without the display list the overlay would win.
+        assert_eq!(window_at_point(&all, centre, &[]).unwrap().id, 1);
+        // The menu bar is wide but not display sized, so it still catches clicks.
+        let mut bar = raw(3, 5, 24, Rect::from_xywh(0, 0, 1024, 24));
+        bar.owner_name = "SystemUIServer".into();
+        let with_bar = [bar, dock];
+        assert_eq!(
+            window_at_point(&with_bar, Point::new(10, 10), &displays)
+                .unwrap()
+                .id,
+            3
+        );
+        // A layer 0 window may cover a whole display (full screen app).
+        let full = raw(4, 9, 0, Rect::from_xywh(0, 0, 1024, 768));
+        assert_eq!(window_at_point(&[full], centre, &displays).unwrap().id, 4);
     }
 }

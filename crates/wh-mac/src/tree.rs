@@ -684,7 +684,10 @@ pub(crate) fn window_text(window: WindowRef, displays: &[Rect]) -> BackendResult
         if p.role == "AXStaticText"
             && let Some(t) = p.value_text().or_else(|| p.title.clone())
         {
-            let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+            let t = crate::textops::strip_bidi(&t)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             if !t.is_empty() && !lines.contains(&t) {
                 lines.push(t);
             }

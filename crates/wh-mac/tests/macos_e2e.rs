@@ -149,7 +149,11 @@ fn calculator_end_to_end() {
     for line in b.debug_windows_at(center) {
         eprintln!("E2E   at center: {line}");
     }
-    show("window_at_point(center)", b.window_at_point(center));
+    let hit = show("window_at_point(center)", b.window_at_point(center));
+    eprintln!(
+        "E2E hit test lands on the Calculator window: {}",
+        hit == Some(Some(win.window))
+    );
     show(
         "visible_fraction",
         b.visible_fraction(win.window, win.rect, 8),

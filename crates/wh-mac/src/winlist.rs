@@ -15,6 +15,7 @@ use wh_core::backend::{
 use crate::apps;
 use crate::ax::{self, Ax};
 use crate::cf;
+use crate::displays;
 use crate::geom::rect_from_f64;
 use crate::perm;
 use crate::wininfo::{
@@ -200,13 +201,20 @@ pub(crate) fn list(include_hidden: bool, displays: &[Rect]) -> Vec<WindowInfo> {
     out
 }
 
+/// One window by handle, on screen or not. `OptionIncludingWindow` only finds windows that are
+/// on screen, so a minimised or hidden one is looked up in the full list.
+pub(crate) fn lookup(pid: i32, id: u32) -> Option<RawWindow> {
+    let hit = |r: &RawWindow| r.id == id && r.pid == pid;
+    copy_list(CGWindowListOption::OptionIncludingWindow, id)
+        .into_iter()
+        .find(hit)
+        .or_else(|| copy_list(EVERYTHING, 0).into_iter().find(hit))
+}
+
 /// A live read of one window.
 pub(crate) fn info(window: WindowRef, displays: &[Rect]) -> BackendResult<WindowInfo> {
     let (pid, id) = window_parts(window);
-    let raw = copy_list(CGWindowListOption::OptionIncludingWindow, id)
-        .into_iter()
-        .find(|r| r.id == id && r.pid == pid)
-        .ok_or(BackendError::WindowGone)?;
+    let raw = lookup(pid, id).ok_or(BackendError::WindowGone)?;
     let on_screen = copy_list(ON_SCREEN, 0);
     let mut ctx = WindowContext {
         bundle_id: apps::bundle_id(pid),
@@ -234,7 +242,10 @@ pub(crate) fn info(window: WindowRef, displays: &[Rect]) -> BackendResult<Window
 /// The topmost window under a point.
 pub(crate) fn at_point(p: Point) -> Option<WindowRef> {
     let list = copy_list(ON_SCREEN, 0);
-    window_at_point(&list, p).map(|r| window_ref(r.pid, r.id))
+    let rects: Vec<Rect> = displays::list()
+        .map(|l| l.iter().map(|d| d.rect).collect())
+        .unwrap_or_default();
+    window_at_point(&list, p, &rects).map(|r| window_ref(r.pid, r.id))
 }
 
 /// Pop-up and context menu surfaces.
@@ -255,10 +266,7 @@ fn is_on_screen(pid: i32, id: u32) -> bool {
 /// Bring a minimised or hidden window back and wait, bounded, for the window server to show it.
 pub(crate) fn restore(window: WindowRef, timeout: Duration) -> BackendResult<()> {
     let (pid, id) = window_parts(window);
-    let raw = copy_list(CGWindowListOption::OptionIncludingWindow, id)
-        .into_iter()
-        .find(|r| r.id == id && r.pid == pid)
-        .ok_or(BackendError::WindowGone)?;
+    let raw = lookup(pid, id).ok_or(BackendError::WindowGone)?;
     if raw.on_screen {
         return Ok(());
     }
