@@ -1140,391 +1140,66 @@ fn open_url_runs_the_hard_line_on_the_address() {
     assert!(d.kit.fake.launches().is_empty());
 }
 
-// ---------------------------------------------------------------------------- folder: the action
+// The folder tests below drive the Explorer path: a launched explorer.exe opens a window, the Shell or the
+// header click sets the view and sort. On macOS the folder action opens Finder instead and cannot set
+// either, so these tests are Windows-path tests and are skipped there.
+#[cfg(not(target_os = "macos"))]
+mod explorer {
+    use super::*;
 
-fn set_mtime(path: &Path, secs: u64) {
-    let when = UNIX_EPOCH + Duration::from_secs(secs);
-    let mut opts = std::fs::OpenOptions::new();
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        opts.write(true).custom_flags(0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS: a folder can be opened
-    }
-    #[cfg(not(windows))]
-    {
-        opts.read(true);
-    }
-    opts.open(path).unwrap().set_modified(when).unwrap();
-}
+    // ---------------------------------------------------------------------------- folder: the action
 
-/// Five entries with known times and sizes. Newest first: new.txt, b10.txt, sub, b2.txt, old.txt.
-fn make_folder(root: &Path) -> String {
-    let dir = root.join("docs");
-    std::fs::create_dir_all(&dir).unwrap();
-    let t0 = 1_700_000_000;
-    for (name, size, mtime) in [
-        ("old.txt", 5, t0),
-        ("b2.txt", 300, t0 + 100),
-        ("b10.txt", 20, t0 + 200),
-        ("new.txt", 1000, t0 + 300),
-    ] {
-        std::fs::write(dir.join(name), vec![b'x'; size]).unwrap();
-        set_mtime(&dir.join(name), mtime);
-    }
-    std::fs::create_dir(dir.join("sub")).unwrap();
-    set_mtime(&dir.join("sub"), t0 + 150);
-    dir.to_string_lossy().into_owned()
-}
-
-/// A kit whose launching Explorer opens a window titled with the folder's name.
-fn folder_desk() -> (Desk, String) {
-    let d = Desk::new();
-    let folder = make_folder(d.kit.tmp.path());
-    d.kit.fake.set_launch_hook(|fake, spec| {
-        if let AppTarget::Executable(exe) = &spec.target
-            && exe.eq_ignore_ascii_case("explorer.exe")
+    fn set_mtime(path: &Path, secs: u64) {
+        let when = UNIX_EPOCH + Duration::from_secs(secs);
+        let mut opts = std::fs::OpenOptions::new();
+        #[cfg(windows)]
         {
-            let leaf = spec
-                .args
-                .trim_matches('"')
-                .rsplit(['\\', '/'])
-                .next()
-                .unwrap_or("")
-                .to_string();
-            let w = fake.add_window(WindowInfo::basic(
-                &leaf,
-                "explorer.exe",
-                900,
-                Rect::from_xywh(5, 5, 300, 170),
-            ));
-            fake.update_window(w, |i| {
-                i.class = "CabinetWClass".into();
-                i.kind = WindowKind::FileManager;
-            });
+            use std::os::windows::fs::OpenOptionsExt;
+            opts.write(true).custom_flags(0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS: a folder can be opened
         }
-    });
-    (d, folder)
-}
-
-fn folder_call(d: &Desk, args: Value) -> Result<String, StepError> {
-    let mut a = args;
-    a["action"] = json!("folder");
-    d.kit.step(a).map(|(note, img)| {
-        assert!(img.is_none());
-        note
-    })
-}
-
-fn name_of(line: &str) -> String {
-    line.split("  ").nth(2).unwrap_or("").to_string()
-}
-
-fn pressed(d: &Desk) -> Vec<Key> {
-    d.kit
-        .fake
-        .events()
-        .into_iter()
-        .filter_map(|e| match e {
-            InputEvent::KeyDown(k) => Some(k),
-            _ => None,
-        })
-        .collect()
-}
-
-fn explorer_ref(d: &Desk, leaf: &str) -> String {
-    let lines = d.kit.computer.window_refs().list(false).unwrap();
-    let l = lines
-        .iter()
-        .find(|l| l.title == leaf)
-        .expect("the new explorer window");
-    format!("w{}", l.reference)
-}
-
-fn leaf_of(folder: &str) -> String {
-    Path::new(folder)
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned()
-}
-
-// Ported from test_the_benchmark_task_in_one_call.
-#[test]
-fn the_benchmark_task_in_one_call() {
-    let (d, folder) = folder_desk();
-    let out = folder_call(
-        &d,
-        json!({"path": folder, "view": "details", "sort": "date_modified desc", "list": 3}),
-    )
-    .unwrap();
-    let lines: Vec<&str> = out.lines().collect();
-    let leaf = leaf_of(&folder);
-    let r = explorer_ref(&d, &leaf);
-    assert!(
-        lines[0].ends_with(&format!(
-            "opened a new window, {r} \"{leaf}\"; view details (shell); sort date_modified desc (shell)"
-        )),
-        "{}",
-        lines[0]
-    );
-    assert!(
-        lines[1].ends_with("first 3 of 5 entries by date_modified desc"),
-        "{}",
-        lines[1]
-    );
-    assert_eq!(name_of(lines[2]), "new.txt");
-    assert_eq!(lines.len(), 5);
-    assert_eq!(
-        d.kit.fake.shell_state(),
-        ("details".to_string(), "date_modified desc".to_string())
-    );
-    assert!(pressed(&d).is_empty(), "the Shell did it, no keystrokes");
-}
-
-// A folder call ends in text, so a batch whose last step is one carries no picture.
-#[test]
-fn a_folder_call_in_a_batch_ends_without_a_screenshot() {
-    let (d, folder) = folder_desk();
-    let out = d
-        .kit
-        .run(json!({"action": "folder", "path": folder, "list": 2}))
-        .unwrap();
-    assert!(out.images.is_empty());
-}
-
-// Ported from test_folder_waits_for_a_person_and_remembers_the_window_as_the_target.
-#[test]
-fn folder_waits_for_a_person_and_remembers_the_window_as_the_target() {
-    let (d, folder) = folder_desk();
-    folder_call(&d, json!({"path": folder})).unwrap();
-    assert!(d.kit.fake.human_idle_reads() > 0);
-    assert!(d.kit.computer.mem().target.is_some());
-}
-
-// Ported from test_folder_with_only_a_path_just_opens_it.
-#[test]
-fn folder_with_only_a_path_just_opens_it() {
-    let (d, folder) = folder_desk();
-    let out = folder_call(&d, json!({"path": folder})).unwrap();
-    assert!(
-        !out.contains("view") && !out.contains("sort") && !out.contains("entries"),
-        "{out}"
-    );
-    assert!(out.contains("opened a new window"), "{out}");
-    assert_eq!(d.kit.fake.shell_calls(), 0);
-}
-
-// Ported from test_list_without_sort_means_newest_first.
-#[test]
-fn list_without_sort_means_newest_first() {
-    let (d, folder) = folder_desk();
-    // a string works, recipes send one
-    let out = folder_call(&d, json!({"path": folder, "list": "2"})).unwrap();
-    let lines: Vec<&str> = out.lines().collect();
-    assert!(lines[1].ends_with("by date_modified desc"), "{}", lines[1]);
-    assert_eq!(name_of(lines[2]), "new.txt");
-}
-
-// Ported from test_list_follows_the_requested_sort.
-#[test]
-fn list_follows_the_requested_sort() {
-    let (d, folder) = folder_desk();
-    let out = folder_call(&d, json!({"path": folder, "sort": "size asc", "list": 2})).unwrap();
-    let lines: Vec<&str> = out.lines().collect();
-    // the Shell was asked to sort too, so the head line says so
-    assert!(lines.iter().any(|l| l.ends_with("by size asc")), "{out}");
-    let list_at = lines
-        .iter()
-        .position(|l| l.ends_with("by size asc"))
-        .unwrap();
-    assert!(
-        ["sub", "old.txt"].contains(&name_of(lines[list_at + 1]).as_str()),
-        "{out}"
-    );
-}
-
-// Ported from test_text_is_accepted_for_the_path_like_list_files.
-#[test]
-fn text_is_accepted_for_the_path_like_list_files() {
-    let (d, folder) = folder_desk();
-    assert!(
-        folder_call(&d, json!({"text": folder}))
-            .unwrap()
-            .contains("opened a new window")
-    );
-}
-
-// Ported from test_arguments_are_checked_before_any_window_opens.
-#[test]
-fn arguments_are_checked_before_any_window_opens() {
-    let (d, folder) = folder_desk();
-    let nope = d.kit.tmp.path().join("nope").to_string_lossy().into_owned();
-    for bad in [
-        json!({"path": ""}),
-        json!({"path": nope}),
-        json!({"path": folder, "view": "gallery"}),
-        json!({"path": folder, "sort": "colour"}),
-        json!({"path": folder, "list": "many"}),
-        json!({"path": folder, "list": -1}),
-    ] {
-        let e = folder_call(&d, bad.clone()).unwrap_err();
-        assert!(
-            matches!(e, StepError::Value(_) | StepError::Target(_)),
-            "{bad}: {e}"
-        );
-    }
-    assert!(d.kit.fake.launches().is_empty());
-}
-
-// Ported from test_a_credential_folder_is_refused_by_the_hard_line.
-#[test]
-fn a_credential_folder_is_refused_by_the_hard_line() {
-    let (d, _) = folder_desk();
-    let cred = d.kit.tmp.path().join("config").join("SAM");
-    std::fs::create_dir_all(&cred).unwrap();
-    let e = folder_call(&d, json!({"path": cred.to_string_lossy()})).unwrap_err();
-    assert!(
-        matches!(e, StepError::Permission(_)) && e.message().contains("credential"),
-        "{e}"
-    );
-    assert!(d.kit.fake.launches().is_empty());
-}
-
-// Ported from test_under_an_allowlist_explorer_must_be_allowed_and_listing_stays_in_temp.
-#[test]
-fn under_an_allowlist_explorer_must_be_allowed_and_listing_stays_in_temp() {
-    let (d, folder) = folder_desk();
-    let e = d
-        .kit
-        .step_only(
-            &["notepad.exe"],
-            json!({"action": "folder", "path": folder}),
-        )
-        .unwrap_err();
-    assert!(e.message().contains("may not open explorer.exe"), "{e}");
-    assert!(d.kit.fake.launches().is_empty());
-    // explorer allowed, but %TEMP% is somewhere else: the listing is refused
-    let elsewhere = tempdir_elsewhere();
-    let d2 = Desk::with_env(MapEnv::new().with("TEMP", &elsewhere));
-    let folder2 = make_folder(d2.kit.tmp.path());
-    let e = d2
-        .kit
-        .step_only(
-            &["explorer.exe"],
-            json!({"action": "folder", "path": folder2, "list": 3}),
-        )
-        .unwrap_err();
-    assert!(e.message().contains("folder list may only read"), "{e}");
-    assert!(d2.kit.fake.launches().is_empty());
-}
-
-fn tempdir_elsewhere() -> String {
-    std::env::temp_dir()
-        .join(format!("wh-not-the-kit-{}", std::process::id()))
-        .to_string_lossy()
-        .into_owned()
-}
-
-// Ported from test_the_callers_own_explorer_like_window_is_refused_after_opening: a window the guard
-// refuses is never arranged.
-#[test]
-fn a_refused_folder_window_is_never_arranged() {
-    let (mut d, folder) = folder_desk();
-    d.kit.who = Caller::new(vec![(900, "explorer.exe".into())], false);
-    let e = folder_call(&d, json!({"path": folder, "view": "details"})).unwrap_err();
-    assert!(e.message().contains("refused"), "{e}");
-    assert!(pressed(&d).is_empty());
-    assert_eq!(d.kit.fake.shell_calls(), 0, "nothing was changed");
-}
-
-// Ported from test_when_the_shell_is_unreachable_the_view_falls_back_to_ctrl_shift_6.
-#[test]
-fn when_the_shell_is_unreachable_the_view_falls_back_to_ctrl_shift_6() {
-    let (d, folder) = folder_desk();
-    d.kit.fake.set_shell_mode(ShellMode::Unavailable);
-    let out = folder_call(&d, json!({"path": folder, "view": "details"})).unwrap();
-    let keys = pressed(&d);
-    assert_eq!(keys, [Key::Ctrl, Key::Shift, Key::Char('6')], "{keys:?}");
-    assert!(
-        out.contains("view details (keyboard, not read back)"),
-        "{out}"
-    );
-    assert!(out.contains("shell api unavailable ("), "{out}");
-    assert!(out.contains("sort not set"), "{out}");
-}
-
-// Ported from test_each_view_has_its_own_fallback_key.
-#[test]
-fn each_view_has_its_own_fallback_key() {
-    let (d, folder) = folder_desk();
-    d.kit.fake.set_shell_mode(ShellMode::Absent);
-    for (view, key) in [
-        ("list", '5'),
-        ("tiles", '7'),
-        ("icons", '3'),
-        ("large", '2'),
-    ] {
-        folder_call(&d, json!({"path": folder, "view": view})).unwrap();
-        assert_eq!(pressed(&d).last(), Some(&Key::Char(key)), "{view}");
-    }
-    assert!(
-        folder_call(&d, json!({"path": folder, "view": "list"}))
-            .unwrap()
-            .contains("did not list the window")
-    );
-}
-
-// ---------------------------------------------------------------------------- folder: the header click fallback
-
-/// The folder window's tree: a "Date modified" column header and one list row.
-fn explorer_tree(first_row: &str, with_header: bool) -> Element {
-    let mut root = Element::new("root", Role::Window, "docs");
-    if with_header {
-        root = root.with_child(
-            Element::new("h", Role::Other("HeaderItem".into()), "Date modified")
-                .at(Rect::new(100, 10, 160, 25)),
-        );
-    }
-    root.with_child(Element::new("r", Role::ListItem, first_row).at(Rect::new(10, 40, 90, 55)))
-}
-
-/// A desk where every header click moves the first visible row through `rows`, one per click.
-fn header_desk(rows: &[&str], with_header: bool) -> (Desk, String, Arc<Mutex<u32>>) {
-    let (d, folder) = folder_desk();
-    d.kit.fake.set_shell_mode(ShellMode::Absent);
-    let leaf = leaf_of(&folder);
-    let queue: Arc<Mutex<VecDeque<String>>> =
-        Arc::new(Mutex::new(rows.iter().map(|r| (*r).to_string()).collect()));
-    let clicks = Arc::new(Mutex::new(0u32));
-    let launch_leaf = leaf.clone();
-    let click_leaf = leaf;
-    let tree_header = with_header;
-    d.kit.fake.set_click_hook({
-        let (queue, clicks) = (queue.clone(), clicks.clone());
-        move |fake, _| {
-            *clicks.lock().unwrap() += 1;
-            let next = queue.lock().unwrap().pop_front();
-            if let (Some(name), Some(w)) = (
-                next,
-                fake.list_windows(true)
-                    .unwrap()
-                    .into_iter()
-                    .find(|w| w.title == click_leaf)
-                    .map(|w| w.window),
-            ) {
-                fake.set_tree(w, explorer_tree(&name, tree_header));
-            }
+        #[cfg(not(windows))]
+        {
+            opts.read(true);
         }
-    });
-    let prior = d.kit.fake.launches().len();
-    assert_eq!(prior, 0);
-    // the tree exists as soon as the window does
-    d.kit.fake.set_launch_hook({
-        let tree_header = with_header;
-        move |fake, spec| {
-            if let AppTarget::Executable(_) = &spec.target {
+        opts.open(path).unwrap().set_modified(when).unwrap();
+    }
+
+    /// Five entries with known times and sizes. Newest first: new.txt, b10.txt, sub, b2.txt, old.txt.
+    fn make_folder(root: &Path) -> String {
+        let dir = root.join("docs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t0 = 1_700_000_000;
+        for (name, size, mtime) in [
+            ("old.txt", 5, t0),
+            ("b2.txt", 300, t0 + 100),
+            ("b10.txt", 20, t0 + 200),
+            ("new.txt", 1000, t0 + 300),
+        ] {
+            std::fs::write(dir.join(name), vec![b'x'; size]).unwrap();
+            set_mtime(&dir.join(name), mtime);
+        }
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        set_mtime(&dir.join("sub"), t0 + 150);
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// A kit whose launching Explorer opens a window titled with the folder's name.
+    fn folder_desk() -> (Desk, String) {
+        let d = Desk::new();
+        let folder = make_folder(d.kit.tmp.path());
+        d.kit.fake.set_launch_hook(|fake, spec| {
+            if let AppTarget::Executable(exe) = &spec.target
+                && exe.eq_ignore_ascii_case("explorer.exe")
+            {
+                let leaf = spec
+                    .args
+                    .trim_matches('"')
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
                 let w = fake.add_window(WindowInfo::basic(
-                    &launch_leaf,
+                    &leaf,
                     "explorer.exe",
                     900,
                     Rect::from_xywh(5, 5, 300, 170),
@@ -1533,204 +1208,538 @@ fn header_desk(rows: &[&str], with_header: bool) -> (Desk, String, Arc<Mutex<u32
                     i.class = "CabinetWClass".into();
                     i.kind = WindowKind::FileManager;
                 });
-                fake.set_tree(w, explorer_tree("start", tree_header));
             }
+        });
+        (d, folder)
+    }
+
+    fn folder_call(d: &Desk, args: Value) -> Result<String, StepError> {
+        let mut a = args;
+        a["action"] = json!("folder");
+        d.kit.step(a).map(|(note, img)| {
+            assert!(img.is_none());
+            note
+        })
+    }
+
+    fn name_of(line: &str) -> String {
+        line.split("  ").nth(2).unwrap_or("").to_string()
+    }
+
+    fn pressed(d: &Desk) -> Vec<Key> {
+        d.kit
+            .fake
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                InputEvent::KeyDown(k) => Some(k),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn explorer_ref(d: &Desk, leaf: &str) -> String {
+        let lines = d.kit.computer.window_refs().list(false).unwrap();
+        let l = lines
+            .iter()
+            .find(|l| l.title == leaf)
+            .expect("the new explorer window");
+        format!("w{}", l.reference)
+    }
+
+    fn leaf_of(folder: &str) -> String {
+        Path::new(folder)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    // Ported from test_the_benchmark_task_in_one_call.
+    #[test]
+    fn the_benchmark_task_in_one_call() {
+        let (d, folder) = folder_desk();
+        let out = folder_call(
+            &d,
+            json!({"path": folder, "view": "details", "sort": "date_modified desc", "list": 3}),
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let leaf = leaf_of(&folder);
+        let r = explorer_ref(&d, &leaf);
+        assert!(
+        lines[0].ends_with(&format!(
+            "opened a new window, {r} \"{leaf}\"; view details (shell); sort date_modified desc (shell)"
+        )),
+        "{}",
+        lines[0]
+    );
+        assert!(
+            lines[1].ends_with("first 3 of 5 entries by date_modified desc"),
+            "{}",
+            lines[1]
+        );
+        assert_eq!(name_of(lines[2]), "new.txt");
+        assert_eq!(lines.len(), 5);
+        assert_eq!(
+            d.kit.fake.shell_state(),
+            ("details".to_string(), "date_modified desc".to_string())
+        );
+        assert!(pressed(&d).is_empty(), "the Shell did it, no keystrokes");
+    }
+
+    // A folder call ends in text, so a batch whose last step is one carries no picture.
+    #[test]
+    fn a_folder_call_in_a_batch_ends_without_a_screenshot() {
+        let (d, folder) = folder_desk();
+        let out = d
+            .kit
+            .run(json!({"action": "folder", "path": folder, "list": 2}))
+            .unwrap();
+        assert!(out.images.is_empty());
+    }
+
+    // Ported from test_folder_waits_for_a_person_and_remembers_the_window_as_the_target.
+    #[test]
+    fn folder_waits_for_a_person_and_remembers_the_window_as_the_target() {
+        let (d, folder) = folder_desk();
+        folder_call(&d, json!({"path": folder})).unwrap();
+        assert!(d.kit.fake.human_idle_reads() > 0);
+        assert!(d.kit.computer.mem().target.is_some());
+    }
+
+    // Ported from test_folder_with_only_a_path_just_opens_it.
+    #[test]
+    fn folder_with_only_a_path_just_opens_it() {
+        let (d, folder) = folder_desk();
+        let out = folder_call(&d, json!({"path": folder})).unwrap();
+        assert!(
+            !out.contains("view") && !out.contains("sort") && !out.contains("entries"),
+            "{out}"
+        );
+        assert!(out.contains("opened a new window"), "{out}");
+        assert_eq!(d.kit.fake.shell_calls(), 0);
+    }
+
+    // Ported from test_list_without_sort_means_newest_first.
+    #[test]
+    fn list_without_sort_means_newest_first() {
+        let (d, folder) = folder_desk();
+        // a string works, recipes send one
+        let out = folder_call(&d, json!({"path": folder, "list": "2"})).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[1].ends_with("by date_modified desc"), "{}", lines[1]);
+        assert_eq!(name_of(lines[2]), "new.txt");
+    }
+
+    // Ported from test_list_follows_the_requested_sort.
+    #[test]
+    fn list_follows_the_requested_sort() {
+        let (d, folder) = folder_desk();
+        let out = folder_call(&d, json!({"path": folder, "sort": "size asc", "list": 2})).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        // the Shell was asked to sort too, so the head line says so
+        assert!(lines.iter().any(|l| l.ends_with("by size asc")), "{out}");
+        let list_at = lines
+            .iter()
+            .position(|l| l.ends_with("by size asc"))
+            .unwrap();
+        assert!(
+            ["sub", "old.txt"].contains(&name_of(lines[list_at + 1]).as_str()),
+            "{out}"
+        );
+    }
+
+    // Ported from test_text_is_accepted_for_the_path_like_list_files.
+    #[test]
+    fn text_is_accepted_for_the_path_like_list_files() {
+        let (d, folder) = folder_desk();
+        assert!(
+            folder_call(&d, json!({"text": folder}))
+                .unwrap()
+                .contains("opened a new window")
+        );
+    }
+
+    // Ported from test_arguments_are_checked_before_any_window_opens.
+    #[test]
+    fn arguments_are_checked_before_any_window_opens() {
+        let (d, folder) = folder_desk();
+        let nope = d.kit.tmp.path().join("nope").to_string_lossy().into_owned();
+        for bad in [
+            json!({"path": ""}),
+            json!({"path": nope}),
+            json!({"path": folder, "view": "gallery"}),
+            json!({"path": folder, "sort": "colour"}),
+            json!({"path": folder, "list": "many"}),
+            json!({"path": folder, "list": -1}),
+        ] {
+            let e = folder_call(&d, bad.clone()).unwrap_err();
+            assert!(
+                matches!(e, StepError::Value(_) | StepError::Target(_)),
+                "{bad}: {e}"
+            );
         }
-    });
-    (d, folder, clicks)
-}
+        assert!(d.kit.fake.launches().is_empty());
+    }
 
-// Ported from test_header_click_that_lands_the_right_way_first_time_is_verified.
-#[test]
-fn header_click_that_lands_the_right_way_first_time_is_verified() {
-    let (d, folder, clicks) = header_desk(&["new"], true); // Explorer hides the .txt
-    let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
-    assert_eq!(*clicks.lock().unwrap(), 1);
-    assert!(
-        out.contains("date_modified desc (header click, verified)"),
-        "{out}"
-    );
-}
+    // Ported from test_a_credential_folder_is_refused_by_the_hard_line.
+    #[test]
+    fn a_credential_folder_is_refused_by_the_hard_line() {
+        let (d, _) = folder_desk();
+        let cred = d.kit.tmp.path().join("config").join("SAM");
+        std::fs::create_dir_all(&cred).unwrap();
+        let e = folder_call(&d, json!({"path": cred.to_string_lossy()})).unwrap_err();
+        assert!(
+            matches!(e, StepError::Permission(_)) && e.message().contains("credential"),
+            "{e}"
+        );
+        assert!(d.kit.fake.launches().is_empty());
+    }
 
-// Ported from test_header_click_toggles_once_when_the_first_click_went_the_other_way.
-#[test]
-fn header_click_toggles_once_when_the_first_click_went_the_other_way() {
-    let (d, folder, clicks) = header_desk(&["old.txt", "new.txt"], true);
-    let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
-    assert_eq!(*clicks.lock().unwrap(), 2);
-    assert!(out.contains("(header click, verified)"), "{out}");
-}
+    // Ported from test_under_an_allowlist_explorer_must_be_allowed_and_listing_stays_in_temp.
+    #[test]
+    fn under_an_allowlist_explorer_must_be_allowed_and_listing_stays_in_temp() {
+        let (d, folder) = folder_desk();
+        let e = d
+            .kit
+            .step_only(
+                &["notepad.exe"],
+                json!({"action": "folder", "path": folder}),
+            )
+            .unwrap_err();
+        assert!(e.message().contains("may not open explorer.exe"), "{e}");
+        assert!(d.kit.fake.launches().is_empty());
+        // explorer allowed, but %TEMP% is somewhere else: the listing is refused
+        let elsewhere = tempdir_elsewhere();
+        let d2 = Desk::with_env(MapEnv::new().with("TEMP", &elsewhere));
+        let folder2 = make_folder(d2.kit.tmp.path());
+        let e = d2
+            .kit
+            .step_only(
+                &["explorer.exe"],
+                json!({"action": "folder", "path": folder2, "list": 3}),
+            )
+            .unwrap_err();
+        assert!(e.message().contains("folder list may only read"), "{e}");
+        assert!(d2.kit.fake.launches().is_empty());
+    }
 
-// Ported from test_header_click_gives_up_after_two_and_says_not_verified.
-#[test]
-fn header_click_gives_up_after_two_and_says_not_verified() {
-    let (d, folder, clicks) = header_desk(&["old.txt", "b2.txt"], true);
-    let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
-    assert_eq!(*clicks.lock().unwrap(), 2);
-    assert!(
-        out.contains("not verified") && out.contains("'b2.txt'"),
-        "{out}"
-    );
-}
+    fn tempdir_elsewhere() -> String {
+        std::env::temp_dir()
+            .join(format!("wh-not-the-kit-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
 
-// Ported from test_header_click_accepts_a_folder_first_listing.
-#[test]
-fn header_click_accepts_a_folder_first_listing() {
-    let (d, folder, _clicks) = header_desk(&["sub"], true); // folders grouped on top is also fine
-    let out = folder_call(&d, json!({"path": folder, "sort": "date_modified asc"})).unwrap();
-    assert!(out.contains("(header click, verified)"), "{out}");
-}
+    // Ported from test_the_callers_own_explorer_like_window_is_refused_after_opening: a window the guard
+    // refuses is never arranged.
+    #[test]
+    fn a_refused_folder_window_is_never_arranged() {
+        let (mut d, folder) = folder_desk();
+        d.kit.who = Caller::new(vec![(900, "explorer.exe".into())], false);
+        let e = folder_call(&d, json!({"path": folder, "view": "details"})).unwrap_err();
+        assert!(e.message().contains("refused"), "{e}");
+        assert!(pressed(&d).is_empty());
+        assert_eq!(d.kit.fake.shell_calls(), 0, "nothing was changed");
+    }
 
-// Ported from test_no_column_header_means_the_sort_is_reported_not_applied.
-#[test]
-fn no_column_header_means_the_sort_is_reported_not_applied() {
-    let (d, folder, clicks) = header_desk(&["x"], false);
-    let out = folder_call(&d, json!({"path": folder, "sort": "size desc"})).unwrap();
-    assert!(
-        out.contains("sort not applied (no 'Size' column header") && out.contains("view=details"),
-        "{out}"
-    );
-    assert_eq!(*clicks.lock().unwrap(), 0);
-}
+    // Ported from test_when_the_shell_is_unreachable_the_view_falls_back_to_ctrl_shift_6.
+    #[test]
+    fn when_the_shell_is_unreachable_the_view_falls_back_to_ctrl_shift_6() {
+        let (d, folder) = folder_desk();
+        d.kit.fake.set_shell_mode(ShellMode::Unavailable);
+        let out = folder_call(&d, json!({"path": folder, "view": "details"})).unwrap();
+        let keys = pressed(&d);
+        assert_eq!(keys, [Key::Ctrl, Key::Shift, Key::Char('6')], "{keys:?}");
+        assert!(
+            out.contains("view details (keyboard, not read back)"),
+            "{out}"
+        );
+        assert!(out.contains("shell api unavailable ("), "{out}");
+        assert!(out.contains("sort not set"), "{out}");
+    }
 
-// Ported from test_a_sort_the_shell_applied_is_never_clicked.
-#[test]
-fn a_sort_the_shell_applied_is_never_clicked() {
-    let (d, folder, clicks) = header_desk(&["x"], true);
-    d.kit.fake.set_shell_mode(ShellMode::Works);
-    folder_call(&d, json!({"path": folder, "sort": "name"})).unwrap();
-    assert_eq!(*clicks.lock().unwrap(), 0);
-    assert_eq!(d.kit.fake.shell_state().1, "name asc");
-}
+    // Ported from test_each_view_has_its_own_fallback_key.
+    #[test]
+    fn each_view_has_its_own_fallback_key() {
+        let (d, folder) = folder_desk();
+        d.kit.fake.set_shell_mode(ShellMode::Absent);
+        for (view, key) in [
+            ("list", '5'),
+            ("tiles", '7'),
+            ("icons", '3'),
+            ("large", '2'),
+        ] {
+            folder_call(&d, json!({"path": folder, "view": view})).unwrap();
+            assert_eq!(pressed(&d).last(), Some(&Key::Char(key)), "{view}");
+        }
+        assert!(
+            folder_call(&d, json!({"path": folder, "view": "list"}))
+                .unwrap()
+                .contains("did not list the window")
+        );
+    }
 
-// Ported from test_the_shell_sets_the_view_and_a_failing_sort_alone_falls_back_to_the_header.
-#[test]
-fn the_shell_sets_the_view_and_a_failing_sort_alone_falls_back_to_the_header() {
-    let (d, folder, clicks) = header_desk(&["new"], true);
-    d.kit.fake.set_shell_mode(ShellMode::Works);
-    d.kit.fake.fail_shell_sort(true);
-    let out = folder_call(
-        &d,
-        json!({"path": folder, "view": "details", "sort": "date_modified desc"}),
-    )
-    .unwrap();
-    assert!(
-        out.contains("view details (shell)") && out.contains("(header click, verified)"),
-        "{out}"
-    );
-    assert!(out.contains("shell sort: E_FAIL"), "{out}");
-    assert_eq!(*clicks.lock().unwrap(), 1);
-    assert!(pressed(&d).is_empty());
-}
+    // ---------------------------------------------------------------------------- folder: the header click fallback
 
-// ---------------------------------------------------------------------------- the bundled recipes that use them
+    /// The folder window's tree: a "Date modified" column header and one list row.
+    fn explorer_tree(first_row: &str, with_header: bool) -> Element {
+        let mut root = Element::new("root", Role::Window, "docs");
+        if with_header {
+            root = root.with_child(
+                Element::new("h", Role::Other("HeaderItem".into()), "Date modified")
+                    .at(Rect::new(100, 10, 160, 25)),
+            );
+        }
+        root.with_child(Element::new("r", Role::ListItem, first_row).at(Rect::new(10, 40, 90, 55)))
+    }
 
-#[test]
-fn the_bundled_close_app_recipe_closes_every_window_of_the_app() {
-    let d = Desk::new();
-    let a = d.add("a - Notepad", "notepad.exe", "Notepad");
-    let b = d.add("b - Notepad", "notepad.exe", "Notepad");
-    let mail = d.add("Mail", "olk.exe", "x");
-    let out = d
+    /// A desk where every header click moves the first visible row through `rows`, one per click.
+    fn header_desk(rows: &[&str], with_header: bool) -> (Desk, String, Arc<Mutex<u32>>) {
+        let (d, folder) = folder_desk();
+        d.kit.fake.set_shell_mode(ShellMode::Absent);
+        let leaf = leaf_of(&folder);
+        let queue: Arc<Mutex<VecDeque<String>>> =
+            Arc::new(Mutex::new(rows.iter().map(|r| (*r).to_string()).collect()));
+        let clicks = Arc::new(Mutex::new(0u32));
+        let launch_leaf = leaf.clone();
+        let click_leaf = leaf;
+        let tree_header = with_header;
+        d.kit.fake.set_click_hook({
+            let (queue, clicks) = (queue.clone(), clicks.clone());
+            move |fake, _| {
+                *clicks.lock().unwrap() += 1;
+                let next = queue.lock().unwrap().pop_front();
+                if let (Some(name), Some(w)) = (
+                    next,
+                    fake.list_windows(true)
+                        .unwrap()
+                        .into_iter()
+                        .find(|w| w.title == click_leaf)
+                        .map(|w| w.window),
+                ) {
+                    fake.set_tree(w, explorer_tree(&name, tree_header));
+                }
+            }
+        });
+        let prior = d.kit.fake.launches().len();
+        assert_eq!(prior, 0);
+        // the tree exists as soon as the window does
+        d.kit.fake.set_launch_hook({
+            let tree_header = with_header;
+            move |fake, spec| {
+                if let AppTarget::Executable(_) = &spec.target {
+                    let w = fake.add_window(WindowInfo::basic(
+                        &launch_leaf,
+                        "explorer.exe",
+                        900,
+                        Rect::from_xywh(5, 5, 300, 170),
+                    ));
+                    fake.update_window(w, |i| {
+                        i.class = "CabinetWClass".into();
+                        i.kind = WindowKind::FileManager;
+                    });
+                    fake.set_tree(w, explorer_tree("start", tree_header));
+                }
+            }
+        });
+        (d, folder, clicks)
+    }
+
+    // Ported from test_header_click_that_lands_the_right_way_first_time_is_verified.
+    #[test]
+    fn header_click_that_lands_the_right_way_first_time_is_verified() {
+        let (d, folder, clicks) = header_desk(&["new"], true); // Explorer hides the .txt
+        let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
+        assert_eq!(*clicks.lock().unwrap(), 1);
+        assert!(
+            out.contains("date_modified desc (header click, verified)"),
+            "{out}"
+        );
+    }
+
+    // Ported from test_header_click_toggles_once_when_the_first_click_went_the_other_way.
+    #[test]
+    fn header_click_toggles_once_when_the_first_click_went_the_other_way() {
+        let (d, folder, clicks) = header_desk(&["old.txt", "new.txt"], true);
+        let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
+        assert_eq!(*clicks.lock().unwrap(), 2);
+        assert!(out.contains("(header click, verified)"), "{out}");
+    }
+
+    // Ported from test_header_click_gives_up_after_two_and_says_not_verified.
+    #[test]
+    fn header_click_gives_up_after_two_and_says_not_verified() {
+        let (d, folder, clicks) = header_desk(&["old.txt", "b2.txt"], true);
+        let out = folder_call(&d, json!({"path": folder, "sort": "date_modified desc"})).unwrap();
+        assert_eq!(*clicks.lock().unwrap(), 2);
+        assert!(
+            out.contains("not verified") && out.contains("'b2.txt'"),
+            "{out}"
+        );
+    }
+
+    // Ported from test_header_click_accepts_a_folder_first_listing.
+    #[test]
+    fn header_click_accepts_a_folder_first_listing() {
+        let (d, folder, _clicks) = header_desk(&["sub"], true); // folders grouped on top is also fine
+        let out = folder_call(&d, json!({"path": folder, "sort": "date_modified asc"})).unwrap();
+        assert!(out.contains("(header click, verified)"), "{out}");
+    }
+
+    // Ported from test_no_column_header_means_the_sort_is_reported_not_applied.
+    #[test]
+    fn no_column_header_means_the_sort_is_reported_not_applied() {
+        let (d, folder, clicks) = header_desk(&["x"], false);
+        let out = folder_call(&d, json!({"path": folder, "sort": "size desc"})).unwrap();
+        assert!(
+            out.contains("sort not applied (no 'Size' column header")
+                && out.contains("view=details"),
+            "{out}"
+        );
+        assert_eq!(*clicks.lock().unwrap(), 0);
+    }
+
+    // Ported from test_a_sort_the_shell_applied_is_never_clicked.
+    #[test]
+    fn a_sort_the_shell_applied_is_never_clicked() {
+        let (d, folder, clicks) = header_desk(&["x"], true);
+        d.kit.fake.set_shell_mode(ShellMode::Works);
+        folder_call(&d, json!({"path": folder, "sort": "name"})).unwrap();
+        assert_eq!(*clicks.lock().unwrap(), 0);
+        assert_eq!(d.kit.fake.shell_state().1, "name asc");
+    }
+
+    // Ported from test_the_shell_sets_the_view_and_a_failing_sort_alone_falls_back_to_the_header.
+    #[test]
+    fn the_shell_sets_the_view_and_a_failing_sort_alone_falls_back_to_the_header() {
+        let (d, folder, clicks) = header_desk(&["new"], true);
+        d.kit.fake.set_shell_mode(ShellMode::Works);
+        d.kit.fake.fail_shell_sort(true);
+        let out = folder_call(
+            &d,
+            json!({"path": folder, "view": "details", "sort": "date_modified desc"}),
+        )
+        .unwrap();
+        assert!(
+            out.contains("view details (shell)") && out.contains("(header click, verified)"),
+            "{out}"
+        );
+        assert!(out.contains("shell sort: E_FAIL"), "{out}");
+        assert_eq!(*clicks.lock().unwrap(), 1);
+        assert!(pressed(&d).is_empty());
+    }
+
+    // ---------------------------------------------------------------------------- the bundled recipes that use them
+
+    #[test]
+    fn the_bundled_close_app_recipe_closes_every_window_of_the_app() {
+        let d = Desk::new();
+        let a = d.add("a - Notepad", "notepad.exe", "Notepad");
+        let b = d.add("b - Notepad", "notepad.exe", "Notepad");
+        let mail = d.add("Mail", "olk.exe", "x");
+        let out = d
         .kit
         .run(json!({"action": "recipe", "name": "close_app", "params": {"app": "notepad.exe"}, "shot": false}))
         .unwrap();
-    assert!(
-        out.text.starts_with("recipe close_app(app): 1 steps"),
-        "{}",
-        out.text
-    );
-    assert!(!d.kit.fake.window_exists(a) && !d.kit.fake.window_exists(b));
-    assert!(d.kit.fake.window_exists(mail));
-}
+        assert!(
+            out.text.starts_with("recipe close_app(app): 1 steps"),
+            "{}",
+            out.text
+        );
+        assert!(!d.kit.fake.window_exists(a) && !d.kit.fake.window_exists(b));
+        assert!(d.kit.fake.window_exists(mail));
+    }
 
-#[test]
-fn the_bundled_explorer_newest_recipe_answers_in_text() {
-    let (d, folder) = folder_desk();
-    let out = d
+    #[test]
+    fn the_bundled_explorer_newest_recipe_answers_in_text() {
+        let (d, folder) = folder_desk();
+        let out = d
         .kit
         .run(json!({"action": "recipe", "name": "explorer_newest", "params": {"path": folder, "n": 2}}))
         .unwrap();
-    let lines: Vec<&str> = out.text.lines().collect();
-    assert_eq!(lines[0], "recipe explorer_newest(path, n=3): 1 steps");
-    assert!(
-        lines[1].contains("view details (shell); sort date_modified desc (shell)"),
-        "{}",
-        out.text
-    );
-    assert_eq!(name_of(lines[3]), "new.txt");
-    assert!(out.images.is_empty(), "a text answer needs no picture");
-}
+        let lines: Vec<&str> = out.text.lines().collect();
+        assert_eq!(lines[0], "recipe explorer_newest(path, n=3): 1 steps");
+        assert!(
+            lines[1].contains("view details (shell); sort date_modified desc (shell)"),
+            "{}",
+            out.text
+        );
+        assert_eq!(name_of(lines[3]), "new.txt");
+        assert!(out.images.is_empty(), "a text answer needs no picture");
+    }
 
-#[test]
-fn the_bundled_open_url_recipe_waits_for_the_browser() {
-    let d = Desk::new();
-    let t = d.add("terminal", "terminal.exe", "t");
-    d.kit.fake.set_foreground(Some(t));
-    browser_hook(&d, "Example Domain - Brave");
-    let out = d
+    #[test]
+    fn the_bundled_open_url_recipe_waits_for_the_browser() {
+        let d = Desk::new();
+        let t = d.add("terminal", "terminal.exe", "t");
+        d.kit.fake.set_foreground(Some(t));
+        browser_hook(&d, "Example Domain - Brave");
+        let out = d
         .kit
         .run(json!({"action": "recipe", "name": "open_url", "params": {"url": "https://example.com"}, "shot": false}))
         .unwrap();
-    assert!(
-        out.text.contains("opened https://example.com in w"),
-        "{}",
-        out.text
-    );
-}
+        assert!(
+            out.text.contains("opened https://example.com in w"),
+            "{}",
+            out.text
+        );
+    }
 
-// ---------------------------------------------------------------------------- folder: opening the window
+    // ---------------------------------------------------------------------------- folder: opening the window
 
-// Ported from test_a_new_window_is_found_from_do_opens_reply.
-#[test]
-fn a_new_window_is_found_from_do_opens_reply() {
-    let (d, folder) = folder_desk();
-    d.add("Downloads", "explorer.exe", "CabinetWClass");
-    let ctx = d.kit.ctx(json!({}));
-    let (w, how) = ctx.open_explorer(&folder).unwrap();
-    assert_eq!(how, "opened a new window");
-    assert_eq!(d.kit.fake.window_info(w).unwrap().title, leaf_of(&folder));
-    let launches = d.kit.fake.launches();
-    assert_eq!(launches.len(), 1);
-    assert!(launches[0].args.contains(&folder), "{:?}", launches[0]);
-}
+    // Ported from test_a_new_window_is_found_from_do_opens_reply.
+    #[test]
+    fn a_new_window_is_found_from_do_opens_reply() {
+        let (d, folder) = folder_desk();
+        d.add("Downloads", "explorer.exe", "CabinetWClass");
+        let ctx = d.kit.ctx(json!({}));
+        let (w, how) = ctx.open_explorer(&folder).unwrap();
+        assert_eq!(how, "opened a new window");
+        assert_eq!(d.kit.fake.window_info(w).unwrap().title, leaf_of(&folder));
+        let launches = d.kit.fake.launches();
+        assert_eq!(launches.len(), 1);
+        assert!(launches[0].args.contains(&folder), "{:?}", launches[0]);
+    }
 
-// Ported from test_an_explorer_window_already_on_the_folder_is_reused_when_the_shell_can_say_so.
-#[test]
-fn an_explorer_window_already_on_the_folder_is_reused_when_the_shell_can_say_so() {
-    let (d, folder) = folder_desk();
-    let existing = d.add("Downloads", "explorer.exe", "CabinetWClass");
-    d.kit.fake.set_folder_window(&folder, existing);
-    let ctx = d.kit.ctx(json!({}));
-    let (w, how) = ctx.open_explorer(&folder).unwrap();
-    assert_eq!(
-        (w, how.as_str()),
-        (existing, "reused the window already open on it")
-    );
-    assert!(
-        d.kit.fake.launches().is_empty(),
-        "must not start another window"
-    );
-    assert_eq!(d.kit.fake.foreground_window().unwrap(), Some(existing));
-}
+    // Ported from test_an_explorer_window_already_on_the_folder_is_reused_when_the_shell_can_say_so.
+    #[test]
+    fn an_explorer_window_already_on_the_folder_is_reused_when_the_shell_can_say_so() {
+        let (d, folder) = folder_desk();
+        let existing = d.add("Downloads", "explorer.exe", "CabinetWClass");
+        d.kit.fake.set_folder_window(&folder, existing);
+        let ctx = d.kit.ctx(json!({}));
+        let (w, how) = ctx.open_explorer(&folder).unwrap();
+        assert_eq!(
+            (w, how.as_str()),
+            (existing, "reused the window already open on it")
+        );
+        assert!(
+            d.kit.fake.launches().is_empty(),
+            "must not start another window"
+        );
+        assert_eq!(d.kit.fake.foreground_window().unwrap(), Some(existing));
+    }
 
-// Ported from test_when_explorer_raises_the_existing_window_instead_of_making_one.
-#[test]
-fn when_explorer_raises_the_existing_window_instead_of_making_one() {
-    let d = Desk::new();
-    let folder = make_folder(d.kit.tmp.path());
-    let existing = d.add(&leaf_of(&folder), "explorer.exe", "CabinetWClass");
-    // the launch makes no new window at all
-    let ctx = d.kit.ctx(json!({}));
-    let (w, how) = ctx.open_explorer(&folder).unwrap();
-    assert_eq!(
-        (w, how.as_str()),
-        (existing, "found the window already open on it")
-    );
-    // a window with some other title does not count
-    d.kit
-        .fake
-        .update_window(existing, |i| i.title = "Something else".into());
-    let e = ctx.open_explorer(&folder).unwrap_err();
-    assert!(matches!(e, StepError::Target(_)), "{e}");
+    // Ported from test_when_explorer_raises_the_existing_window_instead_of_making_one.
+    #[test]
+    fn when_explorer_raises_the_existing_window_instead_of_making_one() {
+        let d = Desk::new();
+        let folder = make_folder(d.kit.tmp.path());
+        let existing = d.add(&leaf_of(&folder), "explorer.exe", "CabinetWClass");
+        // the launch makes no new window at all
+        let ctx = d.kit.ctx(json!({}));
+        let (w, how) = ctx.open_explorer(&folder).unwrap();
+        assert_eq!(
+            (w, how.as_str()),
+            (existing, "found the window already open on it")
+        );
+        // a window with some other title does not count
+        d.kit
+            .fake
+            .update_window(existing, |i| i.title = "Something else".into());
+        let e = ctx.open_explorer(&folder).unwrap_err();
+        assert!(matches!(e, StepError::Target(_)), "{e}");
+    }
 }
