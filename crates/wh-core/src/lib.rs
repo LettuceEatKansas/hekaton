@@ -18,11 +18,14 @@ pub mod clock;
 pub mod config;
 pub mod destructive;
 pub mod env;
+pub mod human;
 pub mod imaging;
 pub mod input;
 pub mod keys;
 pub mod paths;
 pub mod scale;
+pub mod settle;
+pub mod state;
 pub mod textutil;
 pub mod token;
 
