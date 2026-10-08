@@ -16,6 +16,8 @@ mod model;
 mod ocr;
 mod process;
 mod resolve;
+mod shell;
+mod shortcuts;
 mod timezone;
 mod uia;
 mod uia_ops;
@@ -30,8 +32,9 @@ use std::time::Duration;
 use wh_core::backend::{
     AppTarget, Backend, BackendError, BackendResult, Capabilities, CaptureTarget, Caret,
     ClipboardContent, Display, DocumentHit, Element, ElementAction, ElementHit, ElementId,
-    HotkeyChord, Image, InputGuard, LaunchOutcome, LaunchSpec, MenuItem, MouseButton, OcrResult,
-    Point, ProcessInfo, Rect, ScrollDirection, TreeLimits, TreeSnapshot, WindowInfo, WindowRef,
+    FolderSort, FolderView, FolderViewState, HotkeyChord, Image, InputGuard, LaunchOutcome,
+    LaunchSpec, MenuItem, MouseButton, OcrResult, Point, ProcessInfo, Rect, ScrollDirection,
+    TreeLimits, TreeSnapshot, WindowGeometry, WindowInfo, WindowOp, WindowRef,
 };
 use wh_core::keys::Key;
 use windows::Win32::UI::HiDpi::{
@@ -410,6 +413,31 @@ impl Backend for WindowsBackend {
 
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
         launch::launch(spec)
+    }
+
+    // ------------------------------------------------------------------ window and folder shortcuts
+
+    fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        shortcuts::window_geometry(window)
+    }
+
+    fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        shortcuts::window_op(window, op)
+    }
+
+    fn folder_window(&self, folder: &str) -> BackendResult<Option<WindowRef>> {
+        shell::folder_window(folder)
+    }
+
+    fn set_folder_view(
+        &self,
+        window: WindowRef,
+        folder: &str,
+        view: Option<FolderView>,
+        sort: Option<FolderSort>,
+        timeout: Duration,
+    ) -> BackendResult<Option<FolderViewState>> {
+        shell::set_folder_view(window, folder, view, sort, timeout)
     }
 
     // ------------------------------------------------------------------ local time
