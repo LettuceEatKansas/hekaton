@@ -93,6 +93,17 @@ fn io_error(e: io::Error) -> ClientError {
     }
 }
 
+/// One read, retried when a signal cuts it short (`EINTR`, which Linux can raise on a socket with a
+/// read timeout), so a signal landing in the process is not reported as a broken connection.
+fn read_some(stream: &mut impl Read, buf: &mut [u8]) -> Result<usize, ClientError> {
+    loop {
+        match stream.read(buf) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            other => return other.map_err(io_error),
+        }
+    }
+}
+
 /// One request, one answer, one connection. `token` is sent as `X-Winhands-Token`; `body` makes it a
 /// JSON body with its length. `timeouts` bound the connection and then every read and write.
 pub fn request(
@@ -150,7 +161,7 @@ fn read_reply(stream: &mut impl Read) -> Result<Reply, ClientError> {
         if let Some(i) = find(&buf, b"\r\n\r\n") {
             break i;
         }
-        let n = stream.read(&mut chunk).map_err(io_error)?;
+        let n = read_some(stream, &mut chunk)?;
         if n == 0 {
             return Err(ClientError::Io(
                 "the daemon closed the connection before answering".into(),
@@ -186,7 +197,7 @@ fn read_reply(stream: &mut impl Read) -> Result<Reply, ClientError> {
         body = read_chunked(stream, body)?;
     } else if let Some(want) = content_length {
         while body.len() < want {
-            let n = stream.read(&mut chunk).map_err(io_error)?;
+            let n = read_some(stream, &mut chunk)?;
             if n == 0 {
                 return Err(ClientError::Io(
                     "the daemon closed the connection mid-answer".into(),
@@ -197,7 +208,7 @@ fn read_reply(stream: &mut impl Read) -> Result<Reply, ClientError> {
         body.truncate(want);
     } else {
         loop {
-            let n = stream.read(&mut chunk).map_err(io_error)?;
+            let n = read_some(stream, &mut chunk)?;
             if n == 0 {
                 break;
             }
@@ -224,7 +235,7 @@ fn read_chunked(stream: &mut impl Read, mut pending: Vec<u8>) -> Result<Vec<u8>,
             if let Some(i) = find(&pending, b"\r\n") {
                 break i;
             }
-            let n = stream.read(&mut chunk).map_err(io_error)?;
+            let n = read_some(stream, &mut chunk)?;
             if n == 0 {
                 return Err(ClientError::Io("truncated chunked answer".into()));
             }
@@ -238,7 +249,7 @@ fn read_chunked(stream: &mut impl Read, mut pending: Vec<u8>) -> Result<Vec<u8>,
             return Ok(out);
         }
         while pending.len() < size + 2 {
-            let n = stream.read(&mut chunk).map_err(io_error)?;
+            let n = read_some(stream, &mut chunk)?;
             if n == 0 {
                 return Err(ClientError::Io("truncated chunked answer".into()));
             }
