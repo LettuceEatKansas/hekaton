@@ -44,6 +44,18 @@ windows = { workspace = true, features = [
     # lib.rs, timezone.rs: GetTickCount, SystemTimeToTzSpecificLocalTimeEx
     "Win32_System_SystemInformation",
     "Win32_System_Time",
+    # uia*.rs: UI Automation (IUIAutomation, cache requests, patterns), VARIANT and SAFEARRAY results
+    "Win32_UI_Accessibility",
+    "Win32_System_Variant",
+    "Win32_System_Ole",
+    "Win32_System_Com_StructuredStorage",
+    # ocr.rs: Windows.Media.Ocr, SoftwareBitmap from a DataWriter buffer
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Globalization",
+    "Storage_Streams",
+    "Foundation",
+    "Foundation_Collections",
 ] }
 
 [lints.rust]

@@ -152,7 +152,7 @@ pub(crate) fn foreground() -> HWND {
     unsafe { GetForegroundWindow() }
 }
 
-fn title_of(hwnd: HWND) -> String {
+pub(crate) fn title_of(hwnd: HWND) -> String {
     // SAFETY: plain query on a handle; a dead window reports length 0.
     let len = unsafe { GetWindowTextLengthW(hwnd) };
     if len <= 0 {
@@ -337,6 +337,35 @@ pub(crate) fn window_at_point(x: i32, y: i32) -> Option<WindowRef> {
     // SAFETY: plain query on a live or dead handle.
     let root = unsafe { GetAncestor(hit, GA_ROOT) };
     opt_ref(if root.0.is_null() { hit } else { root })
+}
+
+/// The top-level window above a handle (`GA_ROOT`), `None` when the OS reports none.
+pub(crate) fn root_hwnd(hwnd: HWND) -> Option<HWND> {
+    // SAFETY: plain query on a live or dead handle.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    (!root.0.is_null()).then_some(root)
+}
+
+/// Window classes that mean Chromium, Electron or CEF (Python `_CHROMIUM_CLASSES`).
+const CHROMIUM_CLASSES: [&str; 3] = [
+    "Chrome_WidgetWin",
+    "CefBrowserWindow",
+    "Chrome_RenderWidgetHostHWND",
+];
+
+/// Does a class name belong to Chromium?
+pub(crate) fn is_chromium_class(class: &str) -> bool {
+    CHROMIUM_CLASSES.iter().any(|c| class.starts_with(c))
+}
+
+/// Is this a Chromium, Electron or CEF window (Steam, Brave, Discord, Hermes)? The window's class or
+/// one of its first 40 child windows' (Python `_is_chromium`).
+pub(crate) fn is_chromium(hwnd: HWND) -> bool {
+    is_chromium_class(&class_of(hwnd))
+        || children(hwnd)
+            .into_iter()
+            .take(40)
+            .any(|c| is_chromium_class(&class_of(c)))
 }
 
 /// The top-level window that contains `window` (Python `root_hwnd`).
@@ -609,11 +638,10 @@ pub(crate) fn restore_window(window: WindowRef, timeout: Duration) -> BackendRes
     Ok(())
 }
 
-/// Part 2 hook: has the window's accessibility tree begun to populate (a UIA root with children)?
-/// Until the UIA backend lands this says no, so readiness rests on the window's own state: two
-/// consecutive looks at a visible, restored, real-sized window.
-fn tree_started(_hwnd: HWND) -> bool {
-    false
+/// Has the window's accessibility tree begun to populate (a UIA root with a child)? Python asked
+/// `ControlFromHandle(hwnd).GetChildren()`. The query can hang on a stuck app, so it is time-boxed.
+fn tree_started(hwnd: HWND) -> bool {
+    crate::uia::tree_started(hwnd)
 }
 
 /// Bounded wait for a restored window to settle (Python `wait_window_ready`).
@@ -660,6 +688,16 @@ mod tests {
         );
         assert_eq!(kind_for_class("Notepad"), WindowKind::Normal);
         assert_eq!(kind_for_class(""), WindowKind::Normal);
+    }
+
+    #[test]
+    fn chromium_windows_are_told_by_class() {
+        assert!(is_chromium_class("Chrome_WidgetWin_1"));
+        assert!(is_chromium_class("CefBrowserWindow"));
+        assert!(is_chromium_class("Chrome_RenderWidgetHostHWND"));
+        assert!(!is_chromium_class("Notepad"));
+        assert!(!is_chromium_class("MozillaWindowClass"));
+        assert!(!is_chromium_class(""));
     }
 
     #[test]
