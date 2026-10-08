@@ -310,6 +310,43 @@ fn a_bare_name_launches_what_the_backend_resolves_it_to() {
     );
 }
 
+// Python split "brave --new-window url" because its resolver fell through to the shortcut's target,
+// so a name that only resolves to a Start Menu shortcut must split too.
+#[test]
+fn a_name_that_resolves_to_a_shortcut_still_splits_off_its_arguments() {
+    let kit = Kit::new();
+    kit.fake.set_app(
+        "brave",
+        AppTarget::Shortcut("C:\\Start Menu\\Brave.lnk".into()),
+    );
+    do_open(&kit, "brave --new-window http://x", 0.2, true, true).unwrap_err();
+    assert_eq!(
+        kit.fake.launches()[0],
+        LaunchSpec {
+            target: AppTarget::Shortcut("C:\\Start Menu\\Brave.lnk".into()),
+            args: "--new-window http://x".into(),
+            deelevate: true
+        }
+    );
+    // a packaged app is not a program: nothing is split off it
+    kit.fake.set_app(
+        "sample",
+        AppTarget::Packaged("Sample.App_8wekyb3d8bbwe!App".into()),
+    );
+    do_open(&kit, "sample --flag", 0.2, true, true).unwrap_err();
+    assert_eq!(kit.fake.launches()[1].args, "");
+}
+
+#[test]
+fn only_programs_and_shortcuts_count_as_launchable_heads() {
+    use super::open::is_launchable;
+    assert!(is_launchable(Some(&AppTarget::Executable("a.exe".into()))));
+    assert!(is_launchable(Some(&AppTarget::Shortcut("a.lnk".into()))));
+    assert!(!is_launchable(Some(&AppTarget::Packaged("pkg!App".into()))));
+    assert!(!is_launchable(Some(&AppTarget::Other("ms-settings:".into()))));
+    assert!(!is_launchable(None));
+}
+
 #[test]
 fn a_destructive_launch_string_is_refused_before_anything_starts() {
     let kit = Kit::new();

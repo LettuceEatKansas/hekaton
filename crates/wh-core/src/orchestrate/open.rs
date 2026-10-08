@@ -121,6 +121,17 @@ pub(crate) fn repair_escapes(text: &str, is_file: &dyn Fn(&str) -> bool) -> Stri
     escaped
 }
 
+/// Does a resolved name count as a program for [`split_launch`]? An executable does, and so does a
+/// Start Menu shortcut: Python's resolver fell through to the shortcut's target, so
+/// `brave --new-window url` split even when `brave` is only a shortcut here. A packaged app or
+/// anything the shell opens does not (its name can hold spaces that are not arguments).
+pub(crate) fn is_launchable(target: Option<&AppTarget>) -> bool {
+    matches!(
+        target,
+        Some(AppTarget::Executable(_) | AppTarget::Shortcut(_))
+    )
+}
+
 /// Split a launch string into the program and its arguments (`do_open`: "allow an argument after the
 /// app, e.g. `explorer.exe C:\path`"). `knows` says a name is a program on `PATH`, an App Paths entry
 /// or otherwise launchable; `exists` and `is_file` are filesystem probes. Returns `(head, args)`.
@@ -399,12 +410,7 @@ impl Ctx<'_> {
         let env = self.cfg().env();
         let (head, launch_args) = split_launch(
             &app_stripped,
-            &|name| {
-                matches!(
-                    self.be().resolve_app(name),
-                    Ok(Some(AppTarget::Executable(_)))
-                )
-            },
+            &|name| is_launchable(self.be().resolve_app(name).ok().flatten().as_ref()),
             &|p| Path::new(p).exists(),
             &|p| Path::new(p).is_file(),
         );
