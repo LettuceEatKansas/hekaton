@@ -18,6 +18,7 @@ mod process;
 mod resolve;
 mod shell;
 mod shortcuts;
+mod spawn;
 mod timezone;
 mod uia;
 mod uia_ops;
@@ -43,6 +44,7 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware;
 
+pub use crate::spawn::keep_std_handles_private;
 use crate::util::{ensure_com, hwnd_of};
 
 /// Per-monitor-v2 DPI awareness, falling back to older calls (Python `set_dpi_awareness`). After

@@ -8,7 +8,7 @@
 
 use std::io::{self, Read};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -41,6 +41,9 @@ pub struct DaemonOptions {
     pub idle_poll: Duration,
     /// When the process started its own work; the listening line says how long set-up took.
     pub started: Instant,
+    /// Write the daemon's messages to this file (appended, rotated at 1 MB) instead of stdout and
+    /// stderr. `winhandsd` has no console, so its messages would go nowhere otherwise.
+    pub log: Option<PathBuf>,
 }
 
 impl Default for DaemonOptions {
@@ -49,7 +52,46 @@ impl Default for DaemonOptions {
             no_hotkey: false,
             idle_poll: IDLE_POLL,
             started: Instant::now(),
+            log: None,
         }
+    }
+}
+
+impl DaemonOptions {
+    /// An ordinary message: stdout, or the log file when there is one.
+    pub fn out(&self, line: &str) {
+        match &self.log {
+            Some(path) => append_log(path, line),
+            None => println!("{line}"),
+        }
+    }
+
+    /// A problem: stderr, or the log file when there is one.
+    pub fn err(&self, line: &str) {
+        match &self.log {
+            Some(path) => append_log(path, line),
+            None => eprintln!("{line}"),
+        }
+    }
+}
+
+/// Append one line, stamped with the Unix time in seconds, to the daemon log. Never fails: a log that
+/// cannot be written is not worth stopping the daemon for.
+pub fn append_log(path: &Path, line: &str) {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    wh_core::audit::rotate(path, 1_000_000);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "[{secs}] {line}");
     }
 }
 
@@ -169,12 +211,12 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
     let host = match cfg.bind_host() {
         Ok(h) => h,
         Err(refused) => {
-            eprintln!("winhands: {refused}");
+            opts.err(&format!("winhands: {refused}"));
             return EXIT_REMOTE_BIND_REFUSED;
         }
     };
     if let Err(e) = backend.init() {
-        eprintln!("winhands: backend setup failed: {e}");
+        opts.err(&format!("winhands: backend setup failed: {e}"));
     }
     // Warm the OCR path from the very start: it overlaps the bind, token and hotkey set-up below
     // instead of starting after them (the first read_text used to pay seconds for it).
@@ -189,10 +231,10 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
     let listener = match bind(&host, port) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!(
+            opts.err(&format!(
                 "winhands: cannot bind {host}:{port} ({e}); another daemon is running, leaving \
                  its token untouched and exiting"
-            );
+            ));
             return EXIT_PORT_TAKEN;
         }
     };
@@ -201,10 +243,10 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
     let token = match token::write_token(&paths, cfg.env()) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
+            opts.err(&format!(
                 "winhands: cannot write the token file {}: {e}",
                 paths.token().display()
-            );
+            ));
             return 1;
         }
     };
@@ -221,17 +263,17 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
     write_pid(&paths.pid());
     if !opts.no_hotkey {
         match daemon.install_kill_hotkey() {
-            Some(name) => eprintln!("winhands: kill hotkey registered: {name}"),
+            Some(name) => opts.err(&format!("winhands: kill hotkey registered: {name}")),
             None => {
-                eprintln!("winhands: no kill hotkey could be registered; pause feature disabled")
+                opts.err("winhands: no kill hotkey could be registered; pause feature disabled")
             }
         }
     }
     if !wh_core::config::LOOPBACK_ADDRESSES.contains(&host.to_lowercase().as_str()) {
-        println!(
+        opts.out(&format!(
             "winhands: WARNING listening on {host}, not loopback. Anything that can reach \
              {host}:{bound_port} and read the token can drive this desktop. See SECURITY.md."
-        );
+        ));
     }
     if remote {
         let why = if remote_bind {
@@ -245,29 +287,29 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
         } else {
             names.join(", ")
         };
-        println!(
+        opts.out(&format!(
             "winhands: WARNING remote caller mode ({why}). The calling process cannot be \
              identified from this machine, so the caller-relative guard is OFF: winhands will \
              not refuse the windows of whatever is driving it. Only protect_processes ({list}) \
              is enforced. See the \"Remote mode\" section of SECURITY.md."
-        );
+        ));
     }
     let elevated = backend
         .own_process()
         .ok()
         .flatten()
         .is_some_and(|p| p.elevated);
-    println!(
+    opts.out(&format!(
         "winhands listening on {host}:{bound_port} elevated={elevated} idle_shutdown={idle_secs}s (ready in {} ms)",
         opts.started.elapsed().as_millis()
-    );
+    ));
     let stop = Arc::new(AtomicBool::new(false));
     let result = serve(listener, daemon, stop, opts.idle_poll);
     let _ = std::fs::remove_file(paths.pid());
     match result {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("winhands: server stopped: {e}");
+            opts.err(&format!("winhands: server stopped: {e}"));
             1
         }
     }

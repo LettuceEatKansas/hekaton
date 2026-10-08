@@ -131,25 +131,44 @@ pub fn main(args: Vec<String>) -> i32 {
 
 // ------------------------------------------------------------------------------ daemon
 
-fn cmd_daemon(mut rest: Vec<String>) -> i32 {
+fn cmd_daemon(rest: Vec<String>) -> i32 {
+    run_daemon_command(rest, false)
+}
+
+/// The entry point of `winhandsd`, the daemon built for the Windows GUI subsystem so a scheduled
+/// task can start it without a console window. Same daemon as `winhands daemon`; with no console its
+/// messages and panics go to `daemon.log` in the data directory instead. `args` is what the process
+/// was started with (`--no-hotkey` is the only option).
+pub fn main_hidden(args: Vec<String>) -> i32 {
+    run_daemon_command(args, true)
+}
+
+fn run_daemon_command(mut rest: Vec<String>, hidden: bool) -> i32 {
     let no_hotkey = take_flag(&mut rest, "--no-hotkey");
+    let cfg = Arc::new(Config::from_system());
+    let opts = DaemonOptions {
+        no_hotkey,
+        log: hidden.then(|| cfg.paths().daemon_log()),
+        ..DaemonOptions::default()
+    };
+    if let Some(log) = opts.log.clone() {
+        // there is no stderr to print a panic to
+        std::panic::set_hook(Box::new(move |info| {
+            crate::serve::append_log(&log, &format!("panic: {info}"));
+        }));
+    }
     if let Some(extra) = rest.first() {
-        eprintln!(
+        opts.err(&format!(
             "winhands daemon: unexpected argument {extra:?}. usage: winhands daemon [--no-hotkey]"
-        );
+        ));
         return 2;
     }
     let backend = match platform::backend() {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("winhands: {e}");
+            opts.err(&format!("winhands: {e}"));
             return 1;
         }
-    };
-    let cfg = Arc::new(Config::from_system());
-    let opts = DaemonOptions {
-        no_hotkey,
-        ..DaemonOptions::default()
     };
     platform::run_daemon_thread(move || run_daemon(backend, cfg, &opts))
 }

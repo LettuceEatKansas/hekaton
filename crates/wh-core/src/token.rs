@@ -58,12 +58,17 @@ fn restrict_to_owner(file: &Path, env: &dyn Env) {
     if user.is_empty() {
         return;
     }
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW: the daemon may have no console (winhandsd), and a console program started from
+    // a process without one would otherwise open its own window for a moment.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("icacls")
         .arg(file)
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{user}:F"))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .status();
 }
 

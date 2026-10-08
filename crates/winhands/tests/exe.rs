@@ -483,3 +483,139 @@ fn the_shim_starts_the_daemon_on_demand_and_the_call_goes_through() {
         .unwrap_or(0);
     assert_eq!(left, 0, "the shim removed its record on the way out");
 }
+
+#[cfg(windows)]
+fn hidden_exe() -> &'static str {
+    env!("CARGO_BIN_EXE_winhandsd")
+}
+
+/// The PE optional header's Subsystem field: 2 is the Windows GUI subsystem (no console), 3 is console.
+#[cfg(windows)]
+fn pe_subsystem(path: &str) -> u16 {
+    let bytes = std::fs::read(path).unwrap();
+    let pe = u32::from_le_bytes(bytes[0x3c..0x40].try_into().unwrap()) as usize;
+    assert_eq!(&bytes[pe..pe + 4], b"PE\0\0", "{path} is not a PE file");
+    let optional = pe + 24;
+    u16::from_le_bytes(bytes[optional + 68..optional + 70].try_into().unwrap())
+}
+
+#[cfg(windows)]
+#[test]
+fn winhandsd_has_no_console_and_winhands_keeps_one() {
+    assert_eq!(pe_subsystem(hidden_exe()), 2, "winhandsd is a GUI program");
+    assert_eq!(pe_subsystem(exe()), 3, "winhands stays a console program");
+}
+
+#[cfg(windows)]
+#[test]
+fn winhandsd_runs_the_daemon_and_writes_its_messages_to_the_log() {
+    let sb = Sandbox::new("hidden");
+    let mut cmd = Command::new(hidden_exe());
+    cmd.arg("--no-hotkey");
+    for (key, _) in std::env::vars() {
+        if key.starts_with("WINHANDS_") {
+            cmd.env_remove(key);
+        }
+    }
+    let mut child = cmd
+        .env("LOCALAPPDATA", &sb.dir)
+        .env("WINHANDS_PORT", sb.port.to_string())
+        .env("WINHANDS_IDLE_TIMEOUT_SECONDS", "120")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_health(&sb, Duration::from_secs(20)).expect("winhandsd came up");
+    let health: Value =
+        serde_json::from_slice(&sb.request("GET", "/health", None).unwrap().body).unwrap();
+    assert_eq!(health["impl"], "winhands-rs");
+    assert_eq!(health["hotkey"], Value::Null, "--no-hotkey");
+    assert!(sb.data().join("daemon.pid").exists());
+    let log = std::fs::read_to_string(sb.data().join("daemon.log")).unwrap_or_default();
+    assert!(log.contains("winhands listening on 127.0.0.1"), "{log}");
+    // an ordinary request works and the daemon stops on request, exit code 0
+    let r = sb
+        .request(
+            "POST",
+            "/computer",
+            Some(&json!({"action": "list_windows"})),
+        )
+        .unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        sb.request("POST", "/shutdown", Some(&json!({})))
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+    assert!(!sb.data().join("daemon.pid").exists(), "pid file removed");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_second_winhandsd_on_the_same_port_logs_why_it_left() {
+    let sb = Sandbox::new("hidden2");
+    let _blocker = std::net::TcpListener::bind(("127.0.0.1", sb.port)).unwrap();
+    let mut cmd = Command::new(hidden_exe());
+    cmd.arg("--no-hotkey");
+    for (key, _) in std::env::vars() {
+        if key.starts_with("WINHANDS_") {
+            cmd.env_remove(key);
+        }
+    }
+    let status = cmd
+        .env("LOCALAPPDATA", &sb.dir)
+        .env("WINHANDS_PORT", sb.port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(3), "port taken");
+    let log = std::fs::read_to_string(sb.data().join("daemon.log")).unwrap_or_default();
+    assert!(log.contains("cannot bind"), "{log}");
+    assert!(
+        !sb.data().join("token").exists(),
+        "a daemon that cannot bind leaves the token alone"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn winhands_start_can_start_winhandsd_and_status_names_it_by_default() {
+    let sb = Sandbox::new("startd");
+    // by default a stopped daemon would be started with the winhandsd.exe that sits next to winhands.exe
+    let out = sb.command(&["status"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("start method:") && text.contains("winhandsd.exe"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("winhands.exe\" daemon"),
+        "not the console build: {text}"
+    );
+    // started through --daemon-cmd with the test-only flag, it comes up and winhands stop ends it
+    // (capturing the output is part of the test: a daemon that inherited the pipe would keep `output()`
+    // waiting until its 120 s idle timeout)
+    let cmdline = format!("\"{}\" --no-hotkey", hidden_exe());
+    let began = Instant::now();
+    let out = sb
+        .command(&["start", "--daemon-cmd", &cmdline])
+        .output()
+        .unwrap();
+    assert!(
+        began.elapsed() < Duration::from_secs(60),
+        "the started daemon held the caller's output pipe open: {:?}",
+        began.elapsed()
+    );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.contains("winhands: running"), "{text}");
+    assert!(sb.request("GET", "/health", None).is_some());
+    let out = sb.command(&["stop"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("stop requested"));
+    thread::sleep(Duration::from_millis(300));
+    assert!(sb.request("GET", "/health", None).is_none());
+}
