@@ -9,7 +9,7 @@ use wh_core::backend::{
     ClipboardContent, Display, DocumentHit, Element, ElementAction, ElementHit, ElementId,
     HotkeyChord, Image, InputGuard, LaunchOutcome, LaunchSpec, MenuItem, MouseButton, OcrResult,
     PermissionStatus, Point, ProcessInfo, Rect, ScrollDirection, TreeLimits, TreeSnapshot,
-    WindowInfo, WindowRef,
+    WindowGeometry, WindowInfo, WindowOp, WindowRef,
 };
 use wh_core::keys::Key;
 
@@ -22,7 +22,7 @@ use crate::procs::Procs;
 use crate::textops::{PASTE_ABOVE_UNITS, utf16_len};
 use crate::tree::Registry;
 use crate::wininfo::window_parts;
-use crate::{clip, displays, launch, ocr, perm, text, tree, winlist};
+use crate::{clip, displays, launch, ocr, perm, text, tree, winlist, winops};
 
 /// The macOS backend. Cheap to share: every method takes `&self`.
 pub struct MacBackend {
@@ -430,6 +430,19 @@ impl Backend for MacBackend {
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
         launch::launch(spec)
     }
+
+    // ------------------------------------------------------------------ window shortcuts
+
+    fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        winops::geometry(window, &self.display_rects())
+    }
+
+    fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        winops::op(window, op)
+    }
+
+    // `folder_window` and `set_folder_view` keep their defaults: the core opens Finder with `open`
+    // and reports that the view and sort were not applied (they would need AppleScript).
 
     // ------------------------------------------------------------------ local time
 
