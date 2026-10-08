@@ -45,8 +45,14 @@ libc = "0.2"
 global-hotkey = "0.8.0"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
+# winhands binary (daemon, MCP server, CLI). The daemon is synchronous (one thread per request, like
+# the Python ThreadingHTTPServer), so only the MCP stdio server needs an async runtime.
+tiny_http = "0.12"
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io"] }
+tokio = { version = "1.53", default-features = false, features = ["rt", "time", "sync", "io-std", "io-util"] }
+
 # Later phases (not wired to any crate yet): uiautomation 0.25.1, xcap 0.9.8, arboard 3.6.1,
-# rmcp 3.5.1, axum 0.8.9, tokio 1.53.2, toml 1.1.7, schemars 1.2.2.
+# toml 1.1.7.
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

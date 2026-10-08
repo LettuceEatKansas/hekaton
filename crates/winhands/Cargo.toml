@@ -6,14 +6,31 @@ license.workspace = true
 rust-version.workspace = true
 description = "winhands: desktop control for AI agents (daemon, MCP server, CLI)"
 
+[lib]
+name = "winhands_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "winhands"
+path = "src/main.rs"
+
 [dependencies]
 wh-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+tiny_http = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 wh-win = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wh-mac = { workspace = true }
+
+[dev-dependencies]
+wh-core = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

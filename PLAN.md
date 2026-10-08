@@ -98,3 +98,32 @@ Reference code that is MIT licensed and may be studied or borrowed with attribut
 - A daemon outside the user's GUI session cannot see the screen; run as a LaunchAgent in the Aqua session.
 - A headless Mac mini may capture a blank or wallpaper-only image. Test the laptop first.
 - Password fields under Secure Input, TCC privacy panes and authorization dialogs cannot be driven.
+
+## R2a status: the `winhands` binary (2026-10-08)
+
+`winhands daemon | mcp | wh | status | start | stop | pause | resume | acknowledge | doctor`. Run under the
+name `wh` (a copy or hard link of the exe) it is the `wh` command line. No argument runs the daemon, as the
+Python exe did.
+
+| Piece | Where |
+|---|---|
+| Request router, auth, ack gate, batch, legacy route adapters, warm-up gate, hotkey chain | `wh_core::daemon` (no sockets, tested on every OS) |
+| MCP tool definition, payload builder, reply conversion | `wh_core::mcp` (compared with `tests/parity/python_list_tools.json`, the Python shim's own `list_tools`) |
+| HTTP server (`tiny_http`, one thread per request), idle thread, start-up | `crates/winhands/src/serve.rs` |
+| MCP stdio server (`rmcp` 3.5.1), shim registry and reaper | `shim.rs`, `registry.rs` |
+| Client, on-demand daemon start with one retry | `client.rs`, `link.rs`, `start.rs` |
+| `wh` syntax | `wh.rs` |
+
+How a missing daemon is started (shim and `wh`), first match wins: `--daemon-cmd "<command line>"` /
+`daemon_cmd` in config.json / `WINHANDS_DAEMON_CMD`; then `--daemon-task <name>` / `daemon_task` /
+`WINHANDS_DAEMON_TASK` (`schtasks /run /tn <name>`, how an elevated daemon is started); otherwise this exe
+with `daemon`, detached, output to `daemon.log`. `daemon_wait_s` (default 25) bounds the wait for `/health`.
+
+New HTTP routes (the Python daemon has neither): `POST /pause` and `POST /resume`. `/health` gains `impl` and
+`backend`. The legacy input routes (`click`, `type`, `key`, `scroll`, `drag`, `hover`, `open`) are adapters
+onto `computer` actions; element-number and `t`-ref targets, `window=`, `exact` and the `report` deltas are
+refused with a message (see `wh_core::daemon::legacy`). `screenshot` returns the whole display as a PNG.
+
+Not done yet: the tray (the pause hotkey and `winhands pause` replace it), the recipe, `window` and `folder`
+actions (R1c; the tool description already names them, the core answers "unknown action" until they land),
+signing, and the scheduled-task and LaunchAgent setup.

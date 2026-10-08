@@ -1,11 +1,18 @@
-//! The winhands binary: `winhands daemon | mcp | status | acknowledge | pause | ...`.
-//!
-//! The subcommands land in later phases; this placeholder only links the core so the workspace
-//! builds end to end.
+//! The winhands binary: `winhands daemon | mcp | wh | status | start | stop | pause | resume |
+//! acknowledge | doctor`. Run under the name `wh` it is the `wh` command line.
 
 fn main() {
-    println!(
-        "winhands {} (phase R1: core only, no subcommands yet)",
-        env!("CARGO_PKG_VERSION")
-    );
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let invoked_as_wh = std::env::args_os()
+        .next()
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_stem()
+                .map(|s| s.to_ascii_lowercase())
+        })
+        .is_some_and(|stem| stem == "wh");
+    if invoked_as_wh {
+        args.insert(0, "wh".to_string());
+    }
+    std::process::exit(winhands_lib::cli::main(args));
 }

@@ -249,8 +249,14 @@ impl Daemon {
         }
     }
 
+    /// Does this `X-Winhands-Token` header value open the daemon? The HTTP layer asks before it reads a
+    /// body, so a caller without the token cannot make the daemon buffer anything.
+    pub fn is_authorised(&self, presented: Option<&str>) -> bool {
+        token::verify(presented.unwrap_or(""), &self.token)
+    }
+
     fn authorised(&self, req: &Request<'_>) -> bool {
-        token::verify(req.token.unwrap_or(""), &self.token)
+        self.is_authorised(req.token)
     }
 
     fn unauthorised() -> Response {
