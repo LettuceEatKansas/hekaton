@@ -63,6 +63,10 @@ pub type ChordHook = Arc<dyn Fn(&FakeBackend, &[Key]) + Send + Sync>;
 /// Called after a launch is recorded, so a test can make the launched app's window appear.
 pub type LaunchHook = Arc<dyn Fn(&FakeBackend, &LaunchSpec) + Send + Sync>;
 
+/// Called after a click is recorded, with where it landed, so a test can script what the click does
+/// (a column header re-sorting a list).
+pub type ClickHook = Arc<dyn Fn(&FakeBackend, Point) + Send + Sync>;
+
 struct State {
     windows: Vec<WindowInfo>,
     next_window: u64,
@@ -105,6 +109,7 @@ struct State {
     hotkey: Option<Arc<dyn Fn() + Send + Sync>>,
     chord_hook: Option<ChordHook>,
     launch_hook: Option<LaunchHook>,
+    click_hook: Option<ClickHook>,
     popup_delay: u32,
     menu_delay: u32,
     doc_rects: HashMap<(WindowRef, usize), (Rect, Rect)>,
@@ -113,6 +118,31 @@ struct State {
     utc_offset: Option<i32>,
     inits: u32,
     capabilities: Capabilities,
+    maximized: Vec<WindowRef>,
+    clients: HashMap<WindowRef, Rect>,
+    window_ops: Vec<(WindowRef, WindowOp)>,
+    hold_open: Vec<WindowRef>,
+    ignore_ops: bool,
+    max_width: Option<i32>,
+    folder_windows: Vec<(String, WindowRef)>,
+    shell: ShellMode,
+    shell_view: String,
+    shell_sort: String,
+    shell_fail_sort: bool,
+    shell_calls: u32,
+}
+
+/// How the fake Shell (Explorer's view interface) behaves for
+/// [`Backend::set_folder_view`](super::Backend::set_folder_view).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellMode {
+    /// It lists the window and applies what is asked.
+    #[default]
+    Works,
+    /// The interface is out of reach (an elevated caller, say): every call errors.
+    Unavailable,
+    /// The window never shows up in the interface.
+    Absent,
 }
 
 /// See the [module docs](self).
@@ -178,6 +208,7 @@ impl FakeBackend {
                 hotkey: None,
                 chord_hook: None,
                 launch_hook: None,
+                click_hook: None,
                 popup_delay: 0,
                 menu_delay: 0,
                 doc_rects: HashMap::new(),
@@ -186,6 +217,18 @@ impl FakeBackend {
                 utc_offset: None,
                 inits: 0,
                 capabilities: Capabilities::all(),
+                maximized: Vec::new(),
+                clients: HashMap::new(),
+                window_ops: Vec::new(),
+                hold_open: Vec::new(),
+                ignore_ops: false,
+                max_width: None,
+                folder_windows: Vec::new(),
+                shell: ShellMode::Works,
+                shell_view: String::new(),
+                shell_sort: String::new(),
+                shell_fail_sort: false,
+                shell_calls: 0,
             }),
         }
     }
@@ -460,6 +503,11 @@ impl FakeBackend {
         self.st().launch_hook = Some(Arc::new(hook));
     }
 
+    /// Script what a click does: `hook` runs after each recorded click.
+    pub fn set_click_hook(&self, hook: impl Fn(&FakeBackend, Point) + Send + Sync + 'static) {
+        self.st().click_hook = Some(Arc::new(hook));
+    }
+
     /// Make `popup_menus` answer empty for its next `polls` calls, as a menu that opens late.
     pub fn set_popup_delay(&self, polls: u32) {
         self.st().popup_delay = polls;
@@ -507,6 +555,68 @@ impl FakeBackend {
     /// Script `local_utc_offset` (seconds east of UTC). Unset, it is unsupported.
     pub fn set_utc_offset(&self, seconds: i32) {
         self.st().utc_offset = Some(seconds);
+    }
+
+    // ------------------------------------------------------------------ scripting: shortcuts
+
+    /// Start a window maximised.
+    pub fn set_maximized(&self, window: WindowRef, value: bool) {
+        let mut s = self.st();
+        s.maximized.retain(|w| *w != window);
+        if value {
+            s.maximized.push(window);
+        }
+    }
+
+    /// Script a window's client area (screen coordinates). Unset, it has none.
+    pub fn set_client_rect(&self, window: WindowRef, rect: Rect) {
+        self.st().clients.insert(window, rect);
+    }
+
+    /// A window that stays open when asked to close (a "save changes?" box is up).
+    pub fn hold_open_on_close(&self, window: WindowRef) {
+        self.st().hold_open.push(window);
+    }
+
+    /// Make every `window_op` a no-op that still succeeds (an app that ignores the request).
+    pub fn ignore_window_ops(&self, value: bool) {
+        self.st().ignore_ops = value;
+    }
+
+    /// Clamp a moved window's width to at most this (an app that limits its own size).
+    pub fn limit_window_width(&self, width: i32) {
+        self.st().max_width = Some(width);
+    }
+
+    /// Every `window_op` the fake was asked for, in order.
+    pub fn window_ops(&self) -> Vec<(WindowRef, WindowOp)> {
+        self.st().window_ops.clone()
+    }
+
+    /// Script `folder_window`: an open window already showing this folder.
+    pub fn set_folder_window(&self, folder: &str, window: WindowRef) {
+        self.st().folder_windows.push((folder.to_string(), window));
+    }
+
+    /// Script how the fake Shell answers `set_folder_view`.
+    pub fn set_shell_mode(&self, mode: ShellMode) {
+        self.st().shell = mode;
+    }
+
+    /// Make the fake Shell refuse to set a sort (the view still applies).
+    pub fn fail_shell_sort(&self, value: bool) {
+        self.st().shell_fail_sort = value;
+    }
+
+    /// The view and sort the fake Shell holds now (`details`, `date_modified desc`), empty if unset.
+    pub fn shell_state(&self) -> (String, String) {
+        let s = self.st();
+        (s.shell_view.clone(), s.shell_sort.clone())
+    }
+
+    /// How many `set_folder_view` calls reached the fake Shell.
+    pub fn shell_calls(&self) -> u32 {
+        self.st().shell_calls
     }
 
     /// Script `capabilities`.
@@ -1047,10 +1157,16 @@ impl Backend for FakeBackend {
         guard: InputGuard<'_>,
     ) -> BackendResult<()> {
         guard()?;
-        let mut s = self.st();
-        s.cursor = at;
-        s.batches += 1 + 2 * u64::from(count);
-        s.events.push(InputEvent::Click { at, button, count });
+        let hook = {
+            let mut s = self.st();
+            s.cursor = at;
+            s.batches += 1 + 2 * u64::from(count);
+            s.events.push(InputEvent::Click { at, button, count });
+            s.click_hook.clone()
+        };
+        if let Some(hook) = hook {
+            hook(self, at);
+        }
         Ok(())
     }
 
@@ -1192,6 +1308,106 @@ impl Backend for FakeBackend {
             hook(self, spec);
         }
         Ok(LaunchOutcome { pid: Some(pid) })
+    }
+
+    fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        let info = self.window_info(window)?;
+        let s = self.st();
+        let state = if info.minimized {
+            WindowState::Minimized
+        } else if s.maximized.contains(&window) {
+            WindowState::Maximized
+        } else {
+            WindowState::Normal
+        };
+        Ok(WindowGeometry {
+            frame: info.rect,
+            visible: info.rect,
+            client: s.clients.get(&window).copied(),
+            state,
+        })
+    }
+
+    fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        let mut s = self.st();
+        if !s.windows.iter().any(|w| w.window == window) {
+            return Err(BackendError::WindowGone);
+        }
+        s.window_ops.push((window, op));
+        if s.ignore_ops {
+            return Ok(());
+        }
+        match op {
+            WindowOp::Close => {
+                if !s.hold_open.contains(&window) {
+                    s.windows.retain(|w| w.window != window);
+                    if s.foreground == Some(window) {
+                        s.foreground = None;
+                    }
+                }
+            }
+            WindowOp::Minimize | WindowOp::Maximize | WindowOp::Restore => {
+                s.maximized.retain(|w| *w != window);
+                if op == WindowOp::Maximize {
+                    s.maximized.push(window);
+                }
+                if let Some(w) = s.windows.iter_mut().find(|w| w.window == window) {
+                    w.minimized = op == WindowOp::Minimize;
+                }
+            }
+            WindowOp::Move(mut rect) => {
+                if let Some(max) = s.max_width {
+                    rect.right = rect.left + rect.width().min(max);
+                }
+                if let Some(w) = s.windows.iter_mut().find(|w| w.window == window) {
+                    w.rect = rect;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn folder_window(&self, folder: &str) -> BackendResult<Option<WindowRef>> {
+        let s = self.st();
+        if s.shell == ShellMode::Unavailable {
+            return Err(BackendError::Os("the Shell is out of reach".into()));
+        }
+        Ok(s.folder_windows
+            .iter()
+            .find(|(f, _)| f.eq_ignore_ascii_case(folder))
+            .map(|(_, w)| *w))
+    }
+
+    fn set_folder_view(
+        &self,
+        _window: WindowRef,
+        _folder: &str,
+        view: Option<FolderView>,
+        sort: Option<FolderSort>,
+        _timeout: Duration,
+    ) -> BackendResult<Option<FolderViewState>> {
+        let mut s = self.st();
+        s.shell_calls += 1;
+        match s.shell {
+            ShellMode::Unavailable => Err(BackendError::Os("E_ACCESSDENIED".into())),
+            ShellMode::Absent => Ok(None),
+            ShellMode::Works => {
+                let mut state = FolderViewState::default();
+                if let Some(v) = view {
+                    s.shell_view = v.name().to_string();
+                    state.view = s.shell_view.clone();
+                }
+                if let Some(o) = sort {
+                    if s.shell_fail_sort {
+                        state.errors.push("sort: E_FAIL".into());
+                    } else {
+                        s.shell_sort = o.describe();
+                        state.sort = s.shell_sort.clone();
+                    }
+                }
+                Ok(Some(state))
+            }
+        }
     }
 
     fn local_utc_offset(&self, _unix_secs: i64) -> BackendResult<i32> {

@@ -1,9 +1,8 @@
 //! The Windows backend: [`WindowsBackend`] implements [`wh_core::backend::Backend`] with Win32.
 //!
-//! Part 1 (this file and its modules): displays and capture, windows and focus, SendInput, the
-//! clipboard, processes, launching, the kill hotkey, the local time zone. Part 2 adds UI Automation
-//! (element trees, patterns, document text, menus) and WinRT OCR; those methods return
-//! `BackendError::Unsupported("part 2")` until then.
+//! Part 1: displays and capture, windows and focus, SendInput, the clipboard, processes, launching,
+//! the kill hotkey, the local time zone. Part 2: UI Automation (`uia*.rs`: element trees, patterns,
+//! document text, menus; the pure rules are in `model.rs`) and WinRT OCR (`ocr.rs`).
 //!
 //! On every other OS this crate is empty.
 #![cfg(windows)]
@@ -13,9 +12,17 @@ mod display;
 mod hotkey;
 mod input;
 mod launch;
+mod model;
+mod ocr;
 mod process;
 mod resolve;
+mod shell;
+mod shortcuts;
 mod timezone;
+mod uia;
+mod uia_ops;
+mod uia_text;
+mod uia_tree;
 mod util;
 mod wnd;
 
@@ -25,8 +32,9 @@ use std::time::Duration;
 use wh_core::backend::{
     AppTarget, Backend, BackendError, BackendResult, Capabilities, CaptureTarget, Caret,
     ClipboardContent, Display, DocumentHit, Element, ElementAction, ElementHit, ElementId,
-    HotkeyChord, Image, InputGuard, LaunchOutcome, LaunchSpec, MenuItem, MouseButton, OcrResult,
-    Point, ProcessInfo, Rect, ScrollDirection, TreeLimits, TreeSnapshot, WindowInfo, WindowRef,
+    FolderSort, FolderView, FolderViewState, HotkeyChord, Image, InputGuard, LaunchOutcome,
+    LaunchSpec, MenuItem, MouseButton, OcrResult, Point, ProcessInfo, Rect, ScrollDirection,
+    TreeLimits, TreeSnapshot, WindowGeometry, WindowInfo, WindowOp, WindowRef,
 };
 use wh_core::keys::Key;
 use windows::Win32::UI::HiDpi::{
@@ -36,13 +44,6 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware;
 
 use crate::util::{ensure_com, hwnd_of};
-
-/// Why a method is not there yet.
-const PART_TWO: &str = "part 2";
-
-fn part_two<T>() -> BackendResult<T> {
-    Err(BackendError::Unsupported(PART_TWO.into()))
-}
 
 /// Per-monitor-v2 DPI awareness, falling back to older calls (Python `set_dpi_awareness`). After
 /// this every coordinate the process sees is a physical pixel.
@@ -66,6 +67,7 @@ pub struct WindowsBackend {
     input: input::Injector,
     machine: launch::Machine,
     hotkey: Mutex<Option<String>>,
+    ocr: ocr::Ocr,
 }
 
 impl WindowsBackend {
@@ -77,6 +79,7 @@ impl WindowsBackend {
             input: input::Injector::default(),
             machine: launch::Machine::default(),
             hotkey: Mutex::new(None),
+            ocr: ocr::Ocr::default(),
         }
     }
 }
@@ -96,12 +99,12 @@ impl Backend for WindowsBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // Part 2 turns these on with UI Automation and WinRT OCR.
-            accessibility_tree: false,
-            document_text: false,
-            ocr: false,
-            popup_menus: false,
-            file_dialog: false,
+            accessibility_tree: true,
+            document_text: true,
+            // true until building the engine has failed once (no OCR language pack installed)
+            ocr: self.ocr.available(),
+            popup_menus: true,
+            file_dialog: true,
             caret: true,
             kill_hotkey: true,
             clipboard_files: true,
@@ -204,71 +207,63 @@ impl Backend for WindowsBackend {
         Ok(wnd::popup_menus())
     }
 
-    fn menu_items(&self, _budget: Duration) -> BackendResult<Vec<MenuItem>> {
-        part_two()
+    fn menu_items(&self, budget: Duration) -> BackendResult<Vec<MenuItem>> {
+        uia_ops::menu_items(budget)
     }
 
-    // ------------------------------------------------------------------ accessibility (part 2)
+    // ------------------------------------------------------------------ accessibility
 
-    fn element_tree(
-        &self,
-        _window: WindowRef,
-        _limits: &TreeLimits,
-    ) -> BackendResult<TreeSnapshot> {
-        part_two()
+    fn element_tree(&self, window: WindowRef, limits: &TreeLimits) -> BackendResult<TreeSnapshot> {
+        uia_tree::element_tree(window, limits)
     }
 
-    fn element(&self, _id: &ElementId) -> BackendResult<Element> {
-        part_two()
+    fn element(&self, id: &ElementId) -> BackendResult<Element> {
+        uia_ops::element(id)
     }
 
-    fn element_window(&self, _id: &ElementId) -> BackendResult<WindowRef> {
-        part_two()
+    fn element_window(&self, id: &ElementId) -> BackendResult<WindowRef> {
+        uia_ops::element_window(id)
     }
 
     fn element_at(
         &self,
-        _p: Point,
-        _max_ancestors: usize,
-        _budget: Duration,
+        p: Point,
+        max_ancestors: usize,
+        budget: Duration,
     ) -> BackendResult<Option<ElementHit>> {
-        part_two()
+        uia_ops::element_at(p, max_ancestors, budget)
     }
 
     fn focused_element(&self) -> BackendResult<Option<Element>> {
-        part_two()
+        uia_ops::focused_element()
     }
 
-    fn perform(&self, _id: &ElementId, _action: ElementAction) -> BackendResult<bool> {
-        part_two()
+    fn perform(&self, id: &ElementId, action: ElementAction) -> BackendResult<bool> {
+        uia_ops::perform(id, action)
     }
 
-    fn find_file_dialog_field(&self, _window: WindowRef) -> BackendResult<Option<ElementId>> {
-        part_two()
+    fn find_file_dialog_field(&self, window: WindowRef) -> BackendResult<Option<ElementId>> {
+        uia_ops::find_file_dialog_field(window)
     }
 
     // ------------------------------------------------------------------ text
 
-    fn document_text(
-        &self,
-        _window: WindowRef,
-        _max_chars: usize,
-    ) -> BackendResult<Option<String>> {
-        part_two()
+    fn document_text(&self, window: WindowRef, max_chars: usize) -> BackendResult<Option<String>> {
+        uia_text::document_text(window, max_chars)
     }
 
     fn find_in_documents(
         &self,
-        _window: WindowRef,
-        _query: &str,
-        _max_hits: usize,
-        _budget: Duration,
+        window: WindowRef,
+        query: &str,
+        max_hits: usize,
+        budget: Duration,
     ) -> BackendResult<Vec<DocumentHit>> {
-        part_two()
+        uia_text::find_in_documents(window, query, max_hits, budget)
     }
 
-    fn document_line_at(&self, _window: WindowRef, _p: Point) -> BackendResult<Option<String>> {
-        part_two()
+    fn document_line_at(&self, window: WindowRef, p: Point) -> BackendResult<Option<String>> {
+        uia_text::document_line_at(window, p)
     }
 
     fn caret(&self) -> BackendResult<Option<Caret>> {
@@ -382,14 +377,18 @@ impl Backend for WindowsBackend {
         Ok(clipboard::sequence())
     }
 
-    // ------------------------------------------------------------------ OCR (part 2)
+    // ------------------------------------------------------------------ OCR
 
-    fn ocr(&self, _image: &Image) -> BackendResult<OcrResult> {
-        part_two()
+    fn ocr(&self, image: &Image) -> BackendResult<OcrResult> {
+        self.ocr.recognize(image)
     }
 
     fn ocr_engine_name(&self) -> String {
-        "unavailable (part 2)".to_string()
+        self.ocr.name()
+    }
+
+    fn warm_ocr(&self) -> BackendResult<()> {
+        self.ocr.warm()
     }
 
     // ------------------------------------------------------------------ processes
@@ -414,6 +413,31 @@ impl Backend for WindowsBackend {
 
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
         launch::launch(spec)
+    }
+
+    // ------------------------------------------------------------------ window and folder shortcuts
+
+    fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        shortcuts::window_geometry(window)
+    }
+
+    fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        shortcuts::window_op(window, op)
+    }
+
+    fn folder_window(&self, folder: &str) -> BackendResult<Option<WindowRef>> {
+        shell::folder_window(folder)
+    }
+
+    fn set_folder_view(
+        &self,
+        window: WindowRef,
+        folder: &str,
+        view: Option<FolderView>,
+        sort: Option<FolderSort>,
+        timeout: Duration,
+    ) -> BackendResult<Option<FolderViewState>> {
+        shell::set_folder_view(window, folder, view, sort, timeout)
     }
 
     // ------------------------------------------------------------------ local time
@@ -462,40 +486,51 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_say_what_part_one_can_do() {
+    fn capabilities_say_everything_is_on() {
         let caps = WindowsBackend::new().capabilities();
         assert!(caps.caret && caps.kill_hotkey && caps.clipboard_files && caps.elevation);
-        assert!(!caps.accessibility_tree && !caps.ocr && !caps.document_text);
-        assert!(!caps.popup_menus && !caps.file_dialog);
+        assert!(caps.accessibility_tree && caps.document_text && caps.ocr);
+        assert!(caps.popup_menus && caps.file_dialog);
     }
 
     #[test]
-    fn the_accessibility_and_ocr_methods_wait_for_part_two() {
+    fn a_window_that_does_not_exist_is_gone_not_a_crash() {
         let b = WindowsBackend::new();
-        let part2 = BackendError::Unsupported("part 2".into());
-        let w = WindowRef::from_raw(1);
-        let id = ElementId("x".into());
-        let image = Image::solid(1, 1, [0, 0, 0, 255]);
-        let budget = Duration::from_millis(1);
-        assert_eq!(b.menu_items(budget).unwrap_err(), part2);
+        let nowhere = WindowRef::from_raw(0x7fff_fff0);
         assert_eq!(
-            b.element_tree(w, &TreeLimits::snapshot(1)).unwrap_err(),
-            part2
+            b.element_tree(nowhere, &TreeLimits::snapshot(10))
+                .unwrap_err(),
+            BackendError::WindowGone
         );
-        assert_eq!(b.element(&id).unwrap_err(), part2);
-        assert_eq!(b.element_window(&id).unwrap_err(), part2);
-        assert_eq!(
-            b.element_at(Point::new(0, 0), 1, budget).unwrap_err(),
-            part2
-        );
-        assert_eq!(b.focused_element().unwrap_err(), part2);
-        assert_eq!(b.perform(&id, ElementAction::Press).unwrap_err(), part2);
-        assert_eq!(b.find_file_dialog_field(w).unwrap_err(), part2);
-        assert_eq!(b.document_text(w, 10).unwrap_err(), part2);
-        assert_eq!(b.find_in_documents(w, "q", 1, budget).unwrap_err(), part2);
-        assert_eq!(b.document_line_at(w, Point::new(0, 0)).unwrap_err(), part2);
-        assert_eq!(b.ocr(&image).unwrap_err(), part2);
-        assert!(b.ocr_engine_name().contains("part 2"));
+    }
+
+    #[test]
+    fn ids_that_were_never_minted_here_are_gone() {
+        let b = WindowsBackend::new();
+        for bad in ["", "e17", "uia1|nope"] {
+            let id = ElementId(bad.into());
+            assert_eq!(
+                b.element(&id).unwrap_err(),
+                BackendError::ElementGone,
+                "{bad}"
+            );
+            assert_eq!(
+                b.element_window(&id).unwrap_err(),
+                BackendError::ElementGone
+            );
+            assert_eq!(
+                b.perform(&id, ElementAction::Press).unwrap_err(),
+                BackendError::ElementGone
+            );
+        }
+        // a well-formed id for a window that is not there
+        let id = ElementId("uia1|2147483632|50000|0,0,10,10|OK".into());
+        assert_eq!(b.element(&id).unwrap_err(), BackendError::ElementGone);
+    }
+
+    #[test]
+    fn ocr_reports_its_engine_name_before_any_call() {
+        assert_eq!(WindowsBackend::new().ocr_engine_name(), "untried");
     }
 
     #[test]

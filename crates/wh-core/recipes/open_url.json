@@ -1,0 +1,10 @@
+{
+  "name": "open_url",
+  "description": "Open the default browser at a URL and wait for its window",
+  "params": {
+    "url": {"required": true, "description": "http or https address"}
+  },
+  "steps": [
+    {"action": "open_app", "text": "{url}"}
+  ]
+}

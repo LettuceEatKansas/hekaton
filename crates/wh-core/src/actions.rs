@@ -18,7 +18,7 @@ pub const POINTER_ACTIONS: [&str; 12] = [
 ];
 
 /// The rest of computer.py `ACTIONS` (everything that is not a pointer action).
-pub const OTHER_ACTIONS: [&str; 19] = [
+pub const OTHER_ACTIONS: [&str; 24] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -38,11 +38,16 @@ pub const OTHER_ACTIONS: [&str; 19] = [
     "read",
     "list_files",
     "read_text",
+    "window",
+    "folder",
+    "recipe",
+    "recipe_list",
+    "recipe_save",
 ];
 
 /// Actions that only read state or touch the OS clipboard, never a window. They skip the
 /// human-input wait and target restore (computer.py `_PASSIVE_ACTIONS`).
-pub const PASSIVE_ACTIONS: [&str; 13] = [
+pub const PASSIVE_ACTIONS: [&str; 14] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -56,11 +61,12 @@ pub const PASSIVE_ACTIONS: [&str; 13] = [
     "list_windows",
     "read",
     "list_files",
+    "recipe_list",
 ];
 
 /// Actions a client may use BEFORE the owner has acknowledged winhands: reads only. `clipboard_set`
 /// is excluded because it changes state the user owns (computer.py `ACK_EXEMPT_ACTIONS`).
-pub const ACK_EXEMPT_ACTIONS: [&str; 12] = [
+pub const ACK_EXEMPT_ACTIONS: [&str; 13] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -73,11 +79,12 @@ pub const ACK_EXEMPT_ACTIONS: [&str; 12] = [
     "list_windows",
     "read",
     "list_files",
+    "recipe_list",
 ];
 
 /// Text-only answers: a batch ending in one of these skips the trailing screenshot
 /// (computer.py `_NO_TRAILING_SHOT`).
-pub const NO_TRAILING_SHOT: [&str; 10] = [
+pub const NO_TRAILING_SHOT: [&str; 13] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -88,6 +95,9 @@ pub const NO_TRAILING_SHOT: [&str; 10] = [
     "read",
     "list_files",
     "read_text",
+    "folder",
+    "recipe_list",
+    "recipe_save",
 ];
 
 /// Routes the daemon answers before acknowledgement (daemon.py `READ_ONLY_ACTIONS` plus `files`).
@@ -98,7 +108,7 @@ pub const REPORTABLE_ACTIONS: [&str; 6] = ["click", "type", "key", "scroll", "dr
 
 /// Every action name in the order Python's `sorted(ACTIONS)` lists them (the "unknown action"
 /// message prints this).
-pub const ACTIONS_SORTED: [&str; 31] = [
+pub const ACTIONS_SORTED: [&str; 36] = [
     "click_text",
     "clipboard_get",
     "clipboard_set",
@@ -106,6 +116,7 @@ pub const ACTIONS_SORTED: [&str; 31] = [
     "double_click",
     "file_dialog",
     "find_text",
+    "folder",
     "hold_key",
     "key",
     "left_click",
@@ -120,6 +131,9 @@ pub const ACTIONS_SORTED: [&str; 31] = [
     "read",
     "read_field",
     "read_text",
+    "recipe",
+    "recipe_list",
+    "recipe_save",
     "replace_word",
     "right_click",
     "screenshot",
@@ -129,10 +143,11 @@ pub const ACTIONS_SORTED: [&str; 31] = [
     "wait",
     "wait_for_file",
     "wait_for_text",
+    "window",
     "zoom",
 ];
 
-/// Is `action` one of the 31 actions the `computer` tool knows?
+/// Is `action` one of the 36 actions the `computer` tool knows?
 pub fn is_action(action: &str) -> bool {
     POINTER_ACTIONS.contains(&action) || OTHER_ACTIONS.contains(&action)
 }
@@ -171,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_action_set_has_the_documented_size() {
-        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 31);
+        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 36);
         assert!(PASSIVE_ACTIONS.iter().all(|a| is_action(a)));
         assert!(NO_TRAILING_SHOT.iter().all(|a| is_action(a)));
         assert!(!is_action("nope"));

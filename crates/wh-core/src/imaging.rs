@@ -168,12 +168,17 @@ fn rgb_bytes(img: &Image) -> Vec<u8> {
 
 /// JPEG bytes at quality 82. Alpha is dropped (Python grabbed RGB).
 pub fn encode_jpeg(img: &Image) -> Result<Vec<u8>, ImageError> {
+    encode_jpeg_quality(img, JPEG_QUALITY)
+}
+
+/// JPEG bytes at the given quality (1 to 100). A screenshot saved to a file (`save_to`) uses 90.
+pub fn encode_jpeg_quality(img: &Image, quality: u8) -> Result<Vec<u8>, ImageError> {
     let (w, h) = (
         u16::try_from(img.width()).map_err(|_| ImageError("image too wide for JPEG".into()))?,
         u16::try_from(img.height()).map_err(|_| ImageError("image too tall for JPEG".into()))?,
     );
     let mut out = Vec::new();
-    jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY)
+    jpeg_encoder::Encoder::new(&mut out, quality)
         .encode(&rgb_bytes(img), w, h, jpeg_encoder::ColorType::Rgb)
         .map_err(err("jpeg encode"))?;
     Ok(out)

@@ -134,6 +134,13 @@ pub(crate) fn make_ax_point(p: CGPoint) -> Option<CFRetained<AXValue>> {
     unsafe { AXValue::new(AXValueType::CGPoint, NonNull::from(&mut p).cast::<c_void>()) }
 }
 
+/// Wrap a size for `AXUIElementSetAttributeValue`.
+pub(crate) fn make_ax_size(s: CGSize) -> Option<CFRetained<AXValue>> {
+    let mut s = s;
+    // SAFETY: `s` is a live CGSize matching AXValueType::CGSize.
+    unsafe { AXValue::new(AXValueType::CGSize, NonNull::from(&mut s).cast::<c_void>()) }
+}
+
 /// Wrap a range for a parameterized attribute query.
 pub(crate) fn make_ax_range(r: CFRange) -> Option<CFRetained<AXValue>> {
     let mut r = r;

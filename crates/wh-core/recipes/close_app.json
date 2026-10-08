@@ -1,0 +1,10 @@
+{
+  "name": "close_app",
+  "description": "Politely close every window of an app (never kills it); unsaved work makes it ask first",
+  "params": {
+    "app": {"required": true, "description": "exe name, e.g. notepad.exe"}
+  },
+  "steps": [
+    {"action": "window", "op": "close", "window": "{app}", "all": true}
+  ]
+}

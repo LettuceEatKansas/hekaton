@@ -372,6 +372,40 @@ fn the_audit_log_gets_an_entry_for_a_computer_call() {
     );
 }
 
+// The R1c actions (shortcuts and recipes) used to answer "unknown action" through the daemon while the
+// core already knew them: they are routed like every other computer action.
+#[test]
+fn the_shortcut_and_recipe_actions_reach_the_core_through_the_computer_route() {
+    let r = rig();
+    r.window("Notepad", "notepad.exe");
+    let list = body(&r.post("/computer", json!({"action": "recipe_list"})));
+    assert_eq!(list["ok"], true, "{list}");
+    let text = list["result"].as_str().unwrap();
+    for bundled in ["open_url", "save_as", "note"] {
+        assert!(text.contains(bundled), "{bundled} missing from {text}");
+    }
+    let win = body(&r.post(
+        "/computer",
+        json!({"action": "window", "op": "minimize", "window": "notepad.exe", "shot": false}),
+    ));
+    assert_eq!(win["ok"], true, "{win}");
+    assert!(!win.to_string().contains("unknown action"), "{win}");
+    assert_eq!(r.fake.window_ops().len(), 1);
+    // folder without a path is the core's own complaint, not "unknown action"
+    let folder = body(&r.post("/computer", json!({"action": "folder"})));
+    assert!(!folder.to_string().contains("unknown action"), "{folder}");
+    // recipe_save writes into the owner's recipes folder and recipe_list then shows it
+    let save = body(&r.post(
+        "/computer",
+        json!({"action": "recipe_save", "name": "demo_recipe", "text": "a demo",
+               "steps": [{"action": "key", "text": "ctrl+s"}], "shot": false}),
+    ));
+    assert_eq!(save["ok"], true, "{save}");
+    assert!(r.paths.recipes_dir().join("demo_recipe.json").exists());
+    let list = body(&r.post("/computer", json!({"action": "recipe_list"})));
+    assert!(list["result"].as_str().unwrap().contains("demo_recipe"));
+}
+
 // ---------------------------------------------------------------------------------- /batch
 
 #[test]

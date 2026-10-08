@@ -10,24 +10,20 @@
 //!   set" included, so a daemon sees the same request from either shim;
 //! * [`reply_from_daemon`]: the Python `_result`, including which answers count as an error.
 
-mod tool_def;
-
 use serde_json::{Map, Value};
 
 use crate::config::Config;
 
-pub use tool_def::{INPUT_SCHEMA_JSON, TOOL_DESCRIPTION};
-
-/// The one tool's name.
-pub const TOOL_NAME: &str = "computer";
+// The tool definition has one home, `crate::tool_schema`; the MCP server and the tests read it here.
+pub use crate::tool_schema::{INPUT_SCHEMA_JSON, TOOL_DESCRIPTION, TOOL_NAME};
 
 /// The server name the Python shim announces (`FastMCP("winhands")`).
 pub const SERVER_NAME: &str = "winhands";
 
 /// The tool's JSON schema as an object, keys in the order the Python server prints them.
 pub fn input_schema() -> Map<String, Value> {
-    match serde_json::from_str::<Value>(INPUT_SCHEMA_JSON) {
-        Ok(Value::Object(map)) => map,
+    match crate::tool_schema::input_schema() {
+        Value::Object(map) => map,
         _ => Map::new(),
     }
 }

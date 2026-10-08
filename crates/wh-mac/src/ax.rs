@@ -5,7 +5,7 @@
 use std::ptr::NonNull;
 
 use objc2_application_services::{
-    AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValueType,
+    AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType,
 };
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
@@ -254,6 +254,13 @@ impl Ax {
         let v = CFString::from_str(value);
         // SAFETY: plain call with valid CF arguments.
         unsafe { self.0.set_attribute_value(&key, &v) }
+    }
+
+    /// Set an attribute to an `AXValue` (a point or a size).
+    pub(crate) fn set_value(&self, name: &str, value: &AXValue) -> AXError {
+        let key = CFString::from_str(name);
+        // SAFETY: plain call with valid CF arguments.
+        unsafe { self.0.set_attribute_value(&key, value) }
     }
 
     /// Can this attribute be written?

@@ -50,6 +50,8 @@ mod text;
 mod tree;
 #[cfg(target_os = "macos")]
 mod winlist;
+#[cfg(target_os = "macos")]
+mod winops;
 
 #[cfg(target_os = "macos")]
 pub use backend::MacBackend;

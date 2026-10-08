@@ -141,19 +141,12 @@ impl CallOpts {
     }
 }
 
-/// The call as it is logged when it fails: what each step typed is redacted too. (The Python audit
-/// log redacted only the top level, so a refused or malformed batch wrote the text of its `type`
-/// steps to disk.)
-fn redact_steps(args: &Value) -> Value {
-    let mut out = args.clone();
-    if let Some(Value::Array(steps)) = out.get_mut("actions") {
-        for step in steps.iter_mut() {
-            if step.is_object() {
-                *step = crate::audit::redact_args(step);
-            }
-        }
+/// `on_fail: "skip"`: carry on after this step fails instead of stopping the batch.
+fn on_fail_skips(step: &Args) -> bool {
+    match step.get("on_fail") {
+        Some(v) if truthy(v) => py_str(v).to_lowercase() == "skip",
+        _ => false,
     }
-    out
 }
 
 fn step_action_text(step: &Args) -> String {
@@ -228,21 +221,52 @@ impl Ctx<'_> {
             Some(v) if truthy(v) && !v.is_array() => vec![v.clone()],
             _ => vec![Value::Object(args.clone())],
         };
+        // 2026-10-08: a `recipe` step becomes that recipe's own steps, so everything below (expect, the
+        // stop at the first failure, settling, the safety checks in `run`) treats them like any batch.
+        let items = crate::recipes::expand(&self.c.recipes, &steps, &self.o.only_apps)
+            .map_err(StepError::value)?;
+        let steps: Vec<Value> = items.iter().map(|item| item.step.clone()).collect();
         let mut notes: Vec<String> = Vec::new();
         let mut shots: Vec<String> = Vec::new();
         let input_before = self.be().input_events();
         let mut acted_in_call = false; // an acting step has already finished in this call
         let mut pre_input_failure = false; // a step failed before anything was sent
-        for (i, raw) in steps.iter().enumerate() {
-            let Value::Object(step) = raw else {
+        for (i, item) in items.iter().enumerate() {
+            let Value::Object(step) = &item.step else {
                 return Err(StepError::value(format!(
                     "step {} must be an object with an action",
                     i + 1
                 )));
             };
-            let (note, img) = match self.run(step) {
-                Ok(done) => done,
+            if !item.header.is_empty() {
+                notes.push(item.header.clone()); // a recipe step: say which recipe is running
+            }
+            let outcome = self.skip_reason(step).and_then(|skip| {
+                if skip.is_empty() {
+                    // a recipe's own only_apps narrows the call's for its steps
+                    self.run_scoped(step, item.scope.as_ref()).map(Some)
+                } else {
+                    notes.push(format!(
+                        "step {} ({}) skipped: {skip}",
+                        i + 1,
+                        step_action_text(step)
+                    ));
+                    Ok(None)
+                }
+            });
+            let (note, img) = match outcome {
+                Ok(Some(done)) => done,
+                Ok(None) => continue, // a `when` that does not hold right now: leave this step out
                 Err(exc) => {
+                    if on_fail_skips(step) {
+                        // on_fail "skip": say so, then carry on (not worded "failed:")
+                        notes.push(format!(
+                            "step {} ({}) errored and was skipped: {exc}",
+                            i + 1,
+                            step_action_text(step)
+                        ));
+                        continue;
+                    }
                     notes.push(format!(
                         "step {} ({}) failed: {}",
                         i + 1,
@@ -276,12 +300,29 @@ impl Ctx<'_> {
                 notes.push(note.clone());
             }
             if note.contains("expect: FAIL") {
+                if on_fail_skips(step) {
+                    continue;
+                }
+                if steps.len() > 1 {
+                    // the same "step N (action) failed:" line every other stopping failure carries, so
+                    // the daemon's failed_step field (and wh's exit code) see it (live run 2026-10-08)
+                    notes.push(format!(
+                        "step {} ({}) failed: expect not met, batch stopped",
+                        i + 1,
+                        if step_action.is_empty() {
+                            "?"
+                        } else {
+                            &step_action
+                        }
+                    ));
+                }
                 break;
             }
             if !has_img && i + 1 < steps.len() {
                 let raw_action = step.get("action").and_then(Value::as_str);
-                let pointer_or_input = raw_action
-                    .is_some_and(|a| POINTER_ACTIONS.contains(&a) || a == "key" || a == "type");
+                let pointer_or_input = raw_action.is_some_and(|a| {
+                    POINTER_ACTIONS.contains(&a) || matches!(a, "key" | "type" | "window")
+                });
                 if pointer_or_input {
                     let text = super::args::text(step, "text");
                     let next_is_pointer = steps[i + 1]
@@ -381,13 +422,7 @@ impl Computer {
 
     fn fail(&self, args: &Value, err: &StepError) -> ToolOutcome {
         let mut error = err.message().to_string();
-        log_action(
-            self.cfg.paths(),
-            "computer",
-            &redact_steps(args),
-            &error,
-            false,
-        );
+        log_action(self.cfg.paths(), "computer", args, &error, false);
         error = self.fails.note_failure("computer", args, &error);
         ToolOutcome {
             ok: false,
@@ -425,10 +460,20 @@ impl Computer {
                     _ => 1,
                 };
                 let ok = !done.text.contains("failed:");
+                let mut entry = Map::new();
+                entry.insert(
+                    "action".into(),
+                    map.get("action").cloned().unwrap_or(Value::Null),
+                );
+                entry.insert("steps".into(), Value::from(steps));
+                // 2026-10-08: which recipes ran or were saved (param NAMES only, never values)
+                if let Some(Value::Object(extra)) = crate::recipes::audit_fields(&args) {
+                    entry.extend(extra);
+                }
                 log_action(
                     self.cfg.paths(),
                     "computer",
-                    &json!({"action": map.get("action"), "steps": steps}),
+                    &Value::Object(entry),
                     &done.text,
                     ok,
                 );

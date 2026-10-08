@@ -54,6 +54,16 @@ impl Ctx<'_> {
                 ACTIONS_SORTED.join(", ")
             )));
         }
+        // 2026-10-08: the shortcuts (window, folder) wait for a person themselves, and the recipe
+        // actions that are not expanded by the batch loop need no input wait at all.
+        match action.as_str() {
+            "window" => return self.run_window(step).map(|note| (note, None)),
+            "folder" => return self.run_folder(step).map(|note| (note, None)),
+            "recipe_list" => return self.recipe_list(),
+            "recipe_save" => return self.recipe_save(step),
+            "recipe" => return self.recipe_direct(),
+            _ => {}
+        }
         let mut coord: Option<Value> = get(step, "coordinate").cloned();
         let mut text = text_arg(step, "text");
         let mut scroll_amount: Option<i64> = None;
@@ -87,6 +97,10 @@ impl Ctx<'_> {
 
         let note: String = match action.as_str() {
             "screenshot" => {
+                if is_truthy(step, "save_to") {
+                    // 2026-10-08: write the picture to a file as well
+                    return self.save_screenshot(step);
+                }
                 let (sw, sh) = self.scale().shot_size();
                 let space = if self.o.coords == crate::scale::Coords::Norm1000 {
                     "0-1000 on both axes".to_string()
@@ -250,24 +264,40 @@ impl Ctx<'_> {
                 }
                 let text = super::open::repair_escapes(&text, &|p| Path::new(p).is_file());
                 self.check_launch_allowed(&text)?;
-                // A plain name that matches an open window's title focuses that window (2026-09-21:
-                // Search Console open in a browser as "Overview - Brave" sat behind the terminal and
-                // open_app "Overview" tried to launch a program called Overview; the model had no way
-                // to reach it).
-                let is_program = !super::guard::real_launch_target(text.to_lowercase().trim())
-                    .0
-                    .is_empty();
-                let win = if is_program {
-                    None
+                let mut note = if super::shortcuts::is_url(&text) {
+                    // 2026-10-08: a web address starts the default browser and waits for its window;
+                    // the old route waited for a NEW window and failed when the browser just added a
+                    // tab
+                    self.open_url(&text, 8.0)?
                 } else {
-                    self.window_titled(&text)
+                    // A plain name that matches an open window's title focuses that window
+                    // (2026-09-21: Search Console open in a browser as "Overview - Brave" sat behind
+                    // the terminal and open_app "Overview" tried to launch a program called
+                    // Overview; the model had no way to reach it).
+                    let is_program = !super::guard::real_launch_target(text.to_lowercase().trim())
+                        .0
+                        .is_empty();
+                    let win = if is_program {
+                        None
+                    } else {
+                        self.window_titled(&text)
+                    };
+                    if let Some(w) = win {
+                        self.be().bring_to_foreground(w.window)?;
+                        format!("focused existing window {}", py_repr(&w.title))
+                    } else {
+                        // `new_window: true` (or `reuse: false`) launches another instance instead of
+                        // focusing a running one
+                        let reuse =
+                            flag(step.get("reuse"), true) && !flag(step.get("new_window"), false);
+                        self.do_open(&text, 8.0, true, reuse)?
+                    }
                 };
-                let note = if let Some(w) = win {
-                    self.be().bring_to_foreground(w.window)?;
-                    format!("focused existing window {}", py_repr(&w.title))
-                } else {
-                    self.do_open(&text, 8.0, true, true)?
-                };
+                if flag(step.get("blank"), false) {
+                    // the front document must end up blank, or the step fails before anything is typed
+                    let verdict = self.ensure_blank_document()?;
+                    note = format!("{note}; {verdict}");
+                }
                 self.remember_target();
                 note
             }
@@ -379,7 +409,7 @@ impl Ctx<'_> {
 
     /// The local zone's offset from UTC at a Unix time, for the `list_files` stamps. A backend that
     /// cannot say reads as UTC.
-    fn utc_offset(&self, unix_secs: i64) -> i32 {
+    pub(crate) fn utc_offset(&self, unix_secs: i64) -> i32 {
         self.be().local_utc_offset(unix_secs).unwrap_or(0)
     }
 
@@ -705,21 +735,35 @@ impl Ctx<'_> {
         scroll_amount: Option<i64>,
         prefix: &mut String,
     ) -> StepResult<String> {
-        let (mut x, mut y) = match coord {
-            Some(c) => self.scale().to_screen_value(c)?,
-            None => {
+        // 2026-10-08: at=[fx, fy] (fractions of window=...) replaces coordinate, whatever the resolution
+        let at_point = self.at_point(step, "at")?;
+        let (mut x, mut y) = match (at_point, coord) {
+            (Some(p), _) => (p.x, p.y),
+            (None, Some(c)) => self.scale().to_screen_value(c)?,
+            (None, None) => {
                 let p = self.be().cursor_position()?;
                 (p.x, p.y)
             }
         };
         self.c.mem().last_point = Some(Point { x, y });
-        let coord_repr = coord.map_or_else(|| "None".to_string(), py_value_repr);
+        let coord_repr = match coord {
+            Some(c) => py_value_repr(c),
+            // a window-relative point has no screenshot coordinate to echo: say where it landed
+            None if at_point.is_some() => self.pt(x, y),
+            None => "None".to_string(),
+        };
         match action {
             "left_click_drag" => {
                 let start = get(step, "start_coordinate")
                     .cloned()
                     .unwrap_or(Value::Null);
-                let (sx, sy) = self.scale().to_screen_value(&start)?;
+                let (sx, sy, start_repr) = match self.at_point(step, "start_at")? {
+                    Some(p) => (p.x, p.y, self.pt(p.x, p.y)),
+                    None => {
+                        let (sx, sy) = self.scale().to_screen_value(&start)?;
+                        (sx, sy, py_value_repr(&start))
+                    }
+                };
                 // 2026-09-21: host_at already refuses either end that is a host or a not-allowed
                 // window on its own, same as every other pointer action; a drag whose two ends land in
                 // two DIFFERENT windows is allowed as long as both individually pass that check (both
@@ -740,8 +784,7 @@ impl Ctx<'_> {
                         .map_err(StepError::from)
                 })?;
                 Ok(format!(
-                    "dragged {} -> {coord_repr}{}",
-                    py_value_repr(&start),
+                    "dragged {start_repr} -> {coord_repr}{}",
                     if cross { " (cross-window)" } else { "" }
                 ))
             }

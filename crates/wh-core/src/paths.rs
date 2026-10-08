@@ -76,6 +76,12 @@ impl Paths {
     pub fn shims_dir(&self) -> PathBuf {
         self.dir.join("shims")
     }
+
+    /// `recipes\`, the owner's own recipes (Python `recipes.user_dir()`). They override bundled ones
+    /// of the same name.
+    pub fn recipes_dir(&self) -> PathBuf {
+        self.dir.join("recipes")
+    }
 }
 
 fn home(env: &dyn Env) -> PathBuf {
@@ -122,6 +128,7 @@ mod tests {
         assert!(p.pid().ends_with("daemon.pid"));
         assert!(p.daemon_log().ends_with("daemon.log"));
         assert!(p.shims_dir().ends_with("shims"));
+        assert!(p.recipes_dir().ends_with("recipes"));
     }
 
     #[test]
