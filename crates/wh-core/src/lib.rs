@@ -30,6 +30,7 @@ pub mod settle;
 pub mod state;
 pub mod textutil;
 pub mod token;
+pub mod tool_schema;
 
 pub mod orchestrate;
 
