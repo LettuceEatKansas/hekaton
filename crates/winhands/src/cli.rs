@@ -87,6 +87,14 @@ fn start_wait(cfg: &Config) -> Duration {
     secs.map_or(crate::link::START_WAIT, Duration::from_secs_f64)
 }
 
+/// Was this executable started under the name `wh` (a copy or link of `winhands.exe`)? Then the
+/// whole command line is `wh`'s.
+pub fn invoked_as_wh(argv0: &std::ffi::OsStr) -> bool {
+    std::path::Path::new(argv0)
+        .file_stem()
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("wh"))
+}
+
 /// The command line entry point: `args` without the program name. Returns the exit code.
 pub fn main(args: Vec<String>) -> i32 {
     let Some(first) = args.first().map(String::as_str) else {

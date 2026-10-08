@@ -259,3 +259,17 @@ fn unknown_commands_exit_two_and_version_and_help_exit_zero() {
     assert_eq!(main(vec!["--version".into()]), 0);
     assert_eq!(main(vec!["--help".into()]), 0);
 }
+
+#[test]
+fn the_exe_is_wh_when_it_is_called_wh() {
+    use std::ffi::OsStr;
+    assert!(invoked_as_wh(OsStr::new("wh")));
+    assert!(invoked_as_wh(OsStr::new("wh.exe")));
+    assert!(invoked_as_wh(OsStr::new("WH.EXE")));
+    assert!(invoked_as_wh(OsStr::new("/usr/local/bin/wh")));
+    assert!(!invoked_as_wh(OsStr::new("winhands.exe")));
+    assert!(!invoked_as_wh(OsStr::new("whoami")));
+    assert!(!invoked_as_wh(OsStr::new("")));
+    #[cfg(windows)]
+    assert!(invoked_as_wh(OsStr::new(r"C:\tools\bin\wh.exe")));
+}

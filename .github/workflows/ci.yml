@@ -24,6 +24,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo build --workspace
       - run: cargo test --workspace
+      - name: parity script tests (mock servers, no daemon)
+        run: python -m unittest discover -s tests/parity
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: wh-mac Intel target
         if: runner.os == 'macOS'
