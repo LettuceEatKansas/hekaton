@@ -4,23 +4,34 @@
 //! and the screen; here the same job is done by [`FakeBackend`](crate::backend::fake::FakeBackend).
 
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
 use super::testkit::Kit;
 use super::{CallOpts, Ctx, StepError};
-use crate::backend::fake::{InputEvent, ShellMode};
+use crate::backend::fake::InputEvent;
 use crate::backend::{
-    AppTarget, Backend, Element, LaunchSpec, Point, Rect, Role, WindowInfo, WindowKind, WindowOp,
-    WindowRef,
+    AppTarget, Backend, LaunchSpec, Point, Rect, WindowInfo, WindowKind, WindowOp, WindowRef,
 };
 use crate::caller::Caller;
 use crate::destructive::Policy;
+
+// Used only by the Explorer folder tests at the end, which are compiled off macOS only.
+#[cfg(not(target_os = "macos"))]
+use std::collections::VecDeque;
+#[cfg(not(target_os = "macos"))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "macos"))]
+use std::time::{Duration, UNIX_EPOCH};
+
+#[cfg(not(target_os = "macos"))]
+use crate::backend::fake::ShellMode;
+#[cfg(not(target_os = "macos"))]
+use crate::backend::{Element, Role};
+#[cfg(not(target_os = "macos"))]
 use crate::env::MapEnv;
+#[cfg(not(target_os = "macos"))]
 use crate::keys::Key;
 
 // ---------------------------------------------------------------------------- a fake desktop
@@ -48,6 +59,7 @@ impl Desk {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn with_env(env: MapEnv) -> Self {
         Self {
             kit: Kit::with_env(env),
