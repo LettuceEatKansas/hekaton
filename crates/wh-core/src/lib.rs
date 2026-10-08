@@ -10,6 +10,9 @@
 
 #![warn(missing_docs)]
 
+pub mod ack;
+pub mod actions;
+pub mod audit;
 pub mod backend;
 pub mod clock;
 pub mod config;
