@@ -62,6 +62,14 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:set_dpi_awareness`, `core.py:com_init`.
     fn init(&self) -> BackendResult<()>;
 
+    /// The OS permissions this backend needs and whether each is granted right now, for a
+    /// `winhands doctor` report. Empty where the OS has no such gate (Windows). Never prompts.
+    ///
+    /// No Python equivalent (the Python build was Windows only).
+    fn permissions(&self) -> BackendResult<Vec<PermissionStatus>> {
+        Ok(Vec::new())
+    }
+
     // ------------------------------------------------------------------ displays and capture
 
     /// Every display, primary first, then by left edge. Each carries its rect in input
