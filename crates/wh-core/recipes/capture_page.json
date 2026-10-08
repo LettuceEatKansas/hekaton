@@ -1,0 +1,14 @@
+{
+  "name": "capture_page",
+  "description": "Open a URL in the default browser, wait, save a screenshot of its window to a .png or .jpg",
+  "params": {
+    "url": {"required": true, "description": "http or https address"},
+    "file": {"required": true, "description": "full path ending in .png or .jpg"},
+    "wait_s": {"default": "4", "description": "seconds to let the page load"}
+  },
+  "steps": [
+    {"action": "open_app", "text": "{url}"},
+    {"action": "wait", "duration": "{wait_s}"},
+    {"action": "screenshot", "window": "front", "save_to": "{file}", "shot": false}
+  ]
+}

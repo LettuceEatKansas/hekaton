@@ -89,6 +89,34 @@ impl Kit {
         w
     }
 
+    /// The owner's recipe folder of this kit.
+    pub fn user_recipes(&self) -> std::path::PathBuf {
+        self.computer.cfg.paths().recipes_dir()
+    }
+
+    /// Start from a store with no bundled recipes at all (the owner's folder is still this kit's).
+    pub fn empty_recipes(&mut self) {
+        self.computer.recipes =
+            crate::recipes::RecipeStore::with_bundled(self.user_recipes(), vec![]);
+    }
+
+    /// Add a bundled recipe (its `name` is the file stem).
+    pub fn put_bundled(&mut self, rec: &Value) {
+        let name = rec["name"].as_str().expect("recipe name").to_string();
+        self.computer.recipes.put_bundled(&name, &rec.to_string());
+    }
+
+    /// Write one of the owner's recipes to disk.
+    pub fn put_user(&self, rec: &Value) {
+        let name = rec["name"].as_str().expect("recipe name");
+        std::fs::create_dir_all(self.user_recipes()).expect("recipe folder");
+        std::fs::write(
+            self.user_recipes().join(format!("{name}.json")),
+            rec.to_string(),
+        )
+        .expect("write recipe");
+    }
+
     /// A call's arguments from JSON.
     pub fn args(v: Value) -> Args {
         v.as_object().cloned().expect("an object")

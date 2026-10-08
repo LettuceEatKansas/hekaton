@@ -618,3 +618,243 @@ fn file_dialog_checks_the_allowlist_against_the_dialog_itself() {
     );
     assert!(kit.fake.events().is_empty());
 }
+
+// ---------------------------------------------------------------------------- a blank document, verified
+
+/// A running Notepad showing `title` and `text`, whose new-document shortcut opens a blank tab: it
+/// retitles the window and empties the document.
+fn notepad_with_new_tab(kit: &Kit, title: &str, text: &str) -> WindowRef {
+    let w = app_window(kit, title, "notepad.exe", 30);
+    kit.fake.set_document(w, text);
+    kit.fake.set_chord_hook(move |fake, keys| {
+        if keys == [cmd_key(), Key::Char('n')] {
+            fake.update_window(w, |i| i.title = "Untitled - Notepad".into());
+            fake.set_document(w, "");
+        }
+    });
+    w
+}
+
+fn new_doc_presses(kit: &Kit) -> usize {
+    let n = Key::Char('n');
+    kit.fake
+        .events()
+        .iter()
+        .filter(|e| matches!(e, crate::backend::fake::InputEvent::KeyDown(k) if *k == n))
+        .count()
+}
+
+#[test]
+fn only_a_new_unsaved_document_with_nothing_in_it_is_blank() {
+    let kit = Kit::new();
+    let cases = [
+        ("Untitled - Notepad", Some(""), true),
+        ("Untitled - Notepad", None, true),
+        ("Untitled - Notepad", Some("  \n"), true),
+        ("New 1 - Notepad++", Some(""), true),
+        ("Document - WordPad", Some(""), true),
+        // edited since it was new: the star
+        ("*Untitled - Notepad", Some(""), false),
+        // an empty file that already has a name: typing would change that file
+        ("todo.txt - Notepad", Some(""), false),
+        ("Untitled - Notepad", Some("hello"), false),
+    ];
+    for (title, text, blank) in cases {
+        let w = app_window(&kit, title, "notepad.exe", 30);
+        if let Some(t) = text {
+            kit.fake.set_document(w, t);
+        }
+        assert_eq!(
+            kit.ctx(json!({})).is_blank_document(w),
+            blank,
+            "{title} {text:?}"
+        );
+        kit.fake.close_window(w);
+    }
+}
+
+// The `note` recipe's first step used to press Ctrl+N and look for "Untitled" in the title. Now open_app
+// checks the document itself.
+#[test]
+fn blank_confirms_a_document_that_is_already_empty_and_unsaved() {
+    let kit = Kit::new();
+    let w = notepad_with_new_tab(&kit, "Untitled - Notepad", "");
+    let (note, _) = kit
+        .step(json!({"action": "open_app", "text": "notepad", "blank": true}))
+        .unwrap();
+    assert!(note.ends_with("; blank document confirmed"), "{note}");
+    assert_eq!(kit.fake.foreground_window().unwrap(), Some(w));
+    assert!(kit.fake.launches().is_empty());
+}
+
+#[test]
+fn blank_after_a_new_tab_that_really_is_blank_is_verified() {
+    let kit = Kit::new();
+    notepad_with_new_tab(&kit, "*todo - Notepad", "secret plans");
+    let (note, _) = kit
+        .step(json!({"action": "open_app", "text": "notepad", "blank": true}))
+        .unwrap();
+    assert!(
+        note.contains("ok new blank tab") && note.ends_with("; blank document confirmed"),
+        "{note}"
+    );
+    assert_eq!(
+        new_doc_presses(&kit),
+        1,
+        "the one new-document shortcut open_app already sent"
+    );
+}
+
+#[test]
+fn blank_makes_its_own_new_document_when_the_front_one_has_content() {
+    let kit = Kit::new();
+    let w = notepad_with_new_tab(&kit, "report.txt - Notepad", "old text");
+    kit.fake.set_foreground(Some(w));
+    let note = kit.ctx(json!({})).ensure_blank_document().unwrap();
+    assert_eq!(note, "opened a new blank document (verified)");
+    assert_eq!(new_doc_presses(&kit), 1);
+    // the second call finds it blank and presses nothing more
+    assert_eq!(
+        kit.ctx(json!({})).ensure_blank_document().unwrap(),
+        "blank document confirmed"
+    );
+    assert_eq!(new_doc_presses(&kit), 1);
+}
+#[test]
+fn blank_refuses_when_no_blank_document_can_be_made() {
+    let kit = Kit::new();
+    let w = app_window(&kit, "*todo - Notepad", "notepad.exe", 30);
+    kit.fake.set_document(w, "secret plans"); // Ctrl+N does nothing in this one
+    let err = kit
+        .step(json!({"action": "open_app", "text": "notepad", "blank": true}))
+        .unwrap_err();
+    assert!(matches!(err, StepError::Target(_)), "{err}");
+    assert!(
+        err.message()
+            .starts_with("refused: no blank document could be made"),
+        "{err}"
+    );
+    assert!(err.message().contains("nothing was typed"), "{err}");
+    assert_eq!(kit.fake.typed_text(), "");
+}
+
+#[test]
+fn blank_does_not_count_an_empty_named_file_as_blank() {
+    let kit = Kit::new();
+    notepad_with_new_tab(&kit, "todo.txt - Notepad", "");
+    let (note, _) = kit
+        .step(json!({"action": "open_app", "text": "notepad", "blank": true}))
+        .unwrap();
+    // the empty named file was left alone; a new document was made
+    assert!(
+        note.contains("ok new blank tab in") && note.contains("\"Untitled - Notepad\""),
+        "{note}"
+    );
+    assert!(new_doc_presses(&kit) >= 1);
+}
+
+#[test]
+fn blank_is_checked_against_the_allowlist_and_the_callers_own_window() {
+    let mut kit = Kit::new();
+    let claude = app_window(&kit, "Claude", "claude.exe", 100);
+    kit.fake.set_foreground(Some(claude));
+    kit.who = crate::caller::Caller::new(vec![(100, "claude.exe".into())], false);
+    let err = kit.ctx(json!({})).ensure_blank_document().unwrap_err();
+    assert!(err.message().starts_with("refused:"), "{err}");
+    assert!(kit.fake.events().is_empty());
+    let kit = Kit::new();
+    let mail = app_window(&kit, "Mail", "olk.exe", 8);
+    kit.fake.set_foreground(Some(mail));
+    let err = kit
+        .ctx(json!({"only_apps": ["notepad.exe"]}))
+        .ensure_blank_document()
+        .unwrap_err();
+    assert!(err.message().contains("may not touch"), "{err}");
+    let err = Kit::new()
+        .ctx(json!({}))
+        .ensure_blank_document()
+        .unwrap_err();
+    assert!(err.message().contains("no window is in front"), "{err}");
+}
+
+// `new_window: true` (or `reuse: false`) launches another instance instead of focusing the running one.
+#[test]
+fn new_window_launches_another_instance_instead_of_focusing_the_running_one() {
+    for flag in [
+        json!({"new_window": true}),
+        json!({"reuse": false}),
+        json!({"reuse": "no"}),
+    ] {
+        let kit = Kit::new();
+        app_window(&kit, "job.log - Notepad", "notepad.exe", 30);
+        kit.fake.set_launch_hook(|fake, _| {
+            fake.add_window(WindowInfo::basic(
+                "Untitled - Notepad",
+                "notepad.exe",
+                31,
+                Rect::from_xywh(0, 0, 50, 50),
+            ));
+        });
+        let mut call = json!({"action": "open_app", "text": "notepad"});
+        for (k, v) in flag.as_object().unwrap() {
+            call[k] = v.clone();
+        }
+        let (note, _) = kit.step(call).unwrap();
+        assert!(
+            note.starts_with("ok focused") && note.contains("Untitled - Notepad"),
+            "{flag}: {note}"
+        );
+        assert_eq!(kit.fake.launches().len(), 1, "{flag}");
+    }
+    // and by default the running one is focused
+    let kit = Kit::new();
+    app_window(&kit, "job.log - Notepad", "notepad.exe", 30);
+    kit.step(json!({"action": "open_app", "text": "notepad"}))
+        .unwrap();
+    assert!(kit.fake.launches().is_empty());
+}
+
+// The `note` recipe end to end: Notepad has restored old tabs; the text goes into a fresh blank one.
+#[test]
+fn the_note_recipe_types_into_a_fresh_blank_document_never_an_existing_one() {
+    let kit = Kit::new();
+    notepad_with_new_tab(&kit, "*todo - Notepad", "secret plans");
+    let out = kit
+        .run(json!({"action": "recipe", "name": "note", "params": {"text": "hi"}}))
+        .unwrap();
+    assert!(!out.text.contains("failed:"), "{}", out.text);
+    assert!(out.text.contains("expect: PASS"), "{}", out.text);
+    assert_eq!(kit.fake.typed_text(), "hi", "{}", out.text);
+    // the new-document shortcut came before the first typed character
+    let events = kit.fake.events();
+    let new_tab = events
+        .iter()
+        .position(|e| matches!(e, crate::backend::fake::InputEvent::KeyDown(Key::Char('n'))))
+        .expect("a new document was made");
+    let first_char = events
+        .iter()
+        .position(|e| matches!(e, crate::backend::fake::InputEvent::Type(_)))
+        .expect("text was typed");
+    assert!(new_tab < first_char);
+}
+
+#[test]
+fn the_note_recipe_stops_before_typing_when_no_blank_document_appears() {
+    let kit = Kit::new();
+    let w = app_window(&kit, "*todo - Notepad", "notepad.exe", 30);
+    kit.fake.set_document(w, "secret plans");
+    let out = kit
+        .run(json!({"action": "recipe", "name": "note", "params": {"text": "oops"}}))
+        .unwrap();
+    assert!(
+        out.text
+            .contains("step 1 (open_app) failed: refused: no blank document could be made"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        kit.fake.typed_text(),
+        "",
+        "never typed into an existing document"
+    );
+}

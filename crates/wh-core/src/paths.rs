@@ -61,6 +61,12 @@ impl Paths {
     pub fn audit_log(&self) -> PathBuf {
         self.dir.join("actions.jsonl")
     }
+
+    /// `recipes\`, the owner's own recipes (Python `recipes.user_dir()`). They override bundled ones
+    /// of the same name.
+    pub fn recipes_dir(&self) -> PathBuf {
+        self.dir.join("recipes")
+    }
 }
 
 fn home(env: &dyn Env) -> PathBuf {
@@ -104,6 +110,7 @@ mod tests {
         assert!(p.ack().ends_with("acknowledged.json"));
         assert!(p.protected().ends_with("protected.txt"));
         assert!(p.audit_log().ends_with("actions.jsonl"));
+        assert!(p.recipes_dir().ends_with("recipes"));
     }
 
     #[test]

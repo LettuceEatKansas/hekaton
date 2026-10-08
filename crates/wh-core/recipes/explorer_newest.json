@@ -1,0 +1,11 @@
+{
+  "name": "explorer_newest",
+  "description": "Open Explorer at a folder, Details view, newest first; reports the n newest entries as text",
+  "params": {
+    "path": {"required": true, "description": "folder path"},
+    "n": {"default": "3", "description": "how many entries to report"}
+  },
+  "steps": [
+    {"action": "folder", "path": "{path}", "view": "details", "sort": "date_modified desc", "list": "{n}"}
+  ]
+}

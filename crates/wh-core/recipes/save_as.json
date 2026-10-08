@@ -1,0 +1,11 @@
+{
+  "name": "save_as",
+  "description": "Save the front document to a new full path via Save As (ctrl+shift+s), not a plain save",
+  "params": {
+    "path": {"required": true, "description": "full file path"}
+  },
+  "steps": [
+    {"action": "key", "text": "ctrl+shift+s", "expect": {"text": "File name"}},
+    {"action": "file_dialog", "text": "{path}", "expect": {"gone_text": "File name"}}
+  ]
+}

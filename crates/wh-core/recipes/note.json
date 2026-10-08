@@ -1,0 +1,11 @@
+{
+  "name": "note",
+  "description": "Open Notepad and type text into a verified blank document (stops if none can be made)",
+  "params": {
+    "text": {"required": true, "description": "the text to type"}
+  },
+  "steps": [
+    {"action": "open_app", "text": "notepad", "blank": true, "expect": {"title": "Untitled"}},
+    {"action": "type", "text": "{text}"}
+  ]
+}

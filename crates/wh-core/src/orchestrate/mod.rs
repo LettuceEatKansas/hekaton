@@ -27,11 +27,14 @@ mod ctx;
 mod error;
 mod files;
 mod find;
+mod folder;
 mod guard;
 mod many;
 mod open;
+mod recipe;
 mod refs;
 mod repeat;
+mod shortcuts;
 mod shots;
 mod snapshot;
 
@@ -47,6 +50,10 @@ mod tests_guard;
 mod tests_many;
 #[cfg(test)]
 mod tests_open;
+#[cfg(test)]
+mod tests_recipes;
+#[cfg(test)]
+mod tests_shortcuts;
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -58,12 +65,16 @@ use crate::clock::Clock;
 use crate::config::Config;
 use crate::destructive::Policy;
 use crate::human::HumanGate;
+use crate::recipes::RecipeStore;
 use crate::scale::{Coords, Scale};
 use crate::settle::UiaProbe;
 use crate::state::{IdleTimer, PauseFlag, RateLimiter};
 
 pub use args::Args;
+pub(crate) use args::flag;
 pub use error::{StepError, StepResult};
+pub(crate) use files::fmt_size;
+pub(crate) use guard::normalize_only_app;
 pub use many::{ManyResult, ToolOutcome};
 pub use refs::{ElementRefs, WindowRefs};
 pub use repeat::{FailureCounter, REPEAT_FAIL_LIMIT, REPEAT_WINDOW, RepeatNote};
@@ -97,6 +108,8 @@ pub struct Computer {
     pub(crate) refs: Mutex<refs::RefTables>,
     pub(crate) fails: FailureCounter,
     pub(crate) repeats: RepeatNote,
+    /// The bundled recipes and the owner's, for the `recipe` actions.
+    pub(crate) recipes: RecipeStore,
     tool_lock: Mutex<()>,
 }
 
@@ -116,6 +129,7 @@ impl Computer {
         pause: Arc<PauseFlag>,
         idle: Arc<IdleTimer>,
     ) -> Self {
+        let recipes = RecipeStore::standard(cfg.paths().recipes_dir());
         Self {
             backend,
             clock,
@@ -129,6 +143,7 @@ impl Computer {
             refs: Mutex::new(refs::RefTables::default()),
             fails: FailureCounter::default(),
             repeats: RepeatNote::default(),
+            recipes,
             tool_lock: Mutex::new(()),
         }
     }

@@ -172,6 +172,13 @@ pub(crate) fn split_launch(
     (app.to_string(), String::new())
 }
 
+/// Does a (lowercased) window title read like a new, unsaved document? `*untitled` does not: the star
+/// marks a document that has been edited.
+fn is_blank_title(title: &str) -> bool {
+    let t = title.trim();
+    t.starts_with("untitled") || t.starts_with("new ") || t.starts_with("document -")
+}
+
 fn removesuffix_exe(s: &str) -> String {
     let lower = s.to_lowercase();
     lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
@@ -266,6 +273,74 @@ impl Ctx<'_> {
             "ok new blank tab in w{} \"{title}\" (was showing \"{before}\")",
             w.reference
         ))
+    }
+
+    /// Does the window show a document that is empty and has no file name yet? The title must read
+    /// like a new document (`Untitled - Notepad`, `New 1`, `Document - WordPad`; a leading `*` means it
+    /// has been edited, so it is not blank) and, where the app exposes its text, the text must be empty.
+    /// An empty file that already has a name is NOT blank: typing into it would change that file.
+    pub(crate) fn is_blank_document(&self, w: WindowRef) -> bool {
+        if !is_blank_title(&self.title_of(w)) {
+            return false;
+        }
+        match self.be().document_text(w, 200) {
+            Ok(Some(text)) => text.trim().is_empty(),
+            // the app exposes no text: the title is all there is to go on
+            _ => true,
+        }
+    }
+
+    /// Make sure the window in front shows a blank document, or fail before anything is typed.
+    ///
+    /// 2026-10-08: the `note` recipe used to press Ctrl+N and expect a title with "Untitled" in it; it
+    /// stopped (safely) whenever Notepad had restored old tabs and the title did not change. Now the
+    /// document itself is checked, whether the app showed one already or this makes one with the
+    /// app's own new-document shortcut: never an existing document, never a blind keystroke.
+    pub(crate) fn ensure_blank_document(&self) -> StepResult<String> {
+        let Some(front) = self.fg_root() else {
+            return Err(StepError::target(
+                "no window is in front to check for a blank document; nothing was typed",
+            ));
+        };
+        // the refusals typing into this window would have
+        self.check_not_protected(front)?;
+        self.refuse_host(front)?;
+        self.check_allowed(front)?;
+        if self.is_blank_document(front) {
+            return Ok("blank document confirmed".to_string());
+        }
+        let seen = self.title_of(front);
+        let keys = crate::keys::parse_key_combo(
+            match crate::keys::Platform::current() {
+                crate::keys::Platform::Windows => "ctrl+n",
+                crate::keys::Platform::Mac => "cmd+n",
+            },
+            crate::keys::Platform::current(),
+        )?;
+        self.guarded(
+            || self.guard_input(front),
+            |g| self.be().key_chord(&keys, 1, g),
+        )?;
+        self.mark_ours();
+        // the new document may be a new tab or a new window: judge whatever is in front now
+        let (blank, _) = self.poll(
+            || {
+                let now = self.fg_root()?;
+                (self.is_blank_document(now) && self.check_allowed(now).is_ok()).then_some(())
+            },
+            2.0,
+            0.1,
+        );
+        if blank.is_some() {
+            return Ok("opened a new blank document (verified)".to_string());
+        }
+        Err(StepError::target(format!(
+            "refused: no blank document could be made ({} is showing {}); nothing was typed. Open a \
+             new document yourself, then type",
+            self.fg_root()
+                .map_or_else(|| "no window".to_string(), |w| self.title_of(w)),
+            py_repr(&seen)
+        )))
     }
 
     /// Wait until the window title stops changing (session restore renames it as tabs load).
@@ -501,10 +576,7 @@ impl Ctx<'_> {
                         // if it is not a blank document, open a blank tab.
                         w = self.settled(w);
                         let t = w.title.trim().to_lowercase();
-                        let blank = t.starts_with("untitled")
-                            || t.starts_with("new ")
-                            || t.starts_with("document -");
-                        if !blank {
+                        if !is_blank_title(&t) {
                             return self.new_editor_tab(&w);
                         }
                     }

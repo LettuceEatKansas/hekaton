@@ -118,7 +118,7 @@ pub(crate) fn expand_user(env: &dyn Env, text: &str) -> String {
     text.to_string()
 }
 
-fn fmt_size(mut n: f64) -> String {
+pub(crate) fn fmt_size(mut n: f64) -> String {
     for unit in ["B", "KB", "MB", "GB", "TB"] {
         if n < 1024.0 || unit == "TB" {
             return if unit == "B" {

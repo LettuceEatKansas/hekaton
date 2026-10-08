@@ -34,19 +34,56 @@ pub const RESULT_MAX_CHARS: usize = 300;
 /// Keys whose string values are replaced by a length and a short hash.
 pub const REDACTED_KEYS: [&str; 2] = ["text", "code"];
 
+/// Keys whose value is a list of steps, each redacted in turn.
+pub const NESTED_KEYS: [&str; 2] = ["actions", "steps"];
+
+/// `<7 chars 9f86d081ee>`: the length in characters and the first ten hex characters of the SHA-256
+/// of `v` (a string as it is, anything else as `json.dumps` writes it).
+fn mask(v: &Value) -> String {
+    let text = match v {
+        Value::String(s) => s.clone(),
+        other => python_json(other),
+    };
+    let digest = Sha256::digest(text.as_bytes());
+    let hex: String = digest.iter().take(5).map(|b| format!("{b:02x}")).collect();
+    format!("<{} chars {hex}>", text.chars().count())
+}
+
 /// Keep what is needed to see WHAT happened, not the content: length and a short hash of typed
-/// text and snippets. Python `_redact_args`. Anything that is not an object comes back unchanged.
+/// text and snippets. 2026-10-08: a recipe's `params` and the `actions` of a batch or the `steps` of
+/// a `recipe_save` can hold typed text too, so those are masked as well, steps recursively. Python
+/// `_redact_args`. Anything that is not an object comes back unchanged.
 pub fn redact_args(args: &Value) -> Value {
     let Value::Object(map) = args else {
         return args.clone();
     };
     let mut out = map.clone();
     for key in REDACTED_KEYS {
-        if let Some(Value::String(v)) = out.get(key) {
-            let digest = Sha256::digest(v.as_bytes());
-            let hex: String = digest.iter().take(5).map(|b| format!("{b:02x}")).collect();
-            let redacted = format!("<{} chars {hex}>", v.chars().count());
+        if let Some(v @ Value::String(_)) = out.get(key) {
+            let redacted = mask(v);
             out.insert(key.to_string(), Value::String(redacted));
+        }
+    }
+    if let Some(Value::Object(params)) = out.get("params") {
+        let masked: Map<String, Value> = params
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(mask(v))))
+            .collect();
+        out.insert("params".to_string(), Value::Object(masked));
+    }
+    for key in NESTED_KEYS {
+        if let Some(Value::Array(steps)) = out.get(key) {
+            let redacted: Vec<Value> = steps
+                .iter()
+                .map(|s| {
+                    if s.is_object() {
+                        redact_args(s)
+                    } else {
+                        s.clone()
+                    }
+                })
+                .collect();
+            out.insert(key.to_string(), Value::Array(redacted));
         }
     }
     Value::Object(out)
@@ -334,6 +371,55 @@ mod tests {
             &json!({}),
             "ok",
             true,
+        );
+    }
+
+    // Ported from tests/test_20261008b_recipes.py::test_redaction_reaches_into_batches_and_recipe_steps.
+    #[test]
+    fn redaction_reaches_into_batches_and_recipe_steps() {
+        let out = redact_args(&json!({
+            "actions": [{"action": "type", "text": "hunter2"}, {"action": "key", "text": "Return"}],
+            "steps": [{"action": "type", "text": "s3cret"}],
+            "params": {"a": 1, "b": "x"},
+            "name": "n"
+        }));
+        let flat = out.to_string();
+        assert!(
+            !flat.contains("hunter2") && !flat.contains("s3cret"),
+            "{flat}"
+        );
+        assert_eq!(out["name"], "n");
+        assert!(
+            out["params"]["a"]
+                .as_str()
+                .unwrap()
+                .starts_with("<1 chars ")
+        );
+        assert!(
+            out["params"]["b"]
+                .as_str()
+                .unwrap()
+                .starts_with("<1 chars ")
+        );
+        assert_eq!(out["actions"][1]["action"], "key");
+        // a non-text param is masked by what json.dumps writes for it
+        let out = redact_args(&json!({"params": {"list": [1, 2], "none": null}}));
+        assert!(
+            out["params"]["list"]
+                .as_str()
+                .unwrap()
+                .starts_with("<6 chars ")
+        );
+        assert!(
+            out["params"]["none"]
+                .as_str()
+                .unwrap()
+                .starts_with("<4 chars ")
+        );
+        // steps that are not objects are left as they were
+        assert_eq!(
+            redact_args(&json!({"actions": ["junk", 3]}))["actions"],
+            json!(["junk", 3])
         );
     }
 }
