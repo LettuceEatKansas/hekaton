@@ -96,6 +96,42 @@ pub const ACK_EXEMPT_ROUTES: [&str; 4] = ["windows", "snapshot", "screenshot", "
 /// Routes whose outcome is reported back with a delta (daemon.py `REPORTABLE_ACTIONS`).
 pub const REPORTABLE_ACTIONS: [&str; 6] = ["click", "type", "key", "scroll", "drag", "hover"];
 
+/// Every action name in the order Python's `sorted(ACTIONS)` lists them (the "unknown action"
+/// message prints this).
+pub const ACTIONS_SORTED: [&str; 31] = [
+    "click_text",
+    "clipboard_get",
+    "clipboard_set",
+    "cursor_position",
+    "double_click",
+    "file_dialog",
+    "find_text",
+    "hold_key",
+    "key",
+    "left_click",
+    "left_click_drag",
+    "left_mouse_down",
+    "left_mouse_up",
+    "list_files",
+    "list_windows",
+    "middle_click",
+    "mouse_move",
+    "open_app",
+    "read",
+    "read_field",
+    "read_text",
+    "replace_word",
+    "right_click",
+    "screenshot",
+    "scroll",
+    "triple_click",
+    "type",
+    "wait",
+    "wait_for_file",
+    "wait_for_text",
+    "zoom",
+];
+
 /// Is `action` one of the 31 actions the `computer` tool knows?
 pub fn is_action(action: &str) -> bool {
     POINTER_ACTIONS.contains(&action) || OTHER_ACTIONS.contains(&action)
@@ -149,6 +185,17 @@ mod tests {
             .filter(|a| *a != "clipboard_set")
             .collect();
         assert_eq!(derived, ACK_EXEMPT_ACTIONS);
+    }
+
+    #[test]
+    fn the_sorted_list_is_sorted_and_complete() {
+        let mut expect: Vec<&str> = POINTER_ACTIONS
+            .iter()
+            .chain(OTHER_ACTIONS.iter())
+            .copied()
+            .collect();
+        expect.sort_unstable();
+        assert_eq!(ACTIONS_SORTED.to_vec(), expect);
     }
 
     #[test]

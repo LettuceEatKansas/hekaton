@@ -178,6 +178,13 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:snapshot`, `_snapshot_batched`, `_is_interactive`, `_item_state`,
     /// `_wake_chromium_by_raise`, `_is_chromium`, `computer.py:_uia_elements`, `_exposes_uia`,
     /// `_menu_items_under`.
+    ///
+    /// Contract the core relies on: with `flatten`, the kept elements are the root's children in
+    /// document order and the window element itself is `root` (the core adds it when it searches names:
+    /// Python's walk started at the window, so a search for a window's title finds the window). An
+    /// element that exposes a value (UIA `ValuePattern`) carries it in `Element::value` even in a
+    /// `Named` read: `read_field` and `read` print it. `wake_hint` is set only when
+    /// [`WakePolicy::Never`] left an empty Chromium tree alone.
     fn element_tree(&self, window: WindowRef, limits: &TreeLimits) -> BackendResult<TreeSnapshot>;
 
     /// A fresh read of one element's properties (without children). `Err(ElementGone)` when it
@@ -417,6 +424,12 @@ pub trait Backend: Send + Sync {
     /// Resolve a bare name ("notepad", "Hermes", "Paint") to something launchable: an executable on
     /// the path or in App Paths, a Start Menu shortcut, a packaged app.
     ///
+    /// The answer follows the order the Python launcher tried things (`core.do_open`): for a plain
+    /// name a Start Menu shortcut comes first (2026-09-20: PATH used to win, so `open("Hermes")`
+    /// launched a venv's Hermes.EXE console tool instead of the desktop app), then a program on the
+    /// path or in App Paths, then a packaged (Store) app. `None` for anything else, and the core then
+    /// hands the text to the shell as it is.
+    ///
     /// Replaces `core.py:resolve_app_exe`, `_app_paths_exe`, `find_app_shortcut`, `find_store_app`,
     /// `resolve_shortcut`, `_start_menu_roots`.
     fn resolve_app(&self, name: &str) -> BackendResult<Option<AppTarget>>;
@@ -428,6 +441,17 @@ pub trait Backend: Send + Sync {
     /// `_get_deelevated_token`, `_find_explorer_pid`, the `subprocess.Popen` / `os.startfile`
     /// branches of `do_open`.
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome>;
+
+    // ------------------------------------------------------------------ local time
+
+    /// The local time zone's offset from UTC, in seconds east, at a Unix time. `list_files` prints
+    /// file times the way the owner's clock shows them. A backend that cannot say leaves the default,
+    /// and the core prints UTC.
+    ///
+    /// Replaces `datetime.fromtimestamp` (local time) in `fast.py:do_files`.
+    fn local_utc_offset(&self, _unix_secs: i64) -> BackendResult<i32> {
+        Err(BackendError::Unsupported("local time zone".into()))
+    }
 
     // ------------------------------------------------------------------ kill hotkey
 
