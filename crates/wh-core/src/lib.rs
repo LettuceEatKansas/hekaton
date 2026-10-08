@@ -10,6 +10,7 @@
 
 #![warn(missing_docs)]
 
+pub mod backend;
 pub mod clock;
 pub mod config;
 pub mod env;
