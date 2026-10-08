@@ -74,7 +74,7 @@ by anyone else and gives winhands no extra powers. Remove it any time with:
 EOF
 confirm "Create it now?" || die "Cancelled. No identity was created."
 
-WORK=$(mktemp -d -t winhands-identity.XXXXXX)
+WORK=$(mktemp -d -t winhands-identity)
 chmod 700 "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 

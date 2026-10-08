@@ -79,7 +79,7 @@ need codesign "It ships with macOS; is this a normal Mac?"
 need plutil "It ships with macOS; is this a normal Mac?"
 need lipo "Install the Xcode command line tools: xcode-select --install"
 
-WORK=$(mktemp -d -t winhands-build.XXXXXX)
+WORK=$(mktemp -d -t winhands-build)
 trap 'rm -rf "$WORK"' EXIT
 
 # --- 1. the executable ----------------------------------------------------------------------------------

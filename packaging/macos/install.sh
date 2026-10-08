@@ -90,7 +90,7 @@ need codesign "It ships with macOS; is this a normal Mac?"
 
 DEST_APP="$DEST_DIR/$BIN_NAME.app"
 DEST_BIN="$DEST_APP/Contents/MacOS/$BIN_NAME"
-WORK=$(mktemp -d -t winhands-install.XXXXXX)
+WORK=$(mktemp -d -t winhands-install)
 trap 'rm -rf "$WORK"' EXIT
 
 # --- 1. which signature ---------------------------------------------------------------------------------

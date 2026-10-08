@@ -141,7 +141,7 @@ package_version() {
 run_as_app() {
   local app=$1 out rc=0
   shift
-  out=$(mktemp -t winhands-run.XXXXXX)
+  out=$(mktemp -t winhands-run)
   run_with_timeout 45 open -W -n -a "$app" --stdout "$out" --stderr "$out" --args "$@" >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq 0 ] && [ -s "$out" ]; then
     cat "$out"
