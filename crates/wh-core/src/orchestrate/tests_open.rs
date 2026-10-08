@@ -343,7 +343,9 @@ fn only_programs_and_shortcuts_count_as_launchable_heads() {
     assert!(is_launchable(Some(&AppTarget::Executable("a.exe".into()))));
     assert!(is_launchable(Some(&AppTarget::Shortcut("a.lnk".into()))));
     assert!(!is_launchable(Some(&AppTarget::Packaged("pkg!App".into()))));
-    assert!(!is_launchable(Some(&AppTarget::Other("ms-settings:".into()))));
+    assert!(!is_launchable(Some(&AppTarget::Other(
+        "ms-settings:".into()
+    ))));
     assert!(!is_launchable(None));
 }
 
