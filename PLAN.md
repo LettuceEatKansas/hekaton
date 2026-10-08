@@ -84,6 +84,7 @@ Reference code that is MIT licensed and may be studied or borrowed with attribut
 |---|---|---|
 | R0 | Toolchain, workspace skeleton, crate versions verified, Backend trait drafted from the Python call surface | `cargo build` and `cargo test` green on Windows; GitHub Actions builds on windows-latest and macos-latest |
 | R1 | wh-core: config, token, ack gate, audit log, destructive rules (ported with their tests), key parser, batching, expect, settle, scaling, image encode; `winhands mcp` with the exact tool schema | Unit tests ported from the Python suite for these modules pass |
+| R1c | Port the 2026-10-08 Python additions: `window` and `folder` shortcuts, window-relative `at`, screenshot `save_to`, URL `open_app`, and the recipe engine (data-only JSON recipes, `when`/`on_fail`, bundled plus user recipes, `recipe_list`/`recipe_save`) | Ported Python tests pass; recipes from the Python build load unchanged |
 | R2 | wh-win: capture, input, windows and focus, UIA read/snapshot/find, OCR, clipboard, open_app, file_dialog, human-input pause, kill hotkey, caller guard, scheduled-task setup | Parity script: passive actions (screenshot size, list_windows, read, find_text) match Python on the same screen |
 | R3 | Active parity: the eval suite (scripts/evals.py core 9 plus held-out 20) against the Rust daemon | Rust scores at least the Python score (22/29 on 2026-09-21); needs the owner away from the PC |
 | R4 | Swap on Windows: scheduled task and MCP configs point at the Rust binary; Python kept installed | One week of normal use without a rollback |
