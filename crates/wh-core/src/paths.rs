@@ -61,6 +61,21 @@ impl Paths {
     pub fn audit_log(&self) -> PathBuf {
         self.dir.join("actions.jsonl")
     }
+
+    /// `daemon.pid`, written while the daemon runs (Python `daemon.PID_PATH`).
+    pub fn pid(&self) -> PathBuf {
+        self.dir.join("daemon.pid")
+    }
+
+    /// `daemon.log`, where a daemon started without a console writes its messages.
+    pub fn daemon_log(&self) -> PathBuf {
+        self.dir.join("daemon.log")
+    }
+
+    /// `shims/`, one `<pid>.json` per running MCP shim (Python `shim._shims_dir`).
+    pub fn shims_dir(&self) -> PathBuf {
+        self.dir.join("shims")
+    }
 }
 
 fn home(env: &dyn Env) -> PathBuf {
@@ -104,6 +119,9 @@ mod tests {
         assert!(p.ack().ends_with("acknowledged.json"));
         assert!(p.protected().ends_with("protected.txt"));
         assert!(p.audit_log().ends_with("actions.jsonl"));
+        assert!(p.pid().ends_with("daemon.pid"));
+        assert!(p.daemon_log().ends_with("daemon.log"));
+        assert!(p.shims_dir().ends_with("shims"));
     }
 
     #[test]

@@ -84,6 +84,21 @@ pub(crate) fn ocr_rows(result: &OcrResult, words_only: bool) -> Vec<OcrRow> {
     rows
 }
 
+impl super::Computer {
+    /// The whole display the model would see, scaled like a `computer` screenshot and encoded as a PNG
+    /// whatever the `img` setting says. No click marker. For the daemon's legacy `screenshot` route,
+    /// which always answered with PNG bytes.
+    pub fn display_png(&self) -> StepResult<Vec<u8>> {
+        let who = crate::caller::Caller::unknown();
+        let ctx = self.read_ctx(&who);
+        let scale = ctx.scale();
+        let (w, h) = scale.shot_size();
+        let img = ctx.grab(scale.display)?;
+        let img = imaging::resize(&img, w.max(1) as u32, h.max(1) as u32)?;
+        Ok(imaging::encode_png(&img)?)
+    }
+}
+
 impl Ctx<'_> {
     pub(crate) fn image_format(&self) -> ImageFormat {
         ImageFormat::from_name(&self.cfg().img_format())
