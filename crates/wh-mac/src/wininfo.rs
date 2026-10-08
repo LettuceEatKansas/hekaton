@@ -108,6 +108,33 @@ pub(crate) fn frontmost_app_window(windows: &[RawWindow], pid: i32) -> Option<&R
         .find(|w| w.pid == pid && w.on_screen && w.is_app_window())
 }
 
+/// The share of a `grid x grid` sample of `rect` where the window `(pid, id)` is what is on
+/// screen, from one snapshot of the window server's list (front to back).
+pub(crate) fn visible_fraction(
+    windows: &[RawWindow],
+    target: (i32, u32),
+    rect: Rect,
+    grid: u32,
+) -> f64 {
+    if rect.is_empty() || grid == 0 {
+        return 0.0;
+    }
+    let (mut hits, mut total) = (0u32, 0u32);
+    for i in 0..grid {
+        for j in 0..grid {
+            let x = rect.left
+                + (f64::from(rect.width()) * (f64::from(i) + 0.5) / f64::from(grid)) as i32;
+            let y = rect.top
+                + (f64::from(rect.height()) * (f64::from(j) + 0.5) / f64::from(grid)) as i32;
+            total += 1;
+            if window_at_point(windows, Point { x, y }).is_some_and(|w| (w.pid, w.id) == target) {
+                hits += 1;
+            }
+        }
+    }
+    f64::from(hits) / f64::from(total)
+}
+
 /// Does the window cover the whole of any one display (native full screen, a game)?
 pub(crate) fn is_fullscreen(bounds: Rect, displays: &[Rect]) -> bool {
     !bounds.is_empty() && displays.iter().any(|d| bounds.covers(d))
@@ -310,5 +337,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(to_info(&sheet, &ctx, &[]).kind, WindowKind::Dialog);
+    }
+
+    #[test]
+    fn visible_fraction_counts_samples_where_the_window_is_on_top() {
+        let target = raw(1, 1, 0, Rect::from_xywh(0, 0, 100, 100));
+        let cover = raw(2, 2, 0, Rect::from_xywh(0, 0, 50, 100));
+        let all = [cover, target.clone()];
+        let whole = Rect::from_xywh(0, 0, 100, 100);
+        let f = visible_fraction(&all, (1, 1), whole, 4);
+        assert!((f - 0.5).abs() < 1e-9, "{f}");
+        assert_eq!(visible_fraction(&[target], (1, 1), whole, 4), 1.0);
+        assert_eq!(visible_fraction(&all, (1, 1), Rect::default(), 4), 0.0);
+        assert_eq!(visible_fraction(&all, (9, 9), whole, 4), 0.0);
     }
 }

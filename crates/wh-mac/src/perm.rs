@@ -1,0 +1,122 @@
+//! macOS privacy grants (TCC) and Secure Input. Every check is a no-prompt preflight; a missing
+//! grant becomes a [`BackendError::Denied`] that names the System Settings pane to open.
+
+use objc2_core_graphics::{CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess};
+use wh_core::backend::{BackendError, BackendResult, PermissionStatus};
+
+use crate::ax;
+use crate::keymap::{PANE_ACCESSIBILITY, PANE_SCREEN_RECORDING};
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    /// HIToolbox: is any app (a password field, a terminal's Secure Keyboard Entry) holding
+    /// Secure Event Input?
+    fn IsSecureEventInputEnabled() -> u8;
+}
+
+/// Accessibility (AX) is granted to this process.
+pub(crate) fn accessibility_granted() -> bool {
+    ax::trusted()
+}
+
+/// Posting synthetic input events is allowed (it rides on the Accessibility grant).
+pub(crate) fn post_events_granted() -> bool {
+    CGPreflightPostEventAccess()
+}
+
+/// Screen capture (Screen & System Audio Recording) is granted.
+pub(crate) fn screen_capture_granted() -> bool {
+    CGPreflightScreenCaptureAccess()
+}
+
+/// Is Secure Event Input on right now?
+pub(crate) fn secure_input_enabled() -> bool {
+    // SAFETY: no arguments, no preconditions.
+    unsafe { IsSecureEventInputEnabled() != 0 }
+}
+
+/// Fail unless Accessibility is granted. `what` says what was being attempted.
+pub(crate) fn require_accessibility(what: &str) -> BackendResult<()> {
+    if accessibility_granted() {
+        Ok(())
+    } else {
+        Err(BackendError::Denied(format!(
+            "macOS has not granted winhands Accessibility access, so it cannot {what}. Open \
+             {PANE_ACCESSIBILITY}, switch winhands on, then try again"
+        )))
+    }
+}
+
+/// Fail unless synthetic input may be posted.
+pub(crate) fn require_post_events(what: &str) -> BackendResult<()> {
+    if post_events_granted() || accessibility_granted() {
+        Ok(())
+    } else {
+        Err(BackendError::Denied(format!(
+            "macOS has not granted winhands permission to control the keyboard and mouse, so it \
+             cannot {what}. Open {PANE_ACCESSIBILITY}, switch winhands on, then try again"
+        )))
+    }
+}
+
+/// Fail unless Screen Recording is granted.
+pub(crate) fn require_screen_capture(what: &str) -> BackendResult<()> {
+    if screen_capture_granted() {
+        Ok(())
+    } else {
+        Err(BackendError::Denied(format!(
+            "macOS has not granted winhands Screen Recording access, so it cannot {what}. Open \
+             {PANE_SCREEN_RECORDING}, switch winhands on, then restart winhands and try again"
+        )))
+    }
+}
+
+/// The message for typing into a password field while Secure Input is on.
+pub(crate) fn secure_input_error() -> BackendError {
+    BackendError::Denied(
+        "a password field has focus and macOS Secure Input is on: synthetic keystrokes cannot \
+         reach it. Type it yourself, or click out of the field"
+            .to_string(),
+    )
+}
+
+/// The report `winhands doctor` prints.
+pub(crate) fn report() -> Vec<PermissionStatus> {
+    vec![
+        PermissionStatus {
+            name: "Accessibility".into(),
+            granted: accessibility_granted(),
+            needed_for: "reading app windows and controls, clicking buttons by name".into(),
+            fix: PANE_ACCESSIBILITY.into(),
+        },
+        PermissionStatus {
+            name: "Post input events".into(),
+            granted: post_events_granted(),
+            needed_for: "moving the mouse, clicking, typing and key shortcuts".into(),
+            fix: PANE_ACCESSIBILITY.into(),
+        },
+        PermissionStatus {
+            name: "Screen Recording".into(),
+            granted: screen_capture_granted(),
+            needed_for: "screenshots, OCR, and other apps' window titles".into(),
+            fix: PANE_SCREEN_RECORDING.into(),
+        },
+    ]
+}
+
+/// Refuse to type when Secure Input is on and the focused control is a password field: the
+/// keystrokes would be dropped without a word. Anything that cannot be checked is let through.
+pub(crate) fn check_secure_typing() -> BackendResult<()> {
+    if !secure_input_enabled() || !accessibility_granted() {
+        return Ok(());
+    }
+    let focused = ax::Ax::system_wide().element("AXFocusedUIElement");
+    if let Some(el) = focused {
+        let role = el.string("AXRole").unwrap_or_default();
+        let sub = el.string("AXSubrole");
+        if crate::roles::is_secure_field(&role, sub.as_deref()) {
+            return Err(secure_input_error());
+        }
+    }
+    Ok(())
+}
