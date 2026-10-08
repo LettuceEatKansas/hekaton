@@ -1101,6 +1101,21 @@ pub struct HotkeyChord {
     pub keys: Vec<crate::keys::Key>,
 }
 
+// ------------------------------------------------------------------------------------ permissions
+
+/// One OS permission a backend needs, as `winhands doctor` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionStatus {
+    /// The permission's name as the OS shows it (`Accessibility`, `Screen Recording`).
+    pub name: String,
+    /// Granted to this process right now.
+    pub granted: bool,
+    /// What stops working without it.
+    pub needed_for: String,
+    /// Where to switch it on (`System Settings > Privacy & Security > Accessibility`).
+    pub fix: String,
+}
+
 // ------------------------------------------------------------------------------------ capabilities
 
 /// What this backend can do on this OS, so the core can degrade instead of failing.

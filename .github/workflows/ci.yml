@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, mac]
   pull_request:
 
 env:
@@ -25,3 +25,16 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: wh-mac Intel target
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo clippy -p wh-mac --target x86_64-apple-darwin -- -D warnings
+      - name: wh-mac smoke output
+        if: runner.os == 'macOS'
+        run: cargo test -p wh-mac --test macos_smoke -- --nocapture --test-threads=1
+      - name: wh-mac end to end (Calculator, TextEdit)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 8
+        run: cargo test -p wh-mac --test macos_e2e -- --ignored --nocapture --test-threads=1
