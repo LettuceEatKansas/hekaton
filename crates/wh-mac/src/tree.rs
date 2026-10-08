@@ -210,6 +210,7 @@ struct Walk<'a> {
     window_rect: Option<Rect>,
     visited: usize,
     kept: usize,
+    saw_document: bool,
     truncated: bool,
 }
 
@@ -255,6 +256,7 @@ impl Walk<'_> {
         let props = ax.fetch().ok()?;
         self.visited += 1;
         let mut el = make_element(ElementId(String::new()), &props, self.window_rect);
+        self.saw_document |= el.role == Role::Document;
         let mut kids = Vec::new();
         if depth < self.limits.max_depth {
             for child in props.children.iter().cloned() {
@@ -338,13 +340,23 @@ fn prune(node: Node, reg: &Registry, window: WindowRef) -> Option<Element> {
     Some(el)
 }
 
+/// What one walk of a window produced.
+struct Walked {
+    root: Element,
+    /// Elements visited, kept or not.
+    visited: usize,
+    /// A web or document area was seen (a Chromium tree without one has not woken up).
+    saw_document: bool,
+    truncated: bool,
+}
+
 fn walk_window(
     reg: &Registry,
     win: &Ax,
     window: WindowRef,
     limits: &TreeLimits,
     remaining: Duration,
-) -> BackendResult<(Element, usize, usize, bool)> {
+) -> BackendResult<Walked> {
     let props = win.fetch().map_err(map_err)?;
     let window_rect = match (props.position, props.size) {
         (Some(p), Some(s)) => Some(rect_from_f64(p.x, p.y, s.width, s.height)),
@@ -356,10 +368,11 @@ fn walk_window(
         window_rect,
         visited: 0,
         kept: 0,
+        saw_document: false,
         truncated: false,
     };
     let root = w.visit(win.clone(), 0).ok_or(BackendError::ElementGone)?;
-    let (visited, kept, truncated) = (w.visited, w.kept, w.truncated);
+    let (visited, saw_document, truncated) = (w.visited, w.saw_document, w.truncated);
     let Node {
         mut el, ax, kids, ..
     } = root;
@@ -377,19 +390,25 @@ fn walk_window(
             .filter_map(|k| prune(k, reg, window))
             .collect();
     }
-    Ok((el, visited, kept, truncated))
+    Ok(Walked {
+        root: el,
+        visited,
+        saw_document,
+        truncated,
+    })
 }
 
-/// Turn on the accessibility tree of a Chromium or Electron app. Setting the attributes does not
-/// raise the window or move focus.
-fn wake_app(reg: &Registry, pid: i32) {
+/// Turn on the accessibility tree of a Chromium or Electron app, once per app. Setting the
+/// attributes does not raise the window or move focus. True when this call did it.
+fn wake_app(reg: &Registry, pid: i32) -> bool {
     let mut woken = reg.woken.lock().unwrap_or_else(|e| e.into_inner());
     if !woken.insert(pid) {
-        return;
+        return false;
     }
     let app = Ax::app(pid);
     app.set_bool("AXManualAccessibility", true);
     app.set_bool("AXEnhancedUserInterface", true);
+    true
 }
 
 /// Read a window's tree under `limits`.
@@ -412,13 +431,13 @@ pub(crate) fn element_tree(
     let win = found.el;
     let chromium = apps::is_chromium_like(pid);
     let mut wake_hint = false;
-    let (mut root, visited, kept, mut truncated) =
-        walk_window(reg, &win, window, limits, limits.deadline)?;
-    if chromium && visited <= EMPTY_TREE && kept == 0 {
+    let mut walked = walk_window(reg, &win, window, limits, limits.deadline)?;
+    // A Chromium or Electron window whose page has not appeared in the tree is asleep.
+    if chromium && (!walked.saw_document || walked.visited <= EMPTY_TREE) {
         match limits.wake {
             WakePolicy::Never => wake_hint = true,
-            WakePolicy::IfEmpty => {
-                wake_app(reg, pid);
+            // Already woken once: a window with no document is simply not a web window.
+            WakePolicy::IfEmpty if wake_app(reg, pid) => {
                 // Chromium builds the tree asynchronously; give it a moment, then read again.
                 let settle_until = started + limits.deadline.mul_f32(0.5);
                 while Instant::now() < settle_until {
@@ -428,7 +447,7 @@ pub(crate) fn element_tree(
                     }
                 }
                 let left = limits.deadline.saturating_sub(started.elapsed());
-                (root, _, _, truncated) = walk_window(
+                walked = walk_window(
                     reg,
                     &win,
                     window,
@@ -437,13 +456,14 @@ pub(crate) fn element_tree(
                 )?;
                 // `wake_hint` stays false: it means "left alone because the policy said never".
             }
+            WakePolicy::IfEmpty => {}
         }
     }
     Ok(TreeSnapshot {
         window,
         title: info.title,
-        root,
-        truncated,
+        root: walked.root,
+        truncated: walked.truncated,
         wake_hint,
     })
 }
