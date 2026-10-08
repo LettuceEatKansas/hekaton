@@ -442,6 +442,64 @@ pub trait Backend: Send + Sync {
     /// branches of `do_open`.
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome>;
 
+    // ------------------------------------------------------------------ window and folder shortcuts
+
+    /// A window's shape beyond [`WindowInfo::rect`]: the whole frame, the visible bounds, the client
+    /// area and whether it is minimised or maximised. The default reads `window_info`, reports the
+    /// visible bounds as the frame, no client area, and never maximised; a backend that can tell
+    /// overrides it.
+    ///
+    /// Replaces `shortcuts.py:_window_rect`, `_client_rect`, `_visible_rect`, `_state`.
+    fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        let info = self.window_info(window)?;
+        Ok(WindowGeometry {
+            frame: info.rect,
+            visible: info.rect,
+            client: None,
+            state: if info.minimized {
+                WindowState::Minimized
+            } else {
+                WindowState::Normal
+            },
+        })
+    }
+
+    /// Close, minimise, maximise, restore or move a window. Returns as soon as the request is made:
+    /// a closing app may still be asking whether to save, and a hung one must not stall the call.
+    /// The core polls [`Backend::window_geometry`] and [`Backend::window_exists`] to see the result.
+    ///
+    /// Replaces `shortcuts.py:_post_close` (`WM_CLOSE`), `_show_async` (`ShowWindowAsync`),
+    /// `_set_pos` (`SetWindowPos` with `SWP_NOZORDER | SWP_NOACTIVATE`).
+    fn window_op(&self, _window: WindowRef, _op: WindowOp) -> BackendResult<()> {
+        Err(BackendError::Unsupported("window operations".into()))
+    }
+
+    /// A file-manager window already showing `folder`, if the OS can say (Windows: the Shell's list
+    /// of open Explorer windows). `None` when none is open or the OS cannot tell.
+    ///
+    /// Replaces `shortcuts.py:_com_window(folder=...)`.
+    fn folder_window(&self, _folder: &str) -> BackendResult<Option<WindowRef>> {
+        Ok(None)
+    }
+
+    /// Set a file-manager window's view and sort through the OS's own interface (Windows: the Shell
+    /// `IShellFolderViewDual`) and read them back. Waits up to `timeout` for a window that has only
+    /// just opened to show up. `Ok(None)` when the window never appeared in that interface; an error
+    /// when the interface is unavailable (an elevated daemon talking to a de-elevated Explorer, for
+    /// one). The core falls back to the keyboard and a header click in either case.
+    ///
+    /// Replaces `shortcuts.py:_shell_windows`, `_com_ready`, `_com_apply`.
+    fn set_folder_view(
+        &self,
+        _window: WindowRef,
+        _folder: &str,
+        _view: Option<FolderView>,
+        _sort: Option<FolderSort>,
+        _timeout: Duration,
+    ) -> BackendResult<Option<FolderViewState>> {
+        Err(BackendError::Unsupported("folder views".into()))
+    }
+
     // ------------------------------------------------------------------ local time
 
     /// The local time zone's offset from UTC, in seconds east, at a Unix time. `list_files` prints

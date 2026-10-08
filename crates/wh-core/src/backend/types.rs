@@ -1101,6 +1101,261 @@ pub struct HotkeyChord {
     pub keys: Vec<crate::keys::Key>,
 }
 
+// ------------------------------------------------------------------------------------ shortcuts
+
+/// A change to a whole window, for the `window` action. A backend does the OS call and returns; the
+/// core polls [`WindowGeometry::state`] to find out whether the app honoured it.
+///
+/// Python: `shortcuts._post_close`, `_show_async`, `_set_pos`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowOp {
+    /// Ask the window to close the way its close button does. The process is never killed: an app
+    /// with unsaved work asks first, and the core reports that instead of answering the question.
+    Close,
+    /// Minimise (Win32 `SW_MINIMIZE`, AX `AXMinimized`). Must not block on a hung window.
+    Minimize,
+    /// Maximise (Win32 `SW_MAXIMIZE`, macOS zoom or full screen).
+    Maximize,
+    /// Undo a minimise or a maximise (Win32 `SW_RESTORE`).
+    Restore,
+    /// Place the window's outer frame at this rect, in input coordinates, without changing the
+    /// stacking order or taking focus. The core restores a minimised or maximised window first.
+    Move(Rect),
+}
+
+/// Whether a window is minimised, maximised or neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowState {
+    /// Neither (Win32 `!IsIconic && !IsZoomed`).
+    #[default]
+    Normal,
+    /// Minimised (Win32 `IsIconic`).
+    Minimized,
+    /// Maximised (Win32 `IsZoomed`; macOS full screen).
+    Maximized,
+}
+
+impl WindowState {
+    /// The word a result line uses: `minimized`, `maximized`, `normal`.
+    pub fn word(self) -> &'static str {
+        match self {
+            WindowState::Normal => "normal",
+            WindowState::Minimized => "minimized",
+            WindowState::Maximized => "maximized",
+        }
+    }
+}
+
+/// Everything about a window's shape that [`WindowInfo::rect`] alone does not say.
+///
+/// Python: `shortcuts._window_rect`, `_client_rect`, `_visible_rect`, `_state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    /// The whole window frame, including any invisible resize border (Win32 `GetWindowRect`).
+    pub frame: Rect,
+    /// The bounds a person sees: DWM's extended frame on Windows (no invisible border). Equal to
+    /// `frame` where the OS draws no such border.
+    pub visible: Rect,
+    /// The part inside the frame and title bar, in screen coordinates, when the OS can say.
+    pub client: Option<Rect>,
+    /// Minimised, maximised or neither.
+    pub state: WindowState,
+}
+
+/// An Explorer or Finder view mode, for the `folder` action. The names are what a model sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FolderView {
+    /// Details: a table with column headers.
+    Details,
+    /// List.
+    List,
+    /// Tiles.
+    Tiles,
+    /// Content.
+    Content,
+    /// Medium icons.
+    Icons,
+    /// Large icons.
+    Large,
+    /// Extra large icons.
+    XLarge,
+    /// Small icons.
+    Small,
+}
+
+impl FolderView {
+    /// Every view, in the order the error message lists them.
+    pub const ALL: [FolderView; 8] = [
+        FolderView::Details,
+        FolderView::List,
+        FolderView::Tiles,
+        FolderView::Content,
+        FolderView::Icons,
+        FolderView::Large,
+        FolderView::XLarge,
+        FolderView::Small,
+    ];
+
+    /// The name a model sends and a result prints.
+    pub fn name(self) -> &'static str {
+        match self {
+            FolderView::Details => "details",
+            FolderView::List => "list",
+            FolderView::Tiles => "tiles",
+            FolderView::Content => "content",
+            FolderView::Icons => "icons",
+            FolderView::Large => "large",
+            FolderView::XLarge => "xlarge",
+            FolderView::Small => "small",
+        }
+    }
+
+    /// The digit of Explorer's own `Ctrl+Shift+<digit>` view shortcut.
+    pub fn shortcut_digit(self) -> char {
+        match self {
+            FolderView::Details => '6',
+            FolderView::List => '5',
+            FolderView::Tiles => '7',
+            FolderView::Content => '8',
+            FolderView::Icons => '3',
+            FolderView::Large => '2',
+            FolderView::XLarge => '1',
+            FolderView::Small => '4',
+        }
+    }
+}
+
+/// A column a folder can be sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SortColumn {
+    /// File name (natural order: `b2` before `b10`).
+    Name,
+    /// Date modified.
+    DateModified,
+    /// Date created.
+    DateCreated,
+    /// Size.
+    Size,
+    /// Type (the extension; a folder has none).
+    Type,
+}
+
+impl SortColumn {
+    /// Every column, in the order the error message lists them.
+    pub const ALL: [SortColumn; 5] = [
+        SortColumn::Name,
+        SortColumn::DateModified,
+        SortColumn::DateCreated,
+        SortColumn::Size,
+        SortColumn::Type,
+    ];
+
+    /// The name a model sends and a result prints.
+    pub fn name(self) -> &'static str {
+        match self {
+            SortColumn::Name => "name",
+            SortColumn::DateModified => "date_modified",
+            SortColumn::DateCreated => "date_created",
+            SortColumn::Size => "size",
+            SortColumn::Type => "type",
+        }
+    }
+
+    /// The Windows property the Shell sorts on (`System.DateModified`).
+    pub fn property(self) -> &'static str {
+        match self {
+            SortColumn::Name => "System.ItemNameDisplay",
+            SortColumn::DateModified => "System.DateModified",
+            SortColumn::DateCreated => "System.DateCreated",
+            SortColumn::Size => "System.Size",
+            SortColumn::Type => "System.ItemTypeText",
+        }
+    }
+
+    /// The column header Explorer's Details view shows.
+    pub fn header(self) -> &'static str {
+        match self {
+            SortColumn::Name => "Name",
+            SortColumn::DateModified => "Date modified",
+            SortColumn::DateCreated => "Date created",
+            SortColumn::Size => "Size",
+            SortColumn::Type => "Type",
+        }
+    }
+
+    /// The direction a person expects with none given: names and types A to Z, dates newest first,
+    /// sizes largest first.
+    pub fn natural_descending(self) -> bool {
+        matches!(
+            self,
+            SortColumn::DateModified | SortColumn::DateCreated | SortColumn::Size
+        )
+    }
+}
+
+/// A sort order for a folder view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FolderSort {
+    /// The column.
+    pub column: SortColumn,
+    /// Largest, newest or Z first.
+    pub descending: bool,
+}
+
+impl FolderSort {
+    /// `date_modified desc`, the form a result prints and a read-back returns.
+    pub fn describe(self) -> String {
+        format!(
+            "{} {}",
+            self.column.name(),
+            if self.descending { "desc" } else { "asc" }
+        )
+    }
+
+    /// The Shell's `SortColumns` text: `prop:-System.DateModified;` (a leading minus is descending).
+    pub fn shell_spec(self) -> String {
+        format!(
+            "prop:{}{};",
+            if self.descending { "-" } else { "" },
+            self.column.property()
+        )
+    }
+
+    /// Read the first column of a Shell `SortColumns` text back (`prop:-System.DateModified;`).
+    /// `None` when it names no column winhands knows.
+    pub fn from_shell_spec(text: &str) -> Option<Self> {
+        let rest = text.split("prop:").nth(1)?;
+        let (descending, rest) = match rest.chars().next()? {
+            '-' => (true, &rest[1..]),
+            '+' => (false, &rest[1..]),
+            _ => (false, rest),
+        };
+        let prop: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+            .collect();
+        SortColumn::ALL
+            .into_iter()
+            .find(|c| c.property().eq_ignore_ascii_case(&prop))
+            .map(|column| FolderSort { column, descending })
+    }
+}
+
+/// What a file manager's window shows after [`Backend::set_folder_view`](super::Backend::set_folder_view),
+/// read back from the window itself. An aspect that could not be set or read is left empty and its
+/// error is in `errors`; the core then falls back to the keyboard (view) or a header click (sort).
+///
+/// Python: the `state, errors` pair `shortcuts._com_apply` returns.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderViewState {
+    /// The view name read back (`details`), or empty.
+    pub view: String,
+    /// The sort read back (`date_modified desc`), or empty.
+    pub sort: String,
+    /// One entry per aspect that failed, worded `view: ...` or `sort: ...`.
+    pub errors: Vec<String>,
+}
+
 // ------------------------------------------------------------------------------------ permissions
 
 /// One OS permission a backend needs, as `winhands doctor` reports it.
