@@ -1,0 +1,246 @@
+//! Typing text. Port of `computer._type_text`.
+//!
+//! Text longer than `paste_over` characters (6 by default) is pasted through the clipboard and the
+//! owner's clipboard is put back afterwards; short text (a game hotkey, a digit) is typed key by key
+//! with a small gap. 2026-09-20 side-by-side test: a fast burst of synthetic key events typed
+//! "...winhands rrrrrrrr" into Windows 11 Notepad, while pasting came out clean.
+//!
+//! The owner's hard line applies first: this tool types into terminals, so a command typed here counts
+//! as running it, pasted or keyed ([`Policy::check_text`]).
+
+use std::fmt;
+use std::thread;
+use std::time::Duration;
+
+use crate::backend::{Backend, BackendError, no_guard};
+use crate::destructive::{DestructiveAction, Policy};
+use crate::keys::{Key, Platform};
+
+/// Gap between typed characters.
+const KEY_GAP: Duration = Duration::from_millis(12);
+/// Let the clipboard settle before pasting.
+const BEFORE_PASTE: Duration = Duration::from_millis(30);
+/// Let the app read the clipboard before the old contents go back.
+const AFTER_PASTE: Duration = Duration::from_millis(120);
+
+/// How `type_text` behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeOptions {
+    /// Character count above which text is pasted instead of typed (config `paste_over`).
+    pub paste_over: usize,
+    /// Which paste shortcut to press.
+    pub platform: Platform,
+}
+
+impl TypeOptions {
+    /// This build's platform and the given threshold.
+    pub fn new(paste_over: usize) -> Self {
+        Self {
+            paste_over,
+            platform: Platform::current(),
+        }
+    }
+}
+
+/// How the text went in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeOutcome {
+    /// Typed key by key.
+    Typed,
+    /// Pasted from the clipboard.
+    Pasted,
+}
+
+impl TypeOutcome {
+    /// The suffix Python appended to its note: "" or " (pasted)".
+    pub fn note_suffix(self) -> &'static str {
+        match self {
+            TypeOutcome::Typed => "",
+            TypeOutcome::Pasted => " (pasted)",
+        }
+    }
+}
+
+/// Why text was not typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeError {
+    /// The text is on the destructive list; nothing was sent.
+    Refused(DestructiveAction),
+    /// The OS failed while typing or pasting.
+    Backend(BackendError),
+}
+
+impl fmt::Display for TypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeError::Refused(d) => d.fmt(f),
+            TypeError::Backend(b) => b.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TypeError {}
+
+impl From<BackendError> for TypeError {
+    fn from(e: BackendError) -> Self {
+        TypeError::Backend(e)
+    }
+}
+
+/// Type `text` into whatever has focus, pasting when it is long.
+pub fn type_text(
+    backend: &dyn Backend,
+    policy: Policy,
+    text: &str,
+    options: &TypeOptions,
+) -> Result<TypeOutcome, TypeError> {
+    policy
+        .check_text(text, "the text to type")
+        .map_err(TypeError::Refused)?;
+    if text.chars().count() <= options.paste_over {
+        for ch in text.chars() {
+            let mut buf = [0u8; 4];
+            backend.type_text(ch.encode_utf8(&mut buf), &no_guard)?;
+            thread::sleep(KEY_GAP);
+        }
+        return Ok(TypeOutcome::Typed);
+    }
+    let saved = backend.clipboard_text().ok();
+    backend.set_clipboard_text(text)?;
+    thread::sleep(BEFORE_PASTE);
+    let paste_modifier = match options.platform {
+        Platform::Windows => Key::Ctrl,
+        Platform::Mac => Key::Meta,
+    };
+    backend.key_chord(&[paste_modifier, Key::Char('v')], 1, &no_guard)?;
+    thread::sleep(AFTER_PASTE);
+    if let Some(saved) = saved {
+        // Putting the old text back is best effort, as in Python.
+        let _ = backend.set_clipboard_text(&saved);
+    }
+    Ok(TypeOutcome::Pasted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::ClipboardContent;
+    use crate::backend::fake::{FakeBackend, InputEvent};
+
+    const OFF: Policy = Policy::REFUSE;
+
+    #[test]
+    fn short_text_is_typed_key_by_key() {
+        let backend = FakeBackend::new();
+        let out = type_text(&backend, OFF, "abc", &TypeOptions::new(6)).unwrap();
+        assert_eq!(out, TypeOutcome::Typed);
+        assert_eq!(out.note_suffix(), "");
+        assert_eq!(backend.typed_text(), "abc");
+        assert_eq!(backend.events().len(), 3, "one event per character");
+    }
+
+    #[test]
+    fn the_threshold_is_in_characters_and_inclusive() {
+        let backend = FakeBackend::new();
+        let six = type_text(&backend, OFF, "123456", &TypeOptions::new(6)).unwrap();
+        assert_eq!(six, TypeOutcome::Typed);
+        let emoji = type_text(
+            &backend,
+            OFF,
+            "\u{1F642}\u{1F642}\u{1F642}",
+            &TypeOptions::new(3),
+        )
+        .unwrap();
+        assert_eq!(
+            emoji,
+            TypeOutcome::Typed,
+            "three characters, though six UTF-16 units"
+        );
+    }
+
+    #[test]
+    fn long_text_is_pasted_and_the_owners_clipboard_comes_back() {
+        let backend = FakeBackend::new();
+        backend.set_clipboard(ClipboardContent::Text("jon's clipboard".into()));
+        let out = type_text(
+            &backend,
+            OFF,
+            "a long sentence to paste",
+            &TypeOptions::new(6),
+        )
+        .unwrap();
+        assert_eq!(out, TypeOutcome::Pasted);
+        assert_eq!(out.note_suffix(), " (pasted)");
+        assert_eq!(backend.typed_text(), "", "nothing was keyed");
+        let keys: Vec<InputEvent> = backend.events();
+        assert_eq!(
+            keys,
+            [
+                InputEvent::KeyDown(Key::Ctrl),
+                InputEvent::KeyDown(Key::Char('v')),
+                InputEvent::KeyUp(Key::Char('v')),
+                InputEvent::KeyUp(Key::Ctrl),
+            ]
+        );
+        assert_eq!(backend.clipboard_text().unwrap(), "jon's clipboard");
+    }
+
+    #[test]
+    fn a_mac_pastes_with_command() {
+        let backend = FakeBackend::new();
+        let opts = TypeOptions {
+            paste_over: 2,
+            platform: Platform::Mac,
+        };
+        type_text(&backend, OFF, "hello", &opts).unwrap();
+        assert_eq!(backend.events()[0], InputEvent::KeyDown(Key::Meta));
+    }
+
+    #[test]
+    fn an_empty_clipboard_is_not_restored_as_something() {
+        let backend = FakeBackend::new();
+        type_text(&backend, OFF, "paste this please", &TypeOptions::new(6)).unwrap();
+        // the saved text was "" (empty clipboard) and goes back as ""
+        assert_eq!(backend.clipboard_text().unwrap(), "");
+    }
+
+    // Ported from tests/test_destructive.py::test_the_typed_text_path_is_guarded.
+    #[test]
+    fn the_typed_text_path_is_guarded() {
+        let backend = FakeBackend::new();
+        let err = type_text(
+            &backend,
+            OFF,
+            "vssadmin delete shadows /all",
+            &TypeOptions::new(500),
+        )
+        .unwrap_err();
+        assert!(matches!(err, TypeError::Refused(_)));
+        assert!(err.to_string().contains("allow_destructive"));
+        assert!(backend.typed_text().is_empty() && backend.events().is_empty());
+        // a long refused command is not pasted either
+        let err = type_text(
+            &backend,
+            OFF,
+            "vssadmin delete shadows /all",
+            &TypeOptions::new(3),
+        )
+        .unwrap_err();
+        assert!(matches!(err, TypeError::Refused(_)));
+        assert!(backend.events().is_empty());
+        assert_eq!(backend.clipboard_text().unwrap(), "");
+    }
+
+    #[test]
+    fn the_opt_in_lets_a_destructive_looking_text_through() {
+        let backend = FakeBackend::new();
+        type_text(
+            &backend,
+            Policy::allow(),
+            "vssadmin delete shadows",
+            &TypeOptions::new(500),
+        )
+        .unwrap();
+        assert_eq!(backend.typed_text(), "vssadmin delete shadows");
+    }
+}
