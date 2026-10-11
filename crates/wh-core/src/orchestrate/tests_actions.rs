@@ -1585,3 +1585,20 @@ fn keys_into_an_agent_host_are_refused_when_the_caller_is_unknown() {
         .unwrap();
     assert_eq!(kit.fake.typed_text(), "hello");
 }
+
+// 2026-10-11 (macOS, Brave address bar): a pasted trailing newline never submitted a one-line
+// field. The body is typed, then Enter is pressed as a real key.
+#[test]
+fn a_trailing_newline_is_a_real_enter_press() {
+    let kit = Kit::new();
+    app_with(&kit, &[]);
+    kit.step(json!({"action": "type", "text": "go\n"})).unwrap();
+    assert_eq!(kit.fake.typed_text(), "go");
+    let enters = kit
+        .fake
+        .events()
+        .iter()
+        .filter(|e| matches!(e, InputEvent::KeyDown(Key::Enter)))
+        .count();
+    assert_eq!(enters, 1);
+}

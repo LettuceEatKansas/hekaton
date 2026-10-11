@@ -404,13 +404,34 @@ impl Ctx<'_> {
         if !cands.is_empty() {
             return Ok(cands);
         }
+        // 2026-10-11 (macOS TextEdit): find_text saw "2nd line" in the document text while
+        // wait_for_text and replace_word, OCR word by word, never matched a two-word phrase.
+        // Use the same document text first, keeping only matches that are on screen.
+        let cands: Vec<Cand> = self
+            .doc_text_hits(query.trim(), 6)
+            .into_iter()
+            .filter(|h| self.visible_box(h.match_rect))
+            .map(|h| {
+                let c = h.match_rect.unwrap_or_default().center();
+                Cand {
+                    x: c.x,
+                    y: c.y,
+                    source: "uia",
+                    label: query.trim().to_string(),
+                }
+            })
+            .collect();
+        if !cands.is_empty() {
+            return Ok(cands);
+        }
         let display = self.display_rect();
         let rows = self
             .grab(display)
             .ok()
             .and_then(|img| {
                 let (origin, scale) = (img.origin(), img.scale());
-                self.ocr_rows_of(&img, true)
+                // a phrase never fits inside one OCR word: match it against whole lines
+                self.ocr_rows_of(&img, !q.contains(' '))
                     .map(|rows| (origin, scale, rows))
             })
             .unwrap_or((Point::default(), 1.0, Vec::new()));

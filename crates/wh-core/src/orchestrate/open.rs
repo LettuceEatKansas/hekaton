@@ -516,7 +516,7 @@ impl Ctx<'_> {
         }
         let exe_l = exe.to_lowercase();
         let target: AppTarget;
-        if exe_l.ends_with(".lnk") {
+        if exe_l.ends_with(".lnk") || exe_l.ends_with(".app") {
             target = AppTarget::Shortcut(exe.clone());
         } else {
             if resolved.is_none() && !is_abs(&exe) {
@@ -637,6 +637,22 @@ impl Ctx<'_> {
         // 2026-09-21: under only_apps, the dialog itself was never checked, so it filled and confirmed
         // a file path in whatever app's Save As happened to be in front, allowlisted or not.
         self.check_allowed(self.root_of(dialog))?;
+        // macOS Save and Open panels do not take a folder typed into the name box: go to the folder
+        // first (cmd+shift+g), then the box gets the file name alone.
+        let mut typed = path.clone();
+        if !cfg!(windows)
+            && let Some((dir, name)) = path.rsplit_once('/')
+            && !dir.is_empty()
+            && !name.is_empty()
+        {
+            self.send_combo("cmd+shift+g", 1)?;
+            self.sleep(0.7);
+            self.type_text(dir)?;
+            self.sleep(0.3);
+            self.send_combo("enter", 1)?;
+            self.sleep(0.9);
+            typed = name.to_string();
+        }
         // Not SetValue: the dialog shows the new text but keeps its own copy of the name, so Enter
         // saved the old name instead of the path (tested 2026-09-21). Focus the box, select all,
         // paste: the dialog sees real keyboard input.
@@ -660,10 +676,10 @@ impl Ctx<'_> {
         for attempt in 0..3 {
             self.send_combo(self.select_all(), 1)?;
             if attempt < 2 {
-                self.type_text(&path)?;
+                self.type_text(&typed)?;
             } else {
                 // last try: real keystrokes, no clipboard
-                for ch in path.chars() {
+                for ch in typed.chars() {
                     let mut buf = [0u8; 4];
                     self.be()
                         .type_text(ch.encode_utf8(&mut buf), &crate::backend::no_guard)?;
@@ -672,9 +688,9 @@ impl Ctx<'_> {
             self.sleep(0.15);
             shown = match self.be().element(&edit) {
                 Ok(el) => el.value.unwrap_or_default().trim().to_string(),
-                Err(_) => path.clone(),
+                Err(_) => typed.clone(),
             };
-            if shown.to_lowercase() == path.to_lowercase() {
+            if shown.to_lowercase() == typed.to_lowercase() {
                 landed = true;
                 break;
             }

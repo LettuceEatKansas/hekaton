@@ -298,6 +298,10 @@ impl Ctx<'_> {
             if is_action(&step_action) && !is_passive(&step_action) {
                 acted_in_call = true;
             }
+            // 2026-10-11: shot=false means text only, but find_text still attached a crop (~300
+            // tokens a hit). A picture stays only where the step itself asks for one.
+            let img =
+                img.filter(|_| want_shot || matches!(step_action.as_str(), "zoom" | "screenshot"));
             let has_img = img.is_some();
             if let Some(img) = img {
                 shots.push(img);

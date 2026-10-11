@@ -351,12 +351,25 @@ impl<'a> Ctx<'a> {
     /// owner's clipboard put back. Returns " (pasted)" or "" (Python `_type_text`).
     pub(crate) fn type_text(&self, text: &str) -> StepResult<&'static str> {
         let paste_over = usize::try_from(self.cfg().paste_over()).unwrap_or(0);
-        let outcome = type_text(
-            self.be(),
-            self.o.policy,
-            text,
-            &TypeOptions::new(paste_over),
-        )?;
-        Ok(outcome.note_suffix())
+        // 2026-10-11 (Brave address bar): a pasted trailing newline never submits a one-line
+        // field, so "url\n" sat there unsent. Type the body, then press Enter for real.
+        let body = text.trim_end_matches(['\n', '\r']);
+        let enters = text[body.len()..].matches('\n').count()
+            + usize::from(text.ends_with('\r') && !text.ends_with('\n'));
+        let mut suffix = "";
+        if !body.is_empty() {
+            let outcome = type_text(
+                self.be(),
+                self.o.policy,
+                body,
+                &TypeOptions::new(paste_over),
+            )?;
+            suffix = outcome.note_suffix();
+        }
+        if enters > 0 {
+            self.sleep(0.05);
+            self.send_combo("enter", enters as u32)?;
+        }
+        Ok(suffix)
     }
 }

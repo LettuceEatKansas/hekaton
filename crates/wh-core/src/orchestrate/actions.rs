@@ -15,7 +15,9 @@ use super::snapshot::WAKE_HINT;
 use super::{Ctx, secs};
 use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_passive};
 use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection, no_guard};
-use crate::keys::{Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo};
+use crate::keys::{
+    Key, Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo,
+};
 use crate::textutil::{fmt_g, py_repr, py_value_repr};
 
 /// Shortcuts that put something on the clipboard (`_COPY_COMBOS`).
@@ -519,9 +521,31 @@ impl Ctx<'_> {
         self.host_at(p)?;
         let hit = self.be().window_at_point(p).ok().flatten();
         self.refuse_explorer_open(hit.map(|h| self.root_of(h)))?;
-        let (x, y, _) = self.snap_to_word(p.x, p.y);
-        self.be()
-            .mouse_click(Point { x, y }, MouseButton::Left, 2, &no_guard)?;
+        // 2026-10-11 (TextEdit): a double click selects one word, so "line here" became "line row".
+        // A phrase with an exact on-screen box is selected from its first to its last character.
+        let span = if old_text.trim().contains(' ') {
+            self.doc_text_hits(old_text.trim(), 1)
+                .into_iter()
+                .find_map(|h| h.match_rect.filter(|_| self.visible_box(h.match_rect)))
+        } else {
+            None
+        };
+        if let Some(r) = span {
+            let y = r.center().y;
+            self.be()
+                .mouse_click(Point { x: r.left + 1, y }, MouseButton::Left, 1, &no_guard)?;
+            self.sleep(0.05);
+            self.be().key_down(Key::Shift)?;
+            let clicked =
+                self.be()
+                    .mouse_click(Point { x: r.right - 1, y }, MouseButton::Left, 1, &no_guard);
+            self.be().key_up(Key::Shift)?;
+            clicked?;
+        } else {
+            let (x, y, _) = self.snap_to_word(p.x, p.y);
+            self.be()
+                .mouse_click(Point { x, y }, MouseButton::Left, 2, &no_guard)?;
+        }
         self.sleep(0.05);
         let new_text = crate::textutil::py_str(new.unwrap_or(&Value::Null));
         let suffix = self.type_text(&new_text)?;
