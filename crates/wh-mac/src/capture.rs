@@ -338,6 +338,21 @@ impl Capturer {
         }
     }
 
+    /// One display's `relative` rect scaled to `width` x `height` by ScreenCaptureKit itself: for
+    /// change detection, so origin and scale are left at their defaults.
+    pub(crate) fn capture_small(
+        &self,
+        cg_id: u32,
+        relative: Rect,
+        width: u32,
+        height: u32,
+    ) -> BackendResult<Image> {
+        perm::require_screen_capture("take screenshots")?;
+        let img = self.capture_display_rect(cg_id, relative, width, height)?;
+        let (w, h, rgba) = cgimage_to_rgba(&img)?;
+        Ok(Image::new(w, h, rgba)?)
+    }
+
     /// Capture one window's own pixels (even when covered), at `scale` pixels per point.
     pub(crate) fn capture_window(
         &self,

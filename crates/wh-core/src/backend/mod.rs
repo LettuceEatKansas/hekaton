@@ -89,6 +89,14 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:grab` (and so `computer.py:_grab`, `screenshot_b64`, `settle`).
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image>;
 
+    /// `region` scaled down to about `width` x `height` pixels, for change detection only (the
+    /// settle loop). Backends that can scale while capturing override this; the default captures
+    /// at full size and leaves the shrinking to the caller.
+    fn capture_small(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        let _ = (width, height);
+        self.capture(CaptureTarget::Region(region))
+    }
+
     // ------------------------------------------------------------------ windows
 
     /// Top-level application windows in z-order, topmost first (the `EnumWindows` order):

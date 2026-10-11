@@ -103,6 +103,20 @@ impl MacBackend {
             .ok_or_else(|| BackendError::Os("that region is outside every display".to_string()))?;
         self.capturer.capture_plan(&plan, &list)
     }
+
+    /// One display only: ScreenCaptureKit scales to the small size on the GPU, so the settle loop
+    /// skips a full-resolution copy and a CPU resize on every look (2026-10-11).
+    fn capture_region_small(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        let list = displays::list()?;
+        let specs: Vec<_> = list.iter().map(displays::DisplayInfo::spec).collect();
+        let plan = plan_capture(&specs, region)
+            .ok_or_else(|| BackendError::Os("that region is outside every display".to_string()))?;
+        let [part] = plan.parts.as_slice() else {
+            return self.capturer.capture_plan(&plan, &list);
+        };
+        self.capturer
+            .capture_small(list[part.display].cg_id, part.relative, width, height)
+    }
 }
 
 impl Backend for MacBackend {
@@ -138,6 +152,10 @@ impl Backend for MacBackend {
 
     fn displays(&self) -> BackendResult<Vec<Display>> {
         Ok(displays::to_neutral(&displays::list()?))
+    }
+
+    fn capture_small(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        self.capture_region_small(region, width, height)
     }
 
     fn virtual_screen(&self) -> BackendResult<Rect> {

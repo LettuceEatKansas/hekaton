@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::backend::{
-    Backend, BackendError, BackendResult, CaptureTarget, ElementFilter, Rect, TreeLimits,
+    Backend, BackendError, BackendResult, ElementFilter, Rect, TreeLimits,
     WakePolicy, WindowRef,
 };
 use crate::clock::Clock;
@@ -81,7 +81,7 @@ impl SettleParams {
 }
 
 fn thumb(backend: &dyn Backend, region: Rect) -> BackendResult<imaging::Thumb> {
-    let image = backend.capture(CaptureTarget::Region(region))?;
+    let image = backend.capture_small(region, imaging::THUMB_SIZE.0, imaging::THUMB_SIZE.1)?;
     imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))
 }
 
@@ -101,8 +101,12 @@ pub fn settle(
     clock.sleep(FIRST_LOOK_DELAY);
     let mut prev = thumb(backend, region)?;
     let mut calm = 0u32;
+    let mut looked = clock.now();
     while clock.now().saturating_sub(start) < params.max {
-        clock.sleep(LOOK_INTERVAL);
+        // 2026-10-11 (macOS): a capture alone takes ~50 ms, so the gap counts from the last look's
+        // start, not its end; sleeping the full interval after it made every settle ~120 ms a look.
+        clock.sleep(LOOK_INTERVAL.saturating_sub(clock.now().saturating_sub(looked)));
+        looked = clock.now();
         let cur = thumb(backend, region)?;
         // Two calm reads in a row: a slow fade changes little per frame and fooled a single check
         // into returning a half-dark screen (Slay the Spire's menu fade, 2026-09-20).
