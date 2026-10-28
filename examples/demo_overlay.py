@@ -174,6 +174,9 @@ def main():
     ap.add_argument("events")
     ap.add_argument("--video-start", type=float, required=True)
     ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--lead", type=float, default=2.5,
+                    help="seconds of recording kept before the prompt is sent; earlier frames are cut "
+                         "(they show the screen before the run hid other apps)")
     ap.add_argument("--blur", action="append", default=[],
                     help="x:y:w:h in recording pixels (1920x1080), optional @start-end seconds")
     args = ap.parse_args()
@@ -182,7 +185,9 @@ def main():
     dur = float(subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", args.raw],
         capture_output=True, text=True, check=True).stdout)
-    ass, end_all = build(events, args.video_start, dur)
+    t_prompt = next(e["t"] for e in events if e["kind"] == "prompt")
+    cut = max(0.0, t_prompt - args.video_start - args.lead)
+    ass, end_all = build(events, args.video_start + cut, dur - cut)
     ass_path = Path(args.out).with_suffix(".ass")
     ass_path.write_text(ass)
 
@@ -202,7 +207,7 @@ def main():
                  f"drawbox=x=0:y={VH}:w={W}:h={H - VH}:color=0x050505:t=fill,"
                  f"drawbox=x={VW}:y=0:w=2:h={VH}:color=0x303030:t=fill,"
                  f"ass={ass_path}[out]")
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", args.raw,
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{cut:.3f}", "-i", args.raw,
                     "-filter_complex", ";".join(graph), "-map", "[out]", "-t", f"{end_all:.2f}",
                     "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart", "-y", args.out], check=True)
