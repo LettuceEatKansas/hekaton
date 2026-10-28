@@ -874,3 +874,19 @@ fn open_a_folder_path_goes_to_finder_on_macos() {
     assert_eq!(launched[0].target, AppTarget::Executable("/usr/bin/open".into()));
     assert_eq!(launched[0].args, format!("\"{path}\""));
 }
+
+// 2026-10-28: an app name with a space is one app, not a program plus an argument.
+#[test]
+fn split_launch_keeps_a_spaced_app_name_whole() {
+    let knows = |n: &str| matches!(n, "Microsoft Excel" | "Microsoft" | "notepad");
+    let no = |_: &str| false;
+    assert_eq!(
+        super::open::split_launch("Microsoft Excel", &knows, &no, &no),
+        ("Microsoft Excel".to_string(), String::new())
+    );
+    // a real program plus argument still splits
+    assert_eq!(
+        super::open::split_launch("notepad notes.txt", &knows, &no, &no),
+        ("notepad".to_string(), "notes.txt".to_string())
+    );
+}

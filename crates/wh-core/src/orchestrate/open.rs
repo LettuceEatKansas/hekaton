@@ -150,6 +150,11 @@ pub(crate) fn split_launch(
     if known_exe(&lower).is_some() || exists(app) {
         return (app.to_string(), String::new());
     }
+    // 2026-10-28: on macOS "Microsoft Excel" split into "Microsoft" + "Excel", and "Microsoft"
+    // prefix-matched Word.app. A whole string that already names an app is never split.
+    if app.contains(char::is_whitespace) && knows(app) {
+        return (app.to_string(), String::new());
+    }
     let mut split: Option<(String, String)> = SPLIT_ARGS.captures(app).map(|m| {
         let head = m
             .get(1)
