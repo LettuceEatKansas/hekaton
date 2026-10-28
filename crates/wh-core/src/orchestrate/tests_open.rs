@@ -99,7 +99,8 @@ fn a_new_tab_that_never_appears_is_reported_not_hidden() {
     );
 }
 
-// Ported from test_open_reuse_false_skips_focus_shortcut.
+// Ported from test_open_reuse_false_skips_focus_shortcut. The notepad -> notepad.exe alias is Windows only.
+#[cfg(windows)]
 #[test]
 fn open_with_reuse_false_launches_even_when_it_is_running() {
     let kit = Kit::new();
@@ -169,6 +170,7 @@ fn a_protected_window_is_not_focused_by_open() {
 }
 
 // Ported from test_open_a_folder_path_goes_to_explorer_not_createprocess.
+#[cfg(windows)]
 #[test]
 fn open_a_folder_path_goes_to_explorer_not_to_createprocess() {
     let kit = Kit::new();
@@ -857,4 +859,18 @@ fn the_note_recipe_stops_before_typing_when_no_blank_document_appears() {
         "",
         "never typed into an existing document"
     );
+}
+
+// 2026-10-28: on macOS a folder opens through /usr/bin/open (Finder), never explorer.exe.
+#[cfg(not(windows))]
+#[test]
+fn open_a_folder_path_goes_to_finder_on_macos() {
+    let kit = Kit::new();
+    let folder = kit.tmp.path().join("Reports");
+    std::fs::create_dir(&folder).unwrap();
+    let path = folder.to_string_lossy().to_string();
+    let _ = do_open(&kit, &path, 0.2, true, true);
+    let launched = kit.fake.launches();
+    assert_eq!(launched[0].target, AppTarget::Executable("/usr/bin/open".into()));
+    assert_eq!(launched[0].args, format!("\"{path}\""));
 }

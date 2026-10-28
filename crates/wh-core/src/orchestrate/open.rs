@@ -70,7 +70,12 @@ static EXE_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
 static DRIVE_START: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z]:[\\/]").expect("DRIVE_START"));
 
+/// Windows only: on macOS "calculator" must stay a name the backend resolves to Calculator.app
+/// (2026-10-28: open_app "Calculator" tried to start calc.exe on the Mac).
 fn known_exe(name: &str) -> Option<&'static str> {
+    if !cfg!(windows) {
+        return None;
+    }
     KNOWN.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
 }
 
@@ -382,7 +387,11 @@ impl Ctx<'_> {
                 ));
             }
         }
-        self.do_open(&format!("explorer.exe \"{path}\""), wait, true, false)
+        if cfg!(windows) {
+            self.do_open(&format!("explorer.exe \"{path}\""), wait, true, false)
+        } else {
+            self.do_open(&format!("/usr/bin/open \"{path}\""), wait, true, false)
+        }
     }
 
     /// Focus only on an exact ref (`wN`) or exact full-title match. Otherwise (default `new`) launch a
