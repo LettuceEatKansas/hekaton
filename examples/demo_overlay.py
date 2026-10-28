@@ -20,6 +20,7 @@ from pathlib import Path
 W, H = 1920, 1080
 VW, VH = 1440, 810           # recording area
 PX = VW + 24                 # panel text x
+PW, PL = 190, 10           # prompt wrap width (chars) and max lines
 TAIL = 4.0                   # seconds to hold the final frame state after the answer
 
 
@@ -66,7 +67,7 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Log,Menlo,18,&H00E6E6E6,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: Head,Helvetica Neue,24,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: Prompt,Helvetica Neue,22,&H00F0F0F0,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: Prompt,Helvetica Neue,17,&H00F0F0F0,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: Timer,Menlo,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,9,0,0,0,1
 Style: Small,Helvetica Neue,18,&H00A0A0A0,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 
@@ -91,7 +92,7 @@ def build(events, vstart, duration):
 
     # bottom strip: prompt (typed out in the 2 s before it is sent), then held
     words = prompt["task"]
-    wrapped = textwrap.wrap(words, 150)[:5]
+    wrapped = textwrap.wrap(words, PW)[:PL]
     full = "\\N".join(esc(x) for x in wrapped)
     out.append(line(0, end_all, "Small", 24, VH + 14, "PROMPT  →  " + esc(model_name)))
     type_from = max(0.0, t0 - 2.0)
@@ -101,7 +102,7 @@ def build(events, vstart, duration):
         a = type_from + (t0 - type_from) * i / steps
         b = type_from + (t0 - type_from) * (i + 1) / steps
         k = int(n * (i + 1) / steps)
-        part = "\\N".join(esc(x) for x in textwrap.wrap(words[:k], 150)[:5])
+        part = "\\N".join(esc(x) for x in textwrap.wrap(words[:k], PW)[:PL])
         out.append(line(a, b, "Prompt", 24, VH + 44, part))
     out.append(line(t0, end_all, "Prompt", 24, VH + 44, full))
 
@@ -200,7 +201,8 @@ def main():
         if when:
             a, z = when.split("-")
             en = f":enable='between(t,{a},{z})'"
-        graph.append(f"{chain}split[m{i}][c{i}];[c{i}]crop={w}:{h}:{x}:{y},boxblur=20:4[b{i}];"
+        r = max(1, min(20, (min(int(w), int(h)) - 1) // 4))   # chroma is half size, boxblur radius < half of it
+        graph.append(f"{chain}split[m{i}][c{i}];[c{i}]crop={w}:{h}:{x}:{y},boxblur={r}:4[b{i}];"
                      f"[m{i}][b{i}]overlay={x}:{y}{en}[v{i}]")
         chain = f"[v{i}]"
     graph.append(f"{chain}scale={VW}:{VH},pad={W}:{H}:0:0:color=0x101010,"
