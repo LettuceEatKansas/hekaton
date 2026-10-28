@@ -471,10 +471,17 @@ impl Ctx<'_> {
                     t == **n || t.ends_with(&format!(" - {n}")) || t.ends_with(&format!(" | {n}"))
                 })
             };
+            // On macOS the process is a bundle id (com.apple.Safari) and window titles are page or
+            // document names, so neither matched and a second open_app("Safari") waited 8 s for a
+            // new window that never comes (2026-10-28 Holo demo). Match the bundle id's last part.
+            let proc_is = |p: &str| {
+                let p = removesuffix_exe(p);
+                p == stem || (!cfg!(windows) && p.rsplit('.').next() == Some(stem.as_str()))
+            };
             // Store apps (Calculator) run under ApplicationFrameHost, so match the title too.
             let same: Vec<&WindowLine> = wins
                 .iter()
-                .filter(|w| !w.cloaked && (removesuffix_exe(&w.process) == stem || title_is(w)))
+                .filter(|w| !w.cloaked && (proc_is(&w.process) || title_is(w)))
                 .collect();
             if !same.is_empty() {
                 let w = same.iter().find(|w| w.focused).unwrap_or(&same[0]);

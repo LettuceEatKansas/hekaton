@@ -134,6 +134,17 @@ fn open_reuses_a_store_app_by_its_title() {
     assert!(kit.fake.launches().is_empty());
 }
 
+#[cfg(not(windows))]
+#[test]
+fn open_reuses_a_running_mac_app_by_its_bundle_id() {
+    let kit = Kit::new();
+    let safari = app_window(&kit, "DuckDuckGo search", "com.apple.Safari", 30);
+    let out = do_open(&kit, "Safari", 8.0, true, true).unwrap();
+    assert!(out.contains("already running"), "{out}");
+    assert_eq!(kit.fake.foreground_window().unwrap(), Some(safari));
+    assert!(kit.fake.launches().is_empty());
+}
+
 #[test]
 fn a_ref_or_an_exact_title_focuses_without_launching() {
     let kit = Kit::new();
