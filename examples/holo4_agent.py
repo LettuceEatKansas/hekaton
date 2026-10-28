@@ -39,7 +39,9 @@ Keyboard shortcuts use cmd, not ctrl. Useful ones: cmd+n new document or window,
 private browser window, cmd+l browser address bar, cmd+s save, Tab next spreadsheet cell, Return
 next row. Never click the Dock: open apps with open_app.
 Do one search at a time: after each search, read the answer on the page and save it with note
-before the next search. Prefer web_search and shortcuts to hunting for icons or menus. To fill a spreadsheet, click the first cell once, then type each value with Tab between columns.
+before the next search. Prefer web_search and shortcuts to hunting for icons or menus. To fill a spreadsheet, click the first cell once, then type each value with Tab between columns
+and Return at the end of a row; formulas start with =. Excel on the web runs inside the browser: its
+cells take the same typing. A link that opens a new tab is fine, keep working in it.
 A new TextEdit document is an empty page (black in dark mode): click in it and type.
 In a save dialog, type the file name, press cmd+d to pick the Desktop, then Return.
 Before you answer, look at the screen and check the result is really there.
@@ -114,8 +116,13 @@ def wh(payload):
     return p.returncode == 0 and "failed:" not in out and "error:" not in out, out
 
 
+# 1024 px (machands' default) blurred small text and Holo misread names and counts on a YouTube
+# results page. Every call that uses screenshot coordinates must pass the same value.
+SHOT_LONG = 1440
+
+
 def screenshot():
-    ok, out = wh({"action": "screenshot"})
+    ok, out = wh({"action": "screenshot", "shot_long": SHOT_LONG})
     m = re.search(r"(\d+)x(\d+) image", out)
     path = out.strip().splitlines()[-1].strip()
     if not ok or not m or not Path(path).exists():
@@ -199,12 +206,15 @@ def evict_old_shots(messages):
 def run_tool(name, a, w, h):
     px = lambda: [round(a["x"] * w / 1000), round(a["y"] * h / 1000)]
     # the Dock holds every app, including private ones; a misclick there opened Outlook
-    if name in ("click", "double_click") and a["y"] >= 930:
+    # only the Dock's icon strip (bottom centre): a whole bottom band also blocked a spreadsheet's
+    # sheet tabs, which sit just above it
+    if name in ("click", "double_click") and a["y"] >= 955 and 360 <= a["x"] <= 660:
         return False, "blocked: clicking the Dock is not allowed. Use open_app to open an app."
     if name == "click":
-        return wh({"action": "left_click", "coordinate": px(), "shot": False})
+        return wh({"action": "left_click", "coordinate": px(), "shot_long": SHOT_LONG, "shot": False})
     if name == "double_click":
-        return wh({"action": "double_click", "coordinate": px(), "shot": False})
+        return wh({"action": "double_click", "coordinate": px(), "shot_long": SHOT_LONG,
+                   "shot": False})
     if name == "type":
         steps = []
         if a.get("clear_first"):
@@ -220,7 +230,8 @@ def run_tool(name, a, w, h):
     if name == "key":
         return wh({"action": "key", "text": a["keys"], "shot": False})
     if name == "scroll":
-        return wh({"action": "scroll", "coordinate": px(), "scroll_direction": a["direction"],
+        return wh({"action": "scroll", "coordinate": px(), "shot_long": SHOT_LONG,
+                   "scroll_direction": a["direction"],
                    "scroll_amount": a.get("amount", 3), "shot": False})
     if name == "open_app":
         ok, out = wh({"action": "open_app", "text": a["name"], "shot": False})
