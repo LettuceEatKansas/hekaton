@@ -237,19 +237,75 @@ impl Ctx<'_> {
         {
             return Ok(());
         }
-        let Some(spec) = args.get("scope").filter(|v| truthy(v)) else {
-            return Ok(());
-        };
         let batch = args.get("actions").is_some_and(truthy);
         let action = args
             .get("action")
             .filter(|v| truthy(v))
             .map(py_str)
             .unwrap_or_default();
-        if !batch && SCREENLESS.contains(&action.as_str()) {
+        let screenless = !batch && SCREENLESS.contains(&action.as_str());
+        // `"scope": false` (any falsy value) is the call's choice of the full screen
+        let Some(spec) = args.get("scope") else {
+            if !screenless
+                && !self.o.read_only
+                && let Some(title) = self.pinned_window()
+            {
+                if let Some(state) = self.pinned_again(&title) {
+                    self.c.mem().target = Some(state.window);
+                    self.o.scope.set(Some(state));
+                    return Ok(());
+                }
+                // best effort: a pinned window that is not open yet leaves the full screen
+                let window = self
+                    .set_scope(&title)
+                    .ok()
+                    .and(self.o.scope.get())
+                    .map(|s| s.window);
+                *self.c.pinned.lock().unwrap_or_else(PoisonError::into_inner) =
+                    window.map(|w| (title, w));
+            }
+            return Ok(());
+        };
+        if !truthy(spec) || screenless {
             return Ok(());
         }
         self.set_scope(&py_str(spec)).map(|_| ())
+    }
+
+    /// The scope for the window the previous call's pin resolved to, while it still carries the
+    /// pinned title and has a visible area. It already went through the allowlist checks when it was
+    /// first found, so this is one title read and one rectangle instead of a search through every
+    /// window (about 30 ms on Mac). A window covered by another app is not raised here: the cover is
+    /// painted over in the picture, and a click on it is refused by the allowlist.
+    fn pinned_again(&self, title: &str) -> Option<ScopeState> {
+        let (pin, window) = self
+            .c
+            .pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()?;
+        let info = self.be().window_info(window).ok()?;
+        if pin != title || !info.title.to_lowercase().contains(&title.to_lowercase()) {
+            return None;
+        }
+        let rect = self.capture_rect(window)?;
+        Some(ScopeState {
+            window,
+            title: info.title,
+            rect,
+        })
+    }
+
+    /// The window title a call's allowlist pins, when it names exactly one window
+    /// (`"only_apps": ["TextEdit:notes"]`). Such a call sees only that window: its pictures are
+    /// cropped to it (sharper for the same tokens, nothing else on screen in them) and coordinates
+    /// are read against it, exactly as if the call had passed `scope`. A pattern (`re:`) pins
+    /// nothing, because it can match several windows.
+    fn pinned_window(&self) -> Option<String> {
+        let mut entries = self.o.only_apps.iter();
+        let (_, title) = entries.next()?.split_once(':')?;
+        (entries.next().is_none() && !title.is_empty() && !title.starts_with("re:"))
+            .then(|| title.to_string())
     }
 
     /// Run one step. A step of a batch (or of a recipe) may carry its own `scope` for that step only;

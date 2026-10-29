@@ -134,6 +134,12 @@ pub struct Computer {
     observation_epoch: std::sync::atomic::AtomicU64,
     /// Ownership of the raw left-button hold; never includes human-held input.
     pub(crate) owned_mouse: Mutex<bool>,
+    /// The window the last call's pinned allowlist resolved to (pin text, window), so the next
+    /// call checks one title instead of searching every window ([`Ctx::apply_call_scope`]).
+    pub(crate) pinned: Mutex<Option<(String, crate::backend::WindowRef)>>,
+    /// Until when the model's own opt-in flags are ignored because a reply carried text aimed at
+    /// an AI ([`Computer::tainted`]).
+    pub(crate) tainted_until: Mutex<Option<std::time::Instant>>,
     tool_lock: Mutex<()>,
     /// The previous blind call's trailing settle, still running; the next call joins it first.
     pub(crate) pending_settle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -142,12 +148,33 @@ pub struct Computer {
 }
 
 impl Computer {
+    /// How long a sighting of injected instructions keeps the model's own flags switched off.
+    pub(crate) const TAINT: std::time::Duration = std::time::Duration::from_secs(600);
+
+    /// Has a reply in the last [`Computer::TAINT`] carried text aimed at an AI? While it has, a
+    /// model-set `allow_irreversible` or `allow_destructive` is ignored, as under the strict profile:
+    /// the model may be acting for the page now, not the owner. The open profile is exempt (the owner
+    /// chose to let the model run loose).
+    pub(crate) fn tainted(&self) -> bool {
+        !self.cfg.profile().unrestricted()
+            && self
+                .tainted_until
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    /// Does this call's own opt-in flag count? Not under strict, and not while [`Self::tainted`].
+    pub(crate) fn honours_opt_in(&self) -> bool {
+        self.cfg.profile().honours_call_opt_in() && !self.tainted()
+    }
+
     /// Cheap capabilities and limits without capturing or targeting the desktop.
     pub fn status(&self) -> serde_json::Value {
         serde_json::json!({
             "backend": self.backend.name(), "version": env!("CARGO_PKG_VERSION"),
             "paused": self.pause.is_paused(), "read_only": crate::config::truthy(&self.cfg.get("read_only")),
-            "safety_profile": self.cfg.profile().name(), "game_lock": self.game_lock(),
+            "safety_profile": self.cfg.profile().name(), "model_location": if self.cfg.local_model() { "local" } else { "cloud" }, "game_lock": self.game_lock(),
             "max_actions": ACTION_LIMIT, "max_images": 8, "budget_ms": 60000,
             "max_budget_ms": 120000, "compact": true, "sessions": true,
             "excel": self.backend.excel_available(),
@@ -190,6 +217,8 @@ impl Computer {
             sessions: Mutex::new(sessions::Sessions::default()),
             observation_epoch: std::sync::atomic::AtomicU64::new(0),
             owned_mouse: Mutex::new(false),
+            pinned: Mutex::new(None),
+            tainted_until: Mutex::new(None),
             tool_lock: Mutex::new(()),
             pending_settle: Mutex::new(None),
             game_scan: Mutex::new(None),

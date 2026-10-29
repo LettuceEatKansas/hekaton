@@ -882,10 +882,13 @@ impl Computer {
         }
         let mut outcome = self.execute_locked(args, who);
         self.idle.touch(self.clock.as_ref());
-        // Last stop before the text goes to the model's provider (see `redact`).
+        // Last stop before the text goes to the model's provider (see `redact`). A local model has
+        // no provider, so its replies keep their text.
+        let cloud = !self.cfg.local_model();
         for text in [&mut outcome.result, &mut outcome.error]
             .into_iter()
             .flatten()
+            .filter(|_| cloud)
         {
             if let std::borrow::Cow::Owned(clean) = crate::redact::redact(text) {
                 *text = clean;
@@ -896,6 +899,8 @@ impl Computer {
         {
             text.push('\n');
             text.push_str(crate::redact::INJECTION_NOTE);
+            *self.tainted_until.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(std::time::Instant::now() + Self::TAINT);
         }
         outcome
     }
@@ -926,7 +931,7 @@ impl Computer {
         // for them off, and the next call starts from on again.
         let profile = self.cfg.profile();
         let mut policy = Policy::take_from_args(&mut map);
-        if !profile.honours_call_opt_in() {
+        if !self.honours_opt_in() {
             // strict: a flag the model wrote is not the owner's approval
             policy = Policy::REFUSE;
         }

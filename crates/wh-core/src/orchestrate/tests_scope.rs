@@ -916,3 +916,54 @@ fn a_minimized_or_hidden_window_is_not_the_one_behind_the_agent() {
     // nothing else is on screen: the agent's own window decides, as before
     assert_eq!(ctx.display_rect(), MONITOR_2);
 }
+
+#[test]
+fn an_allowlist_pinning_one_window_scopes_the_call_to_it() {
+    let w = world();
+    let out = run(
+        &w,
+        json!({"action": "left_click", "coordinate": [500, 500], "coords": "norm1000",
+               "only_apps": ["slaythespire2.exe:Spire"]}),
+    );
+    assert_eq!(clicks(&w), [Point::new(25 + 159, 50 + 89)]);
+    assert!(
+        out.text.contains(&format!("[image 1: window \"{GAME}\"")),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn a_pinned_window_still_gets_the_full_screen_when_asked_or_unpinned() {
+    let w = world();
+    let full = run(
+        &w,
+        json!({"action": "screenshot", "scope": false, "only_apps": ["slaythespire2.exe:Spire"]}),
+    );
+    assert!(!full.text.contains("window \""), "{}", full.text);
+    let app_only = run(
+        &w,
+        json!({"action": "screenshot", "only_apps": ["slaythespire2.exe"]}),
+    );
+    assert!(!app_only.text.contains("window \""), "{}", app_only.text);
+    let missing = run(
+        &w,
+        json!({"action": "screenshot", "only_apps": ["slaythespire2.exe:Not open"]}),
+    );
+    assert!(!missing.text.contains("window \""), "{}", missing.text);
+}
+
+#[test]
+fn a_remembered_pin_is_dropped_when_the_window_changes_title() {
+    let w = world();
+    let pin = json!({"action": "screenshot", "only_apps": ["slaythespire2.exe:Spire"]});
+    assert!(run(&w, pin.clone()).text.contains("window \""));
+    assert!(
+        run(&w, pin.clone()).text.contains("window \""),
+        "the second call reuses it"
+    );
+    w.kit
+        .fake
+        .update_window(w.game, |i| i.title = "Main menu".into());
+    assert!(!run(&w, pin).text.contains("window \""));
+}

@@ -29,7 +29,7 @@ pub const ACK_COMMAND: &str = "winhands acknowledge";
 pub const LOOPBACK_ADDRESSES: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
 /// Every key this module knows, in the order of the Python `DEFAULTS` table.
-pub const KEYS: [&str; 31] = [
+pub const KEYS: [&str; 32] = [
     "port",
     "bind",
     "allow_remote_bind",
@@ -57,6 +57,7 @@ pub const KEYS: [&str; 31] = [
     "protect_processes",
     "read_only",
     "safety_profile",
+    "model_location",
     "game_lock",
     "game_processes",
     "power_channels",
@@ -120,6 +121,9 @@ pub fn default_value(key: &str) -> Option<Value> {
         "protect_processes" => Value::from(""),
         // named limits: "strict", "normal", "hackathon" or "open" (crate::safety::Profile)
         "safety_profile" => Value::from("normal"),
+        // where the model reading the replies runs: "cloud" hides other apps and secrets from it,
+        // "local" (a model on this machine) skips that for speed; the safety refusals stay either way
+        "model_location" => Value::from("cloud"),
         // "auto" refuses input while a game runs; "off" leaves only the owner's `lock`
         "game_lock" => Value::from("off"),
         // comma-separated exe names that count as games besides anything under steamapps\common
@@ -373,6 +377,15 @@ impl Config {
     /// Always on under the strict profile.
     pub fn human_pause(&self) -> bool {
         self.flag("human_pause") || self.profile() == Profile::Strict
+    }
+
+    /// Does the model reading the replies run on this machine (`model_location: "local"`)? Only an
+    /// exact "local" counts, so a typo keeps the cloud privacy on. Owner-set (environment or
+    /// config.json), never per call: a page that talked the model into it would undo the privacy.
+    pub fn local_model(&self) -> bool {
+        self.text("model_location")
+            .trim()
+            .eq_ignore_ascii_case("local")
     }
 
     /// The owner's safety profile. A name it does not know reads as strict, so a typo never
@@ -808,7 +821,7 @@ mod tests {
 
     #[test]
     fn every_default_in_the_table_matches_config_py() {
-        let expect: [(&str, Value); 30] = [
+        let expect: [(&str, Value); 31] = [
             ("port", Value::from(47811)),
             ("bind", Value::from("127.0.0.1")),
             ("allow_remote_bind", Value::from(false)),
@@ -835,6 +848,7 @@ mod tests {
             ("paste_over", Value::from(6)),
             ("protect_processes", Value::from("")),
             ("safety_profile", Value::from("normal")),
+            ("model_location", Value::from("cloud")),
             ("game_lock", Value::from("off")),
             ("game_processes", Value::from("")),
             ("power_channels", Value::from("")),

@@ -684,8 +684,7 @@ impl Ctx<'_> {
     /// `_check_irreversible`.
     pub(crate) fn check_irreversible(&self, p: Point, args: &Args) -> StepResult<()> {
         // strict: the model's own flag is not the owner's approval
-        let opted_in =
-            is_truthy(args, "allow_irreversible") && self.cfg().profile().honours_call_opt_in();
+        let opted_in = is_truthy(args, "allow_irreversible") && self.c.honours_opt_in();
         if self.o.only_apps.is_empty() || opted_in || self.cfg().profile().unrestricted() {
             return Ok(());
         }
@@ -697,14 +696,26 @@ impl Ctx<'_> {
         for (word, rx) in IRREVERSIBLE_MATCHERS.iter() {
             if rx.is_match(&low) {
                 return Err(StepError::target(format!(
-                    "refused: {} looks like an irreversible action ({}); pass \
-                     \"allow_irreversible\": true to click it anyway",
+                    "refused: {} looks like an irreversible action ({}); {}",
                     py_repr(&name),
-                    py_repr(word)
+                    py_repr(word),
+                    self.override_hint("click it anyway")
                 )));
             }
         }
         Ok(())
+    }
+
+    /// How the model may override a refusal: the flag, or, while the call is tainted by injected
+    /// instructions, that it cannot.
+    fn override_hint(&self, what: &str) -> String {
+        if self.c.tainted() {
+            "allow_irreversible is ignored for 10 minutes because a recent reply carried \
+             instructions aimed at an AI; ask the owner to do this step"
+                .to_string()
+        } else {
+            format!("pass \"allow_irreversible\": true to {what}")
+        }
     }
 
     /// Text the agent is about to type or put on the clipboard. A secret (API key, token, private
@@ -719,17 +730,16 @@ impl Ctx<'_> {
                  the agent never types or copies secrets, ask the owner to enter it",
             ));
         }
-        let opted_in =
-            is_truthy(args, "allow_irreversible") && self.cfg().profile().honours_call_opt_in();
+        let opted_in = is_truthy(args, "allow_irreversible") && self.c.honours_opt_in();
         if crate::redact::looks_like_exfil_url(text)
             && !opted_in
             && !self.cfg().profile().unrestricted()
         {
-            return Err(StepError::permission(
+            return Err(StepError::permission(format!(
                 "refused: the text is a web address carrying a long encoded blob, the usual way a \
-                 page tricks an agent into sending data out; pass \"allow_irreversible\": true if \
-                 the owner asked for exactly this link",
-            ));
+                 page tricks an agent into sending data out; {}",
+                self.override_hint("send exactly this link because the owner asked for it")
+            )));
         }
         Ok(())
     }

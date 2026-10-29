@@ -136,6 +136,10 @@ impl Ctx<'_> {
     /// listed is returned as it is only when no allowlist or protection applies; otherwise it is
     /// painted over entirely, because a failed list must not leak what it would have hidden.
     pub(crate) fn hide_private(&self, img: Image) -> Image {
+        // a model on this machine keeps what it sees here; skip the work
+        if self.cfg().local_model() {
+            return img;
+        }
         let protected = self.load_protected();
         let layers: Vec<ScreenLayer> = match self.be().screen_layers(!self.o.only_apps.is_empty()) {
             Ok(l) => l,
