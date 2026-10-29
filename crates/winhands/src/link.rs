@@ -30,17 +30,26 @@ const START_POLL: Duration = Duration::from_millis(25);
 /// How long each of those polls waits for a connection.
 const START_POLL_CONNECT: Duration = Duration::from_millis(100);
 
-/// Waits before re-sending a request the daemon turned away unexecuted because its queue was full.
-const BUSY_RETRIES: [Duration; 4] = [
-    Duration::from_millis(50),
-    Duration::from_millis(100),
-    Duration::from_millis(200),
-    Duration::from_millis(400),
-];
+/// Waits before re-sending a request the daemon turned away unexecuted: its queue was full, or
+/// another caller held the desktop. Short and steady (a held desktop frees within a call or two),
+/// about 5 s in all.
+const BUSY_RETRIES: [Duration; 36] = {
+    let mut w = [Duration::from_millis(150); 36];
+    w[0] = Duration::from_millis(30);
+    w[1] = Duration::from_millis(50);
+    w[2] = Duration::from_millis(80);
+    w[3] = Duration::from_millis(120);
+    w
+};
 
-/// The daemon's 503 for a full queue. It never ran the request, so re-sending cannot repeat an action.
+/// A reply that says the request never ran, so re-sending cannot repeat an action: the 503 for a
+/// full queue, or an acting call refused while another caller's call held the desktop
+/// (2026-10-29 stress: 8 clients typing at once, 7 got "desktop busy" straight back; the daemon
+/// still never makes an acting call wait, so input never lands long after it was asked for).
 fn turned_away_unexecuted(reply: &Reply) -> bool {
-    reply.status == 503 && String::from_utf8_lossy(&reply.body).contains("request was not executed")
+    let body = String::from_utf8_lossy(&reply.body);
+    (reply.status == 503 && body.contains("request was not executed"))
+        || body.contains("desktop busy; no input sent")
 }
 
 /// Why a call produced no answer.
@@ -322,5 +331,10 @@ mod busy_tests {
         )));
         assert!(!turned_away_unexecuted(&reply(503, r#"{"ok":false,"error":"shutting down"}"#)));
         assert!(!turned_away_unexecuted(&reply(400, "request was not executed")));
+        assert!(turned_away_unexecuted(&reply(
+            200,
+            r#"{"ok":false,"error":"desktop busy; no input sent; wait for current request before retrying"}"#
+        )));
+        assert!(!turned_away_unexecuted(&reply(200, r#"{"ok":false,"error":"refused: busy"}"#)));
     }
 }
