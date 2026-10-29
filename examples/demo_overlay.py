@@ -212,7 +212,7 @@ def main():
                  f"ass={ass_path}[out]")
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{cut:.3f}", "-i", args.raw,
                     "-filter_complex", ";".join(graph), "-map", "[out]", "-t", f"{end_all:.2f}",
-                    "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart", "-y", args.out], check=True)
     print(args.out)
 

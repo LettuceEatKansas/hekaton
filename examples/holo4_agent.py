@@ -42,8 +42,15 @@ Keyboard shortcuts use cmd, not ctrl. Useful ones: cmd+n new document or window,
 private browser window, cmd+l browser address bar, cmd+s save, Tab next spreadsheet cell, Return
 next row. Never click the Dock: open apps with open_app.
 Do one search at a time: after each search, read the answer on the page and save it with note
-before the next search. Prefer web_search and shortcuts to hunting for icons or menus. To fill a spreadsheet, click the first cell once, then type each value with Tab between columns
-and Return at the end of a row; formulas start with =. Excel on the web runs inside the browser: its
+before the next search. Prefer web_search and shortcuts to hunting for icons or menus. To make a spreadsheet, collect the data with note, then call save_spreadsheet once with every
+row and formula; do not open a spreadsheet app.
+Work in parallel: on a results page, click every link you want with modifier cmd, all in one turn,
+so each opens in a background tab; then step through the tabs with cmd+shift+] and close each with
+cmd+w when done.
+To email from Gmail, open a ready compose window from the address bar:
+https://mail.google.com/mail/?view=cm&to=ADDRESS&su=SUBJECT (write spaces as %20). Then click
+the message body and type it. To attach a file you saved, click the paperclip, press cmd+shift+g,
+type the full file path, press Return, then Return again. Then click Send. Excel on the web runs inside the browser: its
 cells take the same typing. A link that opens a new tab is fine, keep working in it.
 A new TextEdit document is an empty page (black in dark mode): click in it and type.
 In a save dialog, type the file name, press cmd+shift+g, type the folder path the task gives,
@@ -75,7 +82,9 @@ XY = {
     "y": {"type": "integer", "description": "0..1000 down the screenshot"},
 }
 TOOLS = [
-    tool("click", "Click at (x, y) coordinates.", XY, ["element", "x", "y"]),
+    tool("click", "Click at (x, y) coordinates. Set modifier to cmd to open a link in a "
+         "background tab.", {**XY, "modifier": {"type": "string", "enum": ["cmd", "shift", "alt"]}},
+         ["element", "x", "y"]),
     tool("double_click", "Double-click at (x, y) coordinates.", XY, ["element", "x", "y"]),
     tool("type", "Type text into the focused field or cell. Use \\n for new lines: write a whole "
          "multi-line document in one call.",
@@ -94,11 +103,20 @@ TOOLS = [
          ["x", "y", "direction"]),
     tool("open_app", "Open or focus a macOS app by name, e.g. Calculator, Notes, Safari.",
          {"name": {"type": "string"}}, ["name"]),
-    tool("wait", "Wait for the screen to settle.",
+    tool("wait", "Wait for a slow page load. Every action already waits for the screen to settle, "
+         "so only use this when a page is visibly still loading; 1 or 2 s is enough.",
          {"seconds": {"type": "number"}}, ["seconds"]),
     tool("note", "Save a fact you found (an address, a number) so you still have it after the "
          "screenshot that showed it is gone. Your notes come back with every new screenshot.",
          {"text": {"type": "string"}}, ["text"]),
+    tool("save_spreadsheet", "Write a spreadsheet file yourself, in one step, from rows you already "
+         "know. Do not open a spreadsheet app. Numbers go in as numbers; a cell that starts with = "
+         "is a formula, e.g. =SUM(C2:C6). Saves an .xlsx under the user's Documents folder.",
+         {"folder": {"type": "string", "description": "Folder inside Documents, e.g. Creator Leads"},
+          "file_name": {"type": "string", "description": "Name without extension"},
+          "rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "number"]}},
+                   "description": "First row is the header"}},
+         ["folder", "file_name", "rows"]),
     tool("answer", "Provide a final answer.",
          {"content": {"type": "string"}}, ["content"]),
 ]
@@ -213,6 +231,38 @@ def evict_old_shots(messages):
 CAPTCHA = re.compile(r"captcha|robot|verify button|verify you|view email|select all|challenge|"
                      r"\b(bus|car|bicycle|hydrant|crosswalk|traffic light|motorcycle|stair|bridge|"
                      r"boat|tractor|chimney|palm)\b.*\b(image|tile|square|picture)", re.I)
+def save_spreadsheet(a):
+    """The model writes the file itself: typing a table into a spreadsheet app cost ~27 steps
+    (90 s) per run and produced misplaced formulas."""
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    docs = (Path.home() / "Documents").resolve()
+    folder = (docs / a.get("folder", "")).resolve()
+    name = Path(a.get("file_name", "sheet")).name
+    if docs not in folder.parents and folder != docs:
+        return False, "blocked: save_spreadsheet only writes inside Documents"
+    folder.mkdir(parents=True, exist_ok=True)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for r in a.get("rows", []):
+        out = []
+        for v in r:
+            if isinstance(v, str) and not v.startswith("="):
+                t = v.replace(",", "").strip()
+                try:
+                    v = int(t) if re.fullmatch(r"-?\d+", t) else float(t) if re.fullmatch(r"-?\d*\.\d+", t) else v
+                except ValueError:
+                    pass
+            out.append(v)
+        ws.append(out)
+    for i, col in enumerate(ws.columns, 1):
+        ws.column_dimensions[get_column_letter(i)].width = min(60, max(10, *(len(str(c.value or "")) + 2 for c in col)))
+    ws.freeze_panes = "A2"
+    path = folder / f"{name}.xlsx"
+    wb.save(path)
+    return True, f"saved {path} ({len(a.get('rows', []))} rows)"
+
+
 FRONT = [""]   # app last brought forward with open_app (or --first-app)
 
 
@@ -229,7 +279,9 @@ def run_tool(name, a, w, h):
         return False, ("blocked: never click CAPTCHA, \"I'm not a robot\" or View email address "
                        "controls. Close the dialog (Escape) and use contact info shown openly.")
     if name == "click":
-        return wh({"action": "left_click", "coordinate": px(), "shot_long": SHOT_LONG, "shot": False})
+        mod = {"text": a["modifier"]} if a.get("modifier") in ("cmd", "shift", "alt") else {}
+        return wh({"action": "left_click", "coordinate": px(), "shot_long": SHOT_LONG, "shot": False,
+                   **mod})
     if name == "double_click":
         return wh({"action": "double_click", "coordinate": px(), "shot_long": SHOT_LONG,
                    "shot": False})
@@ -265,8 +317,11 @@ def run_tool(name, a, w, h):
                 "rect": [0, 30, 1920, 996], "shot": False})
         return ok, out
     if name == "wait":
-        time.sleep(min(float(a.get("seconds", 1)), 10))
+        # Holo asked for 3 s waits 11 times in one run (33 s) after actions that had already settled
+        time.sleep(min(float(a.get("seconds", 1)), 2))
         return True, "waited"
+    if name == "save_spreadsheet":
+        return save_spreadsheet(a)
     return False, f"unknown tool {name}"
 
 
@@ -362,7 +417,7 @@ def main():
             print(f"[{step}] {name} {json.dumps(a)} -> {'ok' if ok else 'FAIL'} "
                   f"(model {think_s:.1f} s, hands {act_s:.2f} s) {short if not ok else ''}")
             messages.append({"role": "tool", "tool_call_id": c["id"],
-                             "content": (out.splitlines()[0] if name == "open_app" else "ok")
+                             "content": (out.splitlines()[0] if name in ("open_app", "save_spreadsheet") or not ok else "ok")
                              if ok else f"failed: {out[:400]}"})
         time.sleep(0.3)
 
