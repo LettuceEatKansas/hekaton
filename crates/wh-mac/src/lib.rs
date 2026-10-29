@@ -71,6 +71,14 @@ pub fn run_main_run_loop(seconds: f64) {
     CFRunLoop::run_in_mode(mode, seconds, false);
 }
 
+/// Run `f` inside an Objective-C autorelease pool, so what the frameworks autorelease during it is
+/// freed when it returns. Worker threads have no pool of their own: 2026-10-29 a 1,500-call soak
+/// grew the daemon by ~11 MB per find_text (Vision's buffers) until it passed 1.4 GB.
+#[cfg(target_os = "macos")]
+pub fn autorelease<R>(f: impl FnOnce() -> R) -> R {
+    objc2::rc::autoreleasepool(|_| f())
+}
+
 /// Trigger the system permission prompts (Accessibility, posting input, Screen Recording) so this
 /// app shows up in the System Settings Privacy lists, then turn the run loop briefly so the requests
 /// reach the system before the process exits. For `winhands doctor --prompt`; never called by the

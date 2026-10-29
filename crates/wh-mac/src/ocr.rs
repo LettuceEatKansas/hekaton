@@ -22,6 +22,11 @@ fn os(msg: impl Into<String>) -> BackendError {
 
 /// Recognise the text in an RGBA image. Boxes are in pixels of `image`, origin top left.
 pub(crate) fn recognize(image: &Image) -> BackendResult<OcrResult> {
+    // Vision autoreleases its image buffers; drain them here whatever thread this runs on.
+    objc2::rc::autoreleasepool(|_| recognize_in_pool(image))
+}
+
+fn recognize_in_pool(image: &Image) -> BackendResult<OcrResult> {
     let (iw, ih) = (image.width(), image.height());
     let mut keep = Vec::new();
     let cg = rgba_to_cgimage(image, &mut keep)?;

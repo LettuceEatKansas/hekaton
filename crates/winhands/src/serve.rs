@@ -55,6 +55,18 @@ struct Rejection {
     message: &'static str,
 }
 
+/// On a Mac, one autorelease pool per request, so framework objects a request autoreleases are
+/// freed when it is answered (worker threads have none of their own).
+#[cfg(target_os = "macos")]
+fn in_pool<R>(f: impl FnOnce() -> R) -> R {
+    wh_mac::autorelease(f)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn in_pool<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 fn rejection_pool() -> io::Result<mpsc::SyncSender<Rejection>> {
     let (sender, receiver) = mpsc::sync_channel::<Rejection>(QUEUE_CAPACITY);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -153,7 +165,7 @@ fn request_pool(
                         );
                         continue;
                     }
-                    if answer(&daemon, item) {
+                    if in_pool(|| answer(&daemon, item)) {
                         stop.store(true, Ordering::SeqCst);
                         server.unblock();
                     }
