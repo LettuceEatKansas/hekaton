@@ -66,14 +66,14 @@ pub(crate) fn element_line(reference: usize, e: &Element) -> String {
         flags.push_str(&format!(" [{f}]"));
     }
     let val = match &e.value {
-        Some(v) => {
-            let shown = if v.chars().count() > 60 {
-                format!("{}...", v.chars().take(60).collect::<String>())
-            } else {
-                v.clone()
-            };
-            format!(" =\"{shown}\"")
-        }
+        // 2026-10-29 (form job): a document's value was cut at 60 characters with no word on how
+        // to get the rest, and the AI hunted for it. Say how long it is and what reads it all.
+        Some(v) if v.chars().count() > 60 => format!(
+            " =\"{}...\" ({} chars; read_text shows all)",
+            v.chars().take(60).collect::<String>(),
+            v.chars().count()
+        ),
+        Some(v) => format!(" =\"{v}\""),
         None => String::new(),
     };
     let (cx, cy) = center_of(e);
@@ -265,7 +265,10 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let out = render_snapshot(&lines, 40, "", false);
-        assert!(!out.contains("1 AXGroup") && !out.contains("2 AXGroup"), "{out}");
+        assert!(
+            !out.contains("1 AXGroup") && !out.contains("2 AXGroup"),
+            "{out}"
+        );
         assert!(out.contains("3 AXGroup \"Comments\""), "{out}");
         assert!(out.contains("4 AXGroup \"\" =\"3.74M\""), "{out}");
         assert!(out.contains("5 Pane"), "{out}");
@@ -359,7 +362,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                "7 CheckBoxControl \"Remember me\" [disabled] [on] [selected] [collapsed] =\"{}...\" @120,210",
+                "7 CheckBoxControl \"Remember me\" [disabled] [on] [selected] [collapsed] =\"{}...\" (70 chars; read_text shows all) @120,210",
                 "v".repeat(60)
             )
         );
