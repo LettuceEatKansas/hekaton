@@ -17,7 +17,7 @@ Measured the same way as the round below: the installed build on port 47811, thi
 | read, Explorer window | 347.4 ms | 321.9 ms | 93 ms |
 | find_text | not measured | 553 ms | 352 ms |
 | Notepad gauntlet, one call | refused its own check | 2.7 s | 1.9 s |
-| Excel gauntlet, one call | refused to open Excel | not run | 4.6 s, 5 of 5 |
+| Excel gauntlet, one call | not run | not run | 4.6 s, 5 of 5 |
 
 Screenshots now come from DXGI Desktop Duplication, the compositor's own frame, instead of a GDI copy of the screen. The screenshot the model receives keeps its full size; only the settle loop's private "has the screen stopped moving" checks use small 320 by 180 previews. `WINHANDS_CAPTURE_GDI=1` restores the old capture.
 
