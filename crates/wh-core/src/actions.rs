@@ -18,7 +18,7 @@ pub const POINTER_ACTIONS: [&str; 12] = [
 ];
 
 /// The rest of computer.py `ACTIONS` (everything that is not a pointer action).
-pub const OTHER_ACTIONS: [&str; 25] = [
+pub const OTHER_ACTIONS: [&str; 26] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -44,6 +44,7 @@ pub const OTHER_ACTIONS: [&str; 25] = [
     "recipe_list",
     "recipe_save",
     "status",
+    "excel",
 ];
 
 /// Actions that only read state or touch the OS clipboard, never a window. They skip the
@@ -87,7 +88,7 @@ pub const ACK_EXEMPT_ACTIONS: [&str; 14] = [
 
 /// Text-only answers: a batch ending in one of these skips the trailing screenshot
 /// (computer.py `_NO_TRAILING_SHOT`).
-pub const NO_TRAILING_SHOT: [&str; 14] = [
+pub const NO_TRAILING_SHOT: [&str; 15] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -102,6 +103,7 @@ pub const NO_TRAILING_SHOT: [&str; 14] = [
     "recipe_list",
     "recipe_save",
     "status",
+    "excel",
 ];
 
 /// Routes the daemon answers before acknowledgement (daemon.py `READ_ONLY_ACTIONS` plus `files`).
@@ -112,12 +114,13 @@ pub const REPORTABLE_ACTIONS: [&str; 6] = ["click", "type", "key", "scroll", "dr
 
 /// Every action name in the order Python's `sorted(ACTIONS)` lists them (the "unknown action"
 /// message prints this).
-pub const ACTIONS_SORTED: [&str; 37] = [
+pub const ACTIONS_SORTED: [&str; 38] = [
     "click_text",
     "clipboard_get",
     "clipboard_set",
     "cursor_position",
     "double_click",
+    "excel",
     "file_dialog",
     "find_text",
     "folder",
@@ -152,7 +155,7 @@ pub const ACTIONS_SORTED: [&str; 37] = [
     "zoom",
 ];
 
-/// Is `action` one of the 36 actions the `computer` tool knows?
+/// Is `action` one of the 38 actions the `computer` tool knows?
 pub fn is_action(action: &str) -> bool {
     POINTER_ACTIONS.contains(&action) || OTHER_ACTIONS.contains(&action)
 }
@@ -165,6 +168,12 @@ pub fn is_pointer(action: &str) -> bool {
 /// Does `action` skip the human-input wait?
 pub fn is_passive(action: &str) -> bool {
     PASSIVE_ACTIONS.contains(&action)
+}
+
+/// Is this `excel` with `op: read`, the one Excel call that changes nothing? It is observation like
+/// `read`: it runs under `read_only` and while the gaming lock is on. Every other op is acting.
+pub fn is_excel_read(action: &str, op: &str) -> bool {
+    action == "excel" && op.trim().eq_ignore_ascii_case("read")
 }
 
 /// May `action` run before the owner has acknowledged?
@@ -191,7 +200,7 @@ mod tests {
 
     #[test]
     fn the_action_set_has_the_documented_size() {
-        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 37);
+        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 38);
         assert!(PASSIVE_ACTIONS.iter().all(|a| is_action(a)));
         assert!(NO_TRAILING_SHOT.iter().all(|a| is_action(a)));
         assert!(!is_action("nope"));
@@ -216,6 +225,15 @@ mod tests {
             .collect();
         expect.sort_unstable();
         assert_eq!(ACTIONS_SORTED.to_vec(), expect);
+    }
+
+    #[test]
+    fn only_an_excel_read_counts_as_a_look() {
+        assert!(is_excel_read("excel", "read"));
+        assert!(is_excel_read("excel", " READ "));
+        assert!(!is_excel_read("excel", "write"));
+        assert!(!is_excel_read("read", "read"));
+        assert!(!is_passive("excel") && !is_ack_exempt("excel"));
     }
 
     #[test]

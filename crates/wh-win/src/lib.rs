@@ -10,6 +10,7 @@
 mod clipboard;
 mod display;
 mod dxgi;
+mod excel;
 mod hotkey;
 mod input;
 mod launch;
@@ -34,9 +35,10 @@ use std::time::Duration;
 use wh_core::backend::{
     AppTarget, Backend, BackendError, BackendResult, Capabilities, CaptureTarget, Caret,
     ClipboardContent, Display, DocumentHit, Element, ElementAction, ElementHit, ElementId,
-    FolderSort, FolderView, FolderViewState, HotkeyChord, Image, InputGuard, LaunchOutcome,
-    LaunchSpec, MenuItem, MouseButton, OcrResult, Point, ProcessInfo, Rect, ScrollDirection,
-    TreeLimits, TreeSnapshot, WindowGeometry, WindowInfo, WindowOp, WindowRef,
+    ExcelReply, ExcelRequest, FolderSort, FolderView, FolderViewState, HotkeyChord, Image,
+    InputGuard, LaunchOutcome, LaunchSpec, MenuItem, MouseButton, OcrResult, Point, ProcessInfo,
+    Rect, ScrollDirection, TreeLimits, TreeSnapshot, WindowGeometry, WindowInfo, WindowOp,
+    WindowRef,
 };
 use wh_core::keys::Key;
 use windows::Win32::UI::HiDpi::{
@@ -72,6 +74,7 @@ pub struct WindowsBackend {
     hotkey: Mutex<Option<String>>,
     ocr: ocr::Ocr,
     dup: dxgi::Duplicator,
+    excel: excel::Host,
 }
 
 impl WindowsBackend {
@@ -85,6 +88,7 @@ impl WindowsBackend {
             hotkey: Mutex::new(None),
             ocr: ocr::Ocr::default(),
             dup: dxgi::Duplicator::default(),
+            excel: excel::Host::default(),
         }
     }
 }
@@ -108,6 +112,18 @@ impl Backend for WindowsBackend {
 
     fn name(&self) -> &'static str {
         "windows"
+    }
+
+    fn excel_available(&self) -> bool {
+        excel::available()
+    }
+
+    fn excel(&self, req: &ExcelRequest) -> BackendResult<ExcelReply> {
+        self.excel.run(req)
+    }
+
+    fn excel_shutdown(&self) {
+        self.excel.shutdown();
     }
 
     fn capabilities(&self) -> Capabilities {

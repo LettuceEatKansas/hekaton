@@ -13,7 +13,7 @@ use super::args::{Args, flag, float_or, get, int_or, is_truthy, text as text_arg
 use super::error::{StepError, StepResult};
 use super::snapshot::WAKE_HINT;
 use super::{Ctx, secs};
-use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_passive};
+use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_excel_read, is_passive};
 use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection};
 use crate::keys::{Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo};
 use crate::textutil::{fmt_g, py_repr, py_value_repr};
@@ -91,7 +91,8 @@ impl Ctx<'_> {
                     | "list_files"
                     | "recipe_list"
                     | "clipboard_get"
-            ) || is_truthy(step, "wake")
+            ) && !is_excel_read(&action, &text_arg(step, "op"))
+                || is_truthy(step, "wake")
                 || is_truthy(step, "save_to")
                 || is_truthy(step, "scope"))
         {
@@ -107,6 +108,9 @@ impl Ctx<'_> {
             "recipe_list" => return self.recipe_list(),
             "recipe_save" => return self.recipe_save(step),
             "recipe" => return self.recipe_direct(),
+            // Excel is reached through its own interface, not the screen: no person to wait for,
+            // no window to bring back, no picture afterwards.
+            "excel" => return self.run_excel(step).map(|note| (note, None)),
             _ => {}
         }
         let mut coord: Option<Value> = get(step, "coordinate").cloned();

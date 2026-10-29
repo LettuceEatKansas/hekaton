@@ -25,6 +25,7 @@ mod actions;
 mod args;
 mod ctx;
 mod error;
+mod excel;
 mod files;
 mod find;
 mod folder;
@@ -44,6 +45,8 @@ mod snapshot;
 mod testkit;
 #[cfg(test)]
 mod tests_actions;
+#[cfg(test)]
+mod tests_excel;
 #[cfg(test)]
 mod tests_find;
 #[cfg(test)]
@@ -146,6 +149,8 @@ impl Computer {
             "safety_profile": self.cfg.profile().name(), "game_lock": self.game_lock(),
             "max_actions": ACTION_LIMIT, "max_images": 8, "budget_ms": 60000,
             "max_budget_ms": 120000, "compact": true, "sessions": true,
+            "excel": self.backend.excel_available(),
+            "power_channels": self.cfg.power_channels(),
             "snapshot_scope": "single unscoped screenshot; tokens consumed per attempted request",
             "native_validation": "not established by this status call"
         })
@@ -315,6 +320,13 @@ impl Computer {
     }
 }
 
+impl Drop for Computer {
+    /// An Excel this tool started does not outlive it.
+    fn drop(&mut self) {
+        self.backend.excel_shutdown();
+    }
+}
+
 /// The options one call carries: this call's own arguments layered on the configured defaults.
 /// Built fresh by every `run_many`; nothing here survives into the next call.
 #[derive(Debug, Clone)]
@@ -324,6 +336,9 @@ pub(crate) struct CallOpts {
     /// Paths this call saved through `file_dialog`: wait_for_file may watch them even under
     /// only_apps (shared with recipe steps, which clone these options).
     pub saved_paths: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Set when a step returned cells of the owner's spreadsheet; the audit log then keeps a fixed
+    /// line instead of the call's output.
+    pub private_output: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The step after the running one sends input without looking first. A `wait` then runs its
     /// full time instead of returning once the screen looks calm (2026-10-28: a `wait 1.5` cut to
     /// 0.6 s pasted a table into Excel's start screen while the blank workbook was still loading).

@@ -16,7 +16,7 @@ use super::args::{Args, flag};
 use super::error::{StepError, StepResult};
 use super::guard::normalize_only_app;
 use super::{CallOpts, Computer, Ctx};
-use crate::actions::{POINTER_ACTIONS, is_action, is_passive};
+use crate::actions::{POINTER_ACTIONS, is_action, is_excel_read, is_passive};
 use crate::audit::log_action;
 use crate::backend::Rect;
 use crate::caller::Caller;
@@ -57,6 +57,8 @@ pub struct ManyResult {
     pub input_sent: bool,
     /// Total time, including waits, on the tool's monotonic clock.
     pub elapsed_ms: u64,
+    /// A step returned cells of the owner's spreadsheet, so the audit log must not keep the text.
+    pub private_output: bool,
 }
 
 /// What the daemon sends back for a `computer` call (Python `_execute_tool`'s dict).
@@ -167,6 +169,7 @@ impl CallOpts {
         Ok(Self {
             cancel_generation: c.pause.generation(),
             saved_paths: Default::default(),
+            private_output: Default::default(),
             input_follows: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
             read_only: args.get("read_only").is_some_and(truthy) || truthy(&c.cfg.get("read_only")),
@@ -190,6 +193,7 @@ impl CallOpts {
         Self {
             cancel_generation: 0,
             saved_paths: Default::default(),
+            private_output: Default::default(),
             input_follows: Default::default(),
             deadline: None,
             read_only: false,
@@ -233,6 +237,14 @@ fn steps_observe(args: &Value) -> bool {
     }
 }
 
+/// `excel` with `op: read` in this step: a look at a workbook, not a change.
+fn is_excel_read_step(step: &Value, action: &str) -> bool {
+    is_excel_read(
+        action,
+        step.get("op").and_then(Value::as_str).unwrap_or_default(),
+    )
+}
+
 fn only_observes(args: &Value) -> bool {
     if args.get("scope").is_some_and(truthy) {
         return false;
@@ -240,7 +252,7 @@ fn only_observes(args: &Value) -> bool {
     let passive = |v: &Value| {
         v.get("action")
             .and_then(Value::as_str)
-            .is_some_and(|a| is_passive(a) && a != "clipboard_set")
+            .is_some_and(|a| (is_passive(a) && a != "clipboard_set") || is_excel_read_step(v, a))
             && !v.get("wake").is_some_and(truthy)
             && !v.get("save_to").is_some_and(truthy)
     };
@@ -394,7 +406,8 @@ impl Ctx<'_> {
                         | "list_files"
                         | "recipe_list"
                         | "clipboard_get"
-                ) || step.get("wake").is_some_and(truthy)
+                ) && !is_excel_read_step(step, action)
+                    || step.get("wake").is_some_and(truthy)
                     || step.get("scope").is_some_and(truthy)
                     || step.get("save_to").is_some_and(truthy)
                 {
@@ -641,6 +654,10 @@ impl Ctx<'_> {
             failure,
             completed_steps,
             input_sent: self.be().input_events() != input_before,
+            private_output: self
+                .o
+                .private_output
+                .load(std::sync::atomic::Ordering::Relaxed),
             elapsed_ms: self
                 .clock()
                 .now()
@@ -832,11 +849,21 @@ impl Computer {
                 if let Some(Value::Object(extra)) = crate::recipes::audit_fields(&args) {
                     entry.extend(extra);
                 }
+                // excel steps log what they touched (op, sheet, range, counts, path),
+                // never the cells; a call that read cells logs a fixed line, not their text.
+                if let Some(extra) = super::excel::audit_fields(&args) {
+                    entry.extend(extra);
+                }
+                let logged = match (&done.failure, done.private_output) {
+                    (Some(f), true) => f.error.message().to_string(),
+                    (None, true) => "ok; excel cells are not logged".to_string(),
+                    _ => done.text.clone(),
+                };
                 log_action(
                     self.cfg.paths(),
                     "computer",
                     &Value::Object(entry),
-                    &done.text,
+                    &logged,
                     ok,
                 );
                 let failure = done.failure.as_ref();

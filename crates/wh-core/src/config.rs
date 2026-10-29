@@ -29,7 +29,7 @@ pub const ACK_COMMAND: &str = "winhands acknowledge";
 pub const LOOPBACK_ADDRESSES: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
 /// Every key this module knows, in the order of the Python `DEFAULTS` table.
-pub const KEYS: [&str; 29] = [
+pub const KEYS: [&str; 31] = [
     "port",
     "bind",
     "allow_remote_bind",
@@ -59,6 +59,8 @@ pub const KEYS: [&str; 29] = [
     "safety_profile",
     "game_lock",
     "game_processes",
+    "power_channels",
+    "excel_read_max_cells",
 ];
 
 /// The built-in default of `key`, or `None` for a key winhands does not know.
@@ -122,6 +124,10 @@ pub fn default_value(key: &str) -> Option<Value> {
         "game_lock" => Value::from("off"),
         // comma-separated exe names that count as games besides anything under steamapps\common
         "game_processes" => Value::from(""),
+        // comma list of opt-in power channels (only "excel" exists); off by default
+        "power_channels" => Value::from(""),
+        // cap on the cells one excel read returns
+        "excel_read_max_cells" => Value::from(20000),
         _ => return None,
     })
 }
@@ -387,6 +393,22 @@ impl Config {
             .map(|p| p.trim().to_lowercase())
             .filter(|p| !p.is_empty())
             .collect()
+    }
+
+    /// The power channels the owner switched on (`power_channels`, a comma list), lowercased.
+    /// Empty by default: a channel that works through an app's own interface instead of the screen
+    /// is the owner's choice, never a call's.
+    pub fn power_channels(&self) -> std::collections::BTreeSet<String> {
+        self.text("power_channels")
+            .split(',')
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty())
+            .collect()
+    }
+
+    /// Most cells one `excel` read returns.
+    pub fn excel_read_max_cells(&self) -> i64 {
+        self.int("excel_read_max_cells").max(1)
     }
 
     /// "pixels" or "norm1000", lowercased. Python `coords()`.
@@ -786,7 +808,7 @@ mod tests {
 
     #[test]
     fn every_default_in_the_table_matches_config_py() {
-        let expect: [(&str, Value); 28] = [
+        let expect: [(&str, Value); 30] = [
             ("port", Value::from(47811)),
             ("bind", Value::from("127.0.0.1")),
             ("allow_remote_bind", Value::from(false)),
@@ -815,6 +837,8 @@ mod tests {
             ("safety_profile", Value::from("normal")),
             ("game_lock", Value::from("off")),
             ("game_processes", Value::from("")),
+            ("power_channels", Value::from("")),
+            ("excel_read_max_cells", Value::from(20000)),
         ];
         for (key, value) in expect {
             assert_eq!(default_value(key), Some(value), "default of {key}");
@@ -852,6 +876,23 @@ mod tests {
         let got: Vec<String> = g.cfg.protected_processes().into_iter().collect();
         assert_eq!(got, ["a.exe", "b.exe"]);
         assert!(fx("protect-none").cfg.protected_processes().is_empty());
+    }
+
+    #[test]
+    fn power_channels_are_off_by_default_and_read_as_a_lowercase_set() {
+        assert!(fx("channels-none").cfg.power_channels().is_empty());
+        let on = fx_env(
+            "channels-env",
+            MapEnv::new().with("WINHANDS_POWER_CHANNELS", " Excel, ,Other "),
+        );
+        let got: Vec<String> = on.cfg.power_channels().into_iter().collect();
+        assert_eq!(got, ["excel", "other"]);
+        assert_eq!(fx("excel-cap").cfg.excel_read_max_cells(), 20000);
+        let small = fx_env(
+            "excel-cap-env",
+            MapEnv::new().with("WINHANDS_EXCEL_READ_MAX_CELLS", "0"),
+        );
+        assert_eq!(small.cfg.excel_read_max_cells(), 1, "never below one cell");
     }
 
     #[test]

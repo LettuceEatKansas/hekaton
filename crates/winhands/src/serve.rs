@@ -521,6 +521,8 @@ pub fn run_daemon(backend: Arc<dyn Backend>, cfg: Arc<Config>, opts: &DaemonOpti
     ));
     let stop = Arc::new(AtomicBool::new(false));
     let result = serve(listener, daemon, stop, opts.idle_poll);
+    // an Excel this daemon started does not outlive it, whatever still holds the tool
+    backend.excel_shutdown();
     let _ = std::fs::remove_file(paths.pid());
     match result {
         Ok(()) => 0,

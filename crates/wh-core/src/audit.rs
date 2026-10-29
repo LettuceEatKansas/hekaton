@@ -64,6 +64,11 @@ pub fn redact_args(args: &Value) -> Value {
             out.insert(key.to_string(), Value::String(redacted));
         }
     }
+    // The cells an `excel` write carries are the owner's data: length and hash only.
+    if let Some(v) = out.get("values").filter(|v| !v.is_null()) {
+        let redacted = mask(v);
+        out.insert("values".to_string(), Value::String(redacted));
+    }
     if let Some(Value::Object(params)) = out.get("params") {
         let masked: Map<String, Value> = params
             .iter()

@@ -303,6 +303,18 @@ pub fn build_payload(
     put("params", opt_obj(args, "params")?);
     put("steps", opt_obj_list(args, "steps")?);
     put("save_to", truthy_str("save_to")?);
+    // the excel power channel
+    put("workbook", truthy_str("workbook")?);
+    put("sheet", truthy_str("sheet")?);
+    put("range", truthy_str("range")?);
+    put(
+        "values",
+        opt_list(args, "values")?.map(|v| Value::Array(v.clone())),
+    );
+    put(
+        "formulas",
+        opt_bool(args, "formulas")?.filter(|b| *b).map(Value::from),
+    );
     put(
         "overwrite",
         opt_bool(args, "overwrite")?.filter(|b| *b).map(Value::from),

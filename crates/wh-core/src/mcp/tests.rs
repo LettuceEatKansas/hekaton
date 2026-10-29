@@ -307,6 +307,33 @@ fn the_recipe_parameters_reach_the_daemon() {
 }
 
 #[test]
+fn the_excel_parameters_reach_the_daemon() {
+    let p = payload(json!({
+        "action": "excel", "op": "write", "workbook": "x1", "sheet": "Data", "range": "B2",
+        "values": [[1, "=A1", null, true]], "formulas": true, "path": "C:/t/a.xlsx",
+        "overwrite": true, "name": "Extra"
+    }));
+    assert_eq!(p["op"], "write");
+    assert_eq!(p["workbook"], "x1");
+    assert_eq!(p["sheet"], "Data");
+    assert_eq!(p["range"], "B2");
+    assert_eq!(p["values"], json!([[1, "=A1", null, true]]));
+    assert_eq!(p["formulas"], true);
+    assert_eq!(p["overwrite"], true);
+    let bare = payload(json!({"action": "excel", "op": "new"}));
+    for key in ["workbook", "sheet", "range", "values", "formulas"] {
+        assert!(!bare.contains_key(key), "{key}");
+    }
+    let bad = build_payload(
+        json!({"action": "excel", "values": "x"})
+            .as_object()
+            .unwrap(),
+        &defaults(),
+    );
+    assert!(bad.is_err());
+}
+
+#[test]
 fn a_batch_replaces_the_payload_and_keeps_the_top_level_options() {
     let p = payload(json!({
         "action": "ignored", "text": "ignored too",

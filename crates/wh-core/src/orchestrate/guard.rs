@@ -149,7 +149,7 @@ fn scope_matches(part: &str, haystack: &str, case_insensitive_regex: bool) -> bo
 
 /// Lexically absolute and tidy: `.` dropped, `..` collapsed, lowercased, `/` between pieces. Python
 /// `os.path.normcase(os.path.abspath(p))` on Windows.
-fn norm_abs(path: &str) -> String {
+pub(crate) fn norm_abs(path: &str) -> String {
     let abs = std::path::absolute(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
     let mut out: Vec<String> = Vec::new();
     for comp in abs.components() {

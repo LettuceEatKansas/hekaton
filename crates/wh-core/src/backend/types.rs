@@ -1413,6 +1413,95 @@ impl Capabilities {
     }
 }
 
+// ------------------------------------------------------------------------------------ excel
+
+/// One cell crossing the Excel channel. In JSON it is the plain value: `null`, a string, a number
+/// or a bool. A string that starts with `=` is a formula when written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExcelCell {
+    /// An empty cell.
+    Empty,
+    /// Text, or a formula when it starts with `=`.
+    Text(String),
+    /// A number.
+    Number(f64),
+    /// TRUE or FALSE.
+    Bool(bool),
+}
+
+/// What [`Backend::excel`](super::Backend::excel) is asked to do. The backend owns one hidden Excel
+/// instance and the workbook handles (`x1`, `x2`, ...) it hands out; it never attaches to an Excel
+/// the person is using. Charts and pivot tables are not supported yet.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExcelRequest {
+    /// Start the owned instance if needed and add an empty workbook.
+    New,
+    /// Open a workbook file in the owned instance.
+    Open {
+        /// Absolute path of the file.
+        path: String,
+    },
+    /// Set a block of cells in one call, `range` being its top-left cell.
+    Write {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Sheet name; the first sheet when `None`.
+        sheet: Option<String>,
+        /// Top-left cell, `A1` style.
+        range: String,
+        /// Rows of equal length.
+        values: Vec<Vec<ExcelCell>>,
+    },
+    /// Read a block of cells.
+    Read {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Sheet name; the first sheet when `None`.
+        sheet: Option<String>,
+        /// `A1:C5` style.
+        range: String,
+        /// Also return the formulas.
+        formulas: bool,
+    },
+    /// Add a sheet after the last one.
+    AddSheet {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Its name.
+        name: String,
+    },
+    /// Recalculate every open workbook.
+    Calc,
+    /// Save as `.xlsx`.
+    SaveAs {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Absolute path ending in `.xlsx`; the core has already checked it.
+        path: String,
+    },
+    /// Close without saving; the instance quits with its last workbook.
+    Close {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+    },
+}
+
+/// What the owned Excel answered. Only the fields an operation fills are set.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ExcelReply {
+    /// The workbook handle (`New`, `Open`).
+    pub workbook: Option<String>,
+    /// Sheet names (`New`, `Open`, `AddSheet`).
+    pub sheets: Vec<String>,
+    /// Values read, row by row (`Read`).
+    pub values: Vec<Vec<ExcelCell>>,
+    /// Formulas read, row by row (`Read` with `formulas`).
+    pub formulas: Vec<Vec<ExcelCell>>,
+    /// The instance quit because its last workbook closed (`Close`).
+    pub instance_quit: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

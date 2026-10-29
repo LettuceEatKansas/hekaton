@@ -159,6 +159,7 @@ pub enum ShellMode {
 /// See the [module docs](self).
 pub struct FakeBackend {
     state: Mutex<State>,
+    excel: Mutex<super::fake_excel::FakeExcel>,
 }
 
 impl Default for FakeBackend {
@@ -248,11 +249,43 @@ impl FakeBackend {
                 shell_fail_sort: false,
                 shell_calls: 0,
             }),
+            excel: Mutex::new(super::fake_excel::FakeExcel::new()),
         }
     }
 
     fn st(&self) -> MutexGuard<'_, State> {
         self.state.lock().expect("fake backend state poisoned")
+    }
+
+    fn xl(&self) -> MutexGuard<'_, super::fake_excel::FakeExcel> {
+        self.excel.lock().expect("fake excel poisoned")
+    }
+
+    // ------------------------------------------------------------------ scripting: excel
+
+    /// Pretend Excel is (not) installed.
+    pub fn set_excel_available(&self, available: bool) {
+        self.xl().available = available;
+    }
+
+    /// Every request the `excel` channel got, in order.
+    pub fn excel_requests(&self) -> Vec<ExcelRequest> {
+        self.xl().requests.clone()
+    }
+
+    /// How many times the owned instance was quit.
+    pub fn excel_quits(&self) -> u32 {
+        self.xl().quits
+    }
+
+    /// Is the owned instance running?
+    pub fn excel_running(&self) -> bool {
+        self.xl().running
+    }
+
+    /// The path a workbook was last saved to.
+    pub fn excel_saved_as(&self, handle: &str) -> Option<String> {
+        self.xl().saved_as(handle)
     }
 
     // ------------------------------------------------------------------ scripting: windows
@@ -784,6 +817,18 @@ fn prune(
 impl Backend for FakeBackend {
     fn name(&self) -> &'static str {
         "fake"
+    }
+
+    fn excel_available(&self) -> bool {
+        self.xl().available
+    }
+
+    fn excel(&self, req: &ExcelRequest) -> BackendResult<ExcelReply> {
+        self.xl().run(req)
+    }
+
+    fn excel_shutdown(&self) {
+        self.xl().shutdown();
     }
 
     fn capabilities(&self) -> Capabilities {

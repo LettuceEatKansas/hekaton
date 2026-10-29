@@ -19,8 +19,11 @@
 //! * Input methods take an [`InputGuard`], the Python `guard=` callback: run before every injected
 //!   event, and an `Err` stops the rest. Pass [`no_guard`] when there is nothing to re-check.
 
+pub mod excel;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
+#[cfg(any(test, feature = "testing"))]
+mod fake_excel;
 pub mod types;
 
 use std::sync::Arc;
@@ -682,4 +685,22 @@ pub trait Backend: Send + Sync {
     fn own_process(&self) -> BackendResult<Option<ProcessInfo>> {
         self.process_info(std::process::id())
     }
+
+    // ------------------------------------------------------------------ the Excel power channel
+
+    /// Can this backend drive Excel (it is installed)? Reported by `status`; the `excel` action is
+    /// still off until the owner turns the channel on.
+    fn excel_available(&self) -> bool {
+        false
+    }
+
+    /// One Excel operation on the instance this backend owns, started on demand and hidden. It never
+    /// attaches to an Excel the person is using. Charts and pivot tables are not supported yet.
+    fn excel(&self, _req: &ExcelRequest) -> BackendResult<ExcelReply> {
+        Err(BackendError::Unsupported("the excel channel".into()))
+    }
+
+    /// Quit the owned Excel instance if there is one. Best effort; called when the tool is dropped
+    /// and when the daemon stops.
+    fn excel_shutdown(&self) {}
 }
