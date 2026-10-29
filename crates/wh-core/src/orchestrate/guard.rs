@@ -535,12 +535,15 @@ impl Ctx<'_> {
             // nothing stopped the eval's own --user-data-dir from pointing at the owner's real Edge
             // profile once InPrivate was satisfied. Both a standalone --inprivate token and a
             // --user-data-dir under %TEMP% are required.
+            // norm_abs splits on the platform's own separators, so the paths are left as written: a
+            // '/' rewritten to '\\' made a macOS path one long name that nothing was ever under.
             let temp = env
                 .var("TEMP")
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| env.var("TMP").filter(|t| !t.trim().is_empty()))
                 .unwrap_or_default()
                 .trim()
-                .to_lowercase()
-                .replace('/', "\\");
+                .to_lowercase();
             let tokens: Vec<&str> = low.split_whitespace().collect();
             let udd = tokens
                 .iter()
@@ -549,7 +552,7 @@ impl Ctx<'_> {
                 .unwrap_or("");
             let udd_path = udd
                 .split_once('=')
-                .map(|(_, p)| p.trim_matches('"').replace('/', "\\"))
+                .map(|(_, p)| p.trim_matches('"').to_string())
                 .unwrap_or_default();
             if !tokens.contains(&"--inprivate") || udd_path.is_empty() || temp.is_empty() || {
                 let parent = norm_abs(&temp);
