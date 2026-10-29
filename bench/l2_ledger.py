@@ -1,6 +1,6 @@
 """Gauntlet L2, big ledger: 100,000 rows into Excel through the excel power channel, checked from the file.
 
-    python bench/l2_ledger.py --target new [--rows 100000] [--runs 1]
+    python bench/l2_ledger.py --target new [--rows 100000] [--runs 1] [--full]
 
 The daemon must run with power_channels containing "excel". Rows are generated from a fixed seed, so
 the expected totals are computed here in Python. A summary sheet holds SUMIFS, SUMPRODUCT and XLOOKUP
@@ -96,7 +96,7 @@ def col(i: int) -> str:
     return "ABCDE"[i]
 
 
-def run(c: Client, path: Path, rows: int) -> dict:
+def run(c: Client, path: Path, rows: int, full: bool) -> dict:
     if path.exists():
         path.unlink()
     data = ledger(rows)
@@ -111,6 +111,7 @@ def run(c: Client, path: Path, rows: int) -> dict:
         return text
 
     t0 = time.perf_counter()
+    book = None
     try:
         text = call({"op": "new"})
         m = re.search(r"\b(x\d+)\b", text)
@@ -125,18 +126,43 @@ def run(c: Client, path: Path, rows: int) -> dict:
         call({"op": "write", "workbook": book, "sheet": "Summary", "range": "A1",
               "values": summary(rows)})
         call({"op": "calc", "workbook": book})
+        if full:
+            last = rows + 1
+            call({"op": "format_conditional", "workbook": book, "sheet": "Sheet1",
+                  "range": f"D2:D{last}", "rule": "greater_than", "value": 45, "color": "#F4CCCC"})
+            call({"op": "chart", "workbook": book, "sheet": "Summary", "range": "A1:B5",
+                  "kind": "column", "title": "Qty by region"})
+            call({"op": "pivot", "workbook": book, "sheet": "Sheet1", "range": f"A1:E{last}",
+                  "rows": "Region", "sum_field": "Qty", "name": "Pivot"})
         call({"op": "save_as", "workbook": book, "path": str(path)}, timeout=180)
         call({"op": "close", "workbook": book})
     except RuntimeError as e:
+        if book:  # do not leave the hidden Excel running after a failed step
+            c({"action": "excel", "op": "close", "workbook": book})
         return {"ok": False, "why": str(e), "calls": calls}
     wall = time.perf_counter() - t0
 
     if not path.exists():
         return {"ok": False, "why": "no file", "calls": calls}
     sheets = read_book(path)
-    by_rows = sorted(sheets.values(), key=lambda s: len(s[0]), reverse=True)
-    data_vals, summ = by_rows[0][0], by_rows[1]
+    data_name = max(sheets, key=lambda n: len(sheets[n][0]))
+    data_vals = sheets[data_name][0]
+    summ = next(s for s in sheets.values() if "First SKU-07 price" in s[0].values())
     problems = []
+    if full:
+        total_qty = sum(r[3] for r in data)
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            if b"conditionalFormatting" not in z.read(data_name):
+                problems.append(("conditional format", "missing", data_name))
+        if not any(n.startswith("xl/charts/chart") for n in names):
+            problems.append(("chart", "missing", "xl/charts"))
+        pivots = [s for s in sheets.values() if "Grand Total" in s[0].values()]
+        if not any(n.startswith("xl/pivotTables/") for n in names) or not pivots:
+            problems.append(("pivot", "missing", "Grand Total sheet"))
+        elif not any(v.replace(".", "", 1).isdigit() and abs(float(v) - total_qty) < 1e-6
+                     for v in pivots[0][0].values()):
+            problems.append(("pivot grand total", sorted(pivots[0][0].items())[:12], total_qty))
     rnd = random.Random(7)
     for r in rnd.sample(range(rows), min(300, rows)):
         for ci, want in enumerate(data[r]):
@@ -167,12 +193,14 @@ def main() -> int:
     ap.add_argument("--target", required=True, choices=["old", "new"])
     ap.add_argument("--rows", type=int, default=100_000)
     ap.add_argument("--runs", type=int, default=1)
+    ap.add_argument("--full", action="store_true",
+                    help="also add a conditional format, a chart and a pivot table, and check them")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     c = Client(a.target)
     failed = 0
     for i in range(a.runs):
-        r = run(c, OUT / f"ledger-{a.target}-{i}.xlsx", a.rows)
+        r = run(c, OUT / f"ledger-{a.target}-{i}.xlsx", a.rows, a.full)
         failed += not r["ok"]
         print(json.dumps({"run": i, **r}))
     return 1 if failed else 0

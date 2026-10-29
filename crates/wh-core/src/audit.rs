@@ -34,6 +34,9 @@ pub const RESULT_MAX_CHARS: usize = 300;
 /// Keys whose string values are replaced by a length and a short hash.
 pub const REDACTED_KEYS: [&str; 2] = ["text", "code"];
 
+/// `excel` pivot and chart arguments that name or quote the owner's cells (header names, a title).
+pub const EXCEL_MASKED_KEYS: [&str; 4] = ["rows", "columns", "sum_field", "title"];
+
 /// Keys whose value is a list of steps, each redacted in turn.
 pub const NESTED_KEYS: [&str; 2] = ["actions", "steps"];
 
@@ -59,6 +62,14 @@ pub fn redact_args(args: &Value) -> Value {
     };
     let mut out = map.clone();
     for key in REDACTED_KEYS {
+        if let Some(v @ Value::String(_)) = out.get(key) {
+            let redacted = mask(v);
+            out.insert(key.to_string(), Value::String(redacted));
+        }
+    }
+    // The header names and the chart title an `excel` pivot or chart carries are read off the
+    // owner's cells, so they get the same length-and-hash treatment.
+    for key in EXCEL_MASKED_KEYS {
         if let Some(v @ Value::String(_)) = out.get(key) {
             let redacted = mask(v);
             out.insert(key.to_string(), Value::String(redacted));

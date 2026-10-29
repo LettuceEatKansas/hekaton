@@ -5,8 +5,8 @@
 //! It is a power channel, so it is off until the owner lists `excel` in `power_channels`
 //! (`WINHANDS_POWER_CHANNELS=excel`), and it only ever drives a hidden Excel this tool started
 //! itself (`new`, `open`), never the one the person has open. `read` is a look: it runs under
-//! `read_only` and the gaming lock. Everything else is an acting op. Charts and pivot tables are not
-//! supported yet.
+//! `read_only` and the gaming lock. Everything else is an acting op, `format_conditional`, `chart`
+//! and `pivot` included. A string written is stored as literal text unless it starts with `=`.
 //!
 //! The audit log gets the op, handle, sheet, range, row and column counts and the path. Cell values
 //! never reach it, neither in the arguments (`values` is masked) nor in the result (a call that read
@@ -17,15 +17,21 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::Ctx;
-use super::args::{Args, flag, get, text as text_arg};
+use super::args::{Args, flag, get, text as text_arg, to_float};
 use super::error::{StepError, StepResult};
 use super::files::expand_vars;
 use super::guard::norm_abs;
-use crate::backend::excel::{MAX_COLS, MAX_ROWS, WRITE_CELL_CAP, parse_area, parse_cell};
-use crate::backend::{ExcelCell, ExcelRequest};
+use crate::backend::excel::{
+    MAX_COLS, MAX_ROWS, WRITE_CELL_CAP, col_name, parse_area, parse_cell, parse_color,
+    valid_sheet_name,
+};
+use crate::backend::{ExcelCell, ExcelChartKind, ExcelRequest, ExcelRule};
 use crate::safety::Profile;
 
-const OPS: &str = "new, open, write, read, add_sheet, calc, save_as, close";
+const OPS: &str =
+    "new, open, write, read, add_sheet, calc, save_as, close, format_conditional, chart, pivot";
+const RULES: &str = "greater_than, less_than, between, color_scale";
+const KINDS: &str = "column, line, bar, pie";
 
 /// A cell as JSON: whole numbers without the `.0`.
 fn cell_json(cell: &ExcelCell) -> Value {
@@ -306,6 +312,202 @@ impl Ctx<'_> {
                 };
                 Ok(format!("excel: closed {wb} without saving{quit}"))
             }
+            "format_conditional" => {
+                let wb = workbook()?;
+                let range = text_arg(step, "range");
+                let Some(area) = parse_area(&range) else {
+                    return Err(StepError::value(
+                        "excel format_conditional needs range like D2:D100001 (cells on one sheet; name the sheet in sheet)",
+                    ));
+                };
+                let rule_name = text_arg(step, "rule").trim().to_ascii_lowercase();
+                if rule_name.is_empty() {
+                    return Err(StepError::value(format!(
+                        "excel format_conditional needs rule: one of {RULES}"
+                    )));
+                }
+                let number = |key: &str| -> StepResult<f64> {
+                    match get(step, key) {
+                        Some(v) => to_float(v),
+                        None => Err(StepError::value(format!(
+                            "excel format_conditional {rule_name} needs {key}: a number"
+                        ))),
+                    }
+                };
+                let color = || -> StepResult<u32> {
+                    let raw = text_arg(step, "color");
+                    if raw.is_empty() {
+                        return Err(StepError::value(format!(
+                            "excel format_conditional {rule_name} needs color: the fill, like #FFC7CE"
+                        )));
+                    }
+                    parse_color(&raw).ok_or_else(|| {
+                        StepError::value(format!("color must look like #RRGGBB, got {raw:?}"))
+                    })
+                };
+                let rule = match rule_name.as_str() {
+                    "greater_than" => ExcelRule::GreaterThan {
+                        value: number("value")?,
+                        color: color()?,
+                    },
+                    "less_than" => ExcelRule::LessThan {
+                        value: number("value")?,
+                        color: color()?,
+                    },
+                    "between" => ExcelRule::Between {
+                        low: number("value")?,
+                        high: number("value2")?,
+                        color: color()?,
+                    },
+                    "color_scale" => ExcelRule::ColorScale,
+                    other => {
+                        return Err(StepError::value(format!(
+                            "unknown excel rule {other:?}; one of: {RULES}"
+                        )));
+                    }
+                };
+                self.be().excel(&ExcelRequest::FormatConditional {
+                    workbook: wb.clone(),
+                    sheet: sheet.clone(),
+                    range: area.address(),
+                    rule,
+                })?;
+                Ok(format!(
+                    "excel: conditional format {rule_name} added to {}{} in {wb}",
+                    sheet.map(|s| format!("{s}!")).unwrap_or_default(),
+                    area.address()
+                ))
+            }
+            "chart" => {
+                let wb = workbook()?;
+                let range = text_arg(step, "range");
+                let Some(area) = parse_area(&range) else {
+                    return Err(StepError::value(
+                        "excel chart needs range like A1:C20, the data with its header row (name the sheet in sheet)",
+                    ));
+                };
+                if area.rows < 2 {
+                    return Err(StepError::value(
+                        "excel chart needs a header row and at least one row of data in range",
+                    ));
+                }
+                let kind_name = text_arg(step, "kind").trim().to_ascii_lowercase();
+                let kind = match kind_name.as_str() {
+                    "column" => ExcelChartKind::Column,
+                    "line" => ExcelChartKind::Line,
+                    "bar" => ExcelChartKind::Bar,
+                    "pie" => ExcelChartKind::Pie,
+                    "" => {
+                        return Err(StepError::value(format!(
+                            "excel chart needs kind: one of {KINDS}"
+                        )));
+                    }
+                    other => {
+                        return Err(StepError::value(format!(
+                            "unknown chart kind {other:?}; one of: {KINDS}"
+                        )));
+                    }
+                };
+                // `at` already means fractional window coordinates on the MCP wire, so a cell goes
+                // in `anchor`; a text `at` is taken too for callers that skip the shim.
+                let placed = Some(text_arg(step, "anchor"))
+                    .filter(|a| !a.is_empty())
+                    .or_else(|| match get(step, "at") {
+                        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+                        _ => None,
+                    });
+                let at = match placed {
+                    Some(cell) => {
+                        let Some((col, row)) = parse_cell(&cell) else {
+                            return Err(StepError::value(
+                                "excel chart anchor is the top-left cell for the chart, like H2",
+                            ));
+                        };
+                        Some(format!("{}{row}", col_name(col)))
+                    }
+                    None => None,
+                };
+                let title = Some(text_arg(step, "title")).filter(|t| !t.is_empty());
+                if title.as_ref().is_some_and(|t| t.chars().count() > 255) {
+                    return Err(StepError::value(
+                        "excel chart title is over Excel's 255 character limit",
+                    ));
+                }
+                let reply = self.be().excel(&ExcelRequest::Chart {
+                    workbook: wb.clone(),
+                    sheet: sheet.clone(),
+                    range: area.address(),
+                    kind,
+                    title,
+                    at,
+                })?;
+                Ok(format!(
+                    "excel: added {kind_name} chart {:?} of {}{} to {wb}, top-left at {}",
+                    reply.name.unwrap_or_default(),
+                    sheet.map(|s| format!("{s}!")).unwrap_or_default(),
+                    area.address(),
+                    reply.address.unwrap_or_default()
+                ))
+            }
+            "pivot" => {
+                let wb = workbook()?;
+                let range = text_arg(step, "range");
+                let Some(area) = parse_area(&range) else {
+                    return Err(StepError::value(
+                        "excel pivot needs range like A1:D200, the source data with its header row (name the sheet in sheet)",
+                    ));
+                };
+                if area.rows < 2 || area.cols < 2 {
+                    return Err(StepError::value(
+                        "excel pivot needs a header row, at least one row of data and two columns in range",
+                    ));
+                }
+                let rows = text_arg(step, "rows");
+                if rows.trim().is_empty() {
+                    return Err(StepError::value(
+                        "excel pivot needs rows: the header of the column to group by",
+                    ));
+                }
+                let sum_field = text_arg(step, "sum_field");
+                if sum_field.trim().is_empty() {
+                    return Err(StepError::value(
+                        "excel pivot needs sum_field: the header of the column to add up (values is the write argument)",
+                    ));
+                }
+                let columns = Some(text_arg(step, "columns")).filter(|c| !c.trim().is_empty());
+                if columns
+                    .as_ref()
+                    .is_some_and(|c| c.trim().eq_ignore_ascii_case(rows.trim()))
+                {
+                    return Err(StepError::value(
+                        "excel pivot columns and rows must be different headers",
+                    ));
+                }
+                let name = Some(text_arg(step, "name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| "Pivot".into());
+                if !valid_sheet_name(&name) {
+                    return Err(StepError::value(
+                        "excel pivot name is the new sheet's name: 1 to 31 characters, none of \\ / ? * [ ] :",
+                    ));
+                }
+                let reply = self.be().excel(&ExcelRequest::Pivot {
+                    workbook: wb.clone(),
+                    sheet: sheet.clone(),
+                    range: area.address(),
+                    rows,
+                    sum_field,
+                    columns,
+                    name,
+                })?;
+                Ok(format!(
+                    "excel: pivot of {}{} in {wb} is on sheet {:?}, table at {}",
+                    sheet.map(|s| format!("{s}!")).unwrap_or_default(),
+                    area.address(),
+                    reply.name.unwrap_or_default(),
+                    reply.address.unwrap_or_default()
+                ))
+            }
             other => Err(StepError::value(format!(
                 "unknown excel op {other:?}; one of: {OPS}"
             ))),
@@ -393,6 +595,8 @@ pub(crate) fn audit_fields(args: &Value) -> Option<Map<String, Value>> {
             ("sheet", text("sheet")),
             ("range", text("range")),
             ("path", text("path")),
+            ("rule", text("rule")),
+            ("kind", text("kind")),
         ] {
             if let Some(v) = value {
                 e.insert(key.into(), json!(v));

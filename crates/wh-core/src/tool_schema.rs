@@ -32,12 +32,12 @@ Look: status screenshot(save_to) zoom(region) find_text read(text=window|ref,fil
 Do: click_text(text,nth,button,double) replace_word(old,new) open_app file_dialog(text=path) clipboard_get clipboard_set list_files(text=folder,filter,limit) window(op,window; move rect [x,y,w,h]) folder(path,view,sort,list=n).
 Wait: wait(duration) wait_for_text(text,timeout) wait_for_file.
 Batch: actions=[{action,...}] max 50, one screenshot at the end, stops at the first FAIL; a step may carry expect, on_fail "skip", when {text|gone_text|title}.
-Excel (owner opt-in): excel(op=new|open|write|read|add_sheet|calc|save_as|close, workbook, sheet, range, values=[[..]] "=f" is a formula, formulas, path, name, overwrite) edits a hidden workbook in bulk; prefer it to clicking cells.
+Excel (owner opt-in): excel(op=new|open|write|read|add_sheet|calc|save_as|close|format_conditional|chart|pivot, workbook, sheet, range, values=[[..]] "=f" is a formula, formulas, path, name, overwrite; rule,value,value2,color,kind,title,anchor,rows,sum_field,columns) edits a hidden workbook in bulk; prefer it to clicking cells.
 recipe_list recipe(name,params) recipe_save(name,text,params,steps using {k}). Prefer recipe/window/folder to clicking; recipe_save it with params, not literals.
 scope = a window: screenshots and coordinates cover only that window (sharper, fewer tokens). display=monitor n. only_apps = processes input may reach; allow_irreversible presses Send/Buy/Delete-like buttons there. max_chars, max_images, budget_ms bound a call; profile=true adds timing. session_id isolates state; snapshot_id pins a screenshot; if_changed=true skips an unchanged read; read_only=true blocks input."##;
 
 /// The JSON input schema, compact (Python `list_tools()[0].inputSchema` through `json.dumps`).
-pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array","maxItems":50},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"},"workbook":{"type":"string"},"sheet":{"type":"string"},"range":{"type":"string"},"values":{"items":{"type":"array"},"type":"array"},"formulas":{"type":"boolean"},"scope":{"type":"string"},"compact":{"type":"boolean"},"profile":{"type":"boolean"},"read_only":{"type":"boolean"},"if_changed":{"type":"boolean"},"session_id":{"type":"string"},"snapshot_id":{"type":"string"},"budget_ms":{"type":"integer"},"max_chars":{"type":"integer"},"max_images":{"type":"integer"}},"type":"object"}"##;
+pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array","maxItems":50},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"},"workbook":{"type":"string"},"sheet":{"type":"string"},"range":{"type":"string"},"values":{"items":{"type":"array"},"type":"array"},"formulas":{"type":"boolean"},"kind":{"type":"string"},"rule":{"type":"string"},"value":{"type":"number"},"value2":{"type":"number"},"color":{"type":"string"},"title":{"type":"string"},"rows":{"type":"string"},"columns":{"type":"string"},"sum_field":{"type":"string"},"anchor":{"type":"string"},"scope":{"type":"string"},"compact":{"type":"boolean"},"profile":{"type":"boolean"},"read_only":{"type":"boolean"},"if_changed":{"type":"boolean"},"session_id":{"type":"string"},"snapshot_id":{"type":"string"},"budget_ms":{"type":"integer"},"max_chars":{"type":"integer"},"max_images":{"type":"integer"}},"type":"object"}"##;
 
 static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     serde_json::from_str(INPUT_SCHEMA_JSON).expect("the tool schema is valid JSON")
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn the_definition_stays_within_its_budget() {
         let size = definition_chars();
-        assert!(size <= 4100, "{size}"); // 2026-10-28: room for the nine session/budget params
+        assert!(size <= 4175, "{size}"); // 2026-10-28: room for the nine session/budget params and the excel format/chart/pivot args
         assert!(size < 4176, "{size}"); // the size before the 2026-10-08 slimming
         assert!(size > 2732, "{size}"); // the slim size, before the shortcuts and recipes
     }
@@ -110,8 +110,10 @@ mod tests {
     #[test]
     fn the_schema_keeps_every_old_param_and_adds_the_new_ones_without_titles() {
         let schema = input_schema();
-        assert!(!schema.to_string().contains("\"title\""));
+        // no JSON-schema `title` annotations; `title` itself is the excel chart's parameter
+        assert!(schema.get("title").is_none());
         let p = props();
+        assert!(p.values().all(|v| v.get("title").is_none()));
         for name in ORIGINAL_PARAMS {
             assert!(p.contains_key(name), "{name}");
         }
@@ -152,7 +154,7 @@ mod tests {
         let names: Vec<String> = props().keys().cloned().collect();
         assert_eq!(names.first().map(String::as_str), Some("action"));
         assert_eq!(names.last().map(String::as_str), Some("max_images"));
-        assert_eq!(names.len(), 54);
+        assert_eq!(names.len(), 64);
         let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
         assert!(pos("allow_destructive") < pos("shot") && pos("wake") < pos("window"));
         assert_eq!(

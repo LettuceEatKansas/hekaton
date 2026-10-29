@@ -319,6 +319,22 @@ pub fn build_payload(
         "overwrite",
         opt_bool(args, "overwrite")?.filter(|b| *b).map(Value::from),
     );
+    // excel format_conditional, chart and pivot. A chart's cell is `anchor` because `at` is the
+    // fractional window point.
+    for key in [
+        "kind",
+        "rule",
+        "color",
+        "title",
+        "rows",
+        "columns",
+        "sum_field",
+        "anchor",
+    ] {
+        put(key, truthy_str(key)?);
+    }
+    put("value", opt_float(args, "value")?.map(Value::from));
+    put("value2", opt_float(args, "value2")?.map(Value::from));
 
     let batch =
         opt_obj_list(args, "actions")?.filter(|v| v.as_array().is_some_and(|a| !a.is_empty()));

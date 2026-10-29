@@ -1432,7 +1432,7 @@ pub enum ExcelCell {
 
 /// What [`Backend::excel`](super::Backend::excel) is asked to do. The backend owns one hidden Excel
 /// instance and the workbook handles (`x1`, `x2`, ...) it hands out; it never attaches to an Excel
-/// the person is using. Charts and pivot tables are not supported yet.
+/// the person is using.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExcelRequest {
     /// Start the owned instance if needed and add an empty workbook.
@@ -1485,6 +1485,104 @@ pub enum ExcelRequest {
         /// Handle from `New` or `Open`.
         workbook: String,
     },
+    /// Add a conditional format to a block of cells.
+    FormatConditional {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Sheet name; the first sheet when `None`.
+        sheet: Option<String>,
+        /// `D2:D100001` style.
+        range: String,
+        /// What to highlight.
+        rule: ExcelRule,
+    },
+    /// Add a chart of a block of cells (header row included) to the sheet.
+    Chart {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Sheet name; the first sheet when `None`.
+        sheet: Option<String>,
+        /// The source data, header row included.
+        range: String,
+        /// The chart type.
+        kind: ExcelChartKind,
+        /// Title text, none for Excel's own default.
+        title: Option<String>,
+        /// Top-left cell for the chart; a few columns right of the data when `None`.
+        at: Option<String>,
+    },
+    /// Build a pivot table of a block of cells on a new sheet.
+    Pivot {
+        /// Handle from `New` or `Open`.
+        workbook: String,
+        /// Sheet holding the source data; the first sheet when `None`.
+        sheet: Option<String>,
+        /// The source data, header row included.
+        range: String,
+        /// Header of the row field.
+        rows: String,
+        /// Header of the field to sum.
+        sum_field: String,
+        /// Header of the column field, if any.
+        columns: Option<String>,
+        /// Name of the new sheet the pivot goes to.
+        name: String,
+    },
+}
+
+/// A conditional-format rule. Colors are Excel color values (`R + G * 256 + B * 65536`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExcelRule {
+    /// Cell value greater than `value`.
+    GreaterThan {
+        /// The threshold.
+        value: f64,
+        /// Fill color.
+        color: u32,
+    },
+    /// Cell value less than `value`.
+    LessThan {
+        /// The threshold.
+        value: f64,
+        /// Fill color.
+        color: u32,
+    },
+    /// Cell value between `low` and `high`, ends included.
+    Between {
+        /// Lower end.
+        low: f64,
+        /// Upper end.
+        high: f64,
+        /// Fill color.
+        color: u32,
+    },
+    /// Excel's default three-color scale.
+    ColorScale,
+}
+
+/// The chart types `Chart` can draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExcelChartKind {
+    /// Clustered columns.
+    Column,
+    /// Lines.
+    Line,
+    /// Clustered bars.
+    Bar,
+    /// A pie.
+    Pie,
+}
+
+impl ExcelChartKind {
+    /// The `XlChartType` constant Excel wants.
+    pub fn xl_type(self) -> i32 {
+        match self {
+            Self::Column => 51,
+            Self::Line => 4,
+            Self::Bar => 57,
+            Self::Pie => 5,
+        }
+    }
 }
 
 /// What the owned Excel answered. Only the fields an operation fills are set.
@@ -1500,6 +1598,11 @@ pub struct ExcelReply {
     pub formulas: Vec<Vec<ExcelCell>>,
     /// The instance quit because its last workbook closed (`Close`).
     pub instance_quit: bool,
+    /// A name Excel gave: the chart (`Chart`) or the sheet the pivot went to (`Pivot`).
+    pub name: Option<String>,
+    /// An address, without `$`: the pivot's output range (`Pivot`) or the chart's top-left cell
+    /// (`Chart`).
+    pub address: Option<String>,
 }
 
 #[cfg(test)]

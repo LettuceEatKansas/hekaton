@@ -695,7 +695,7 @@ pub trait Backend: Send + Sync {
     }
 
     /// One Excel operation on the instance this backend owns, started on demand and hidden. It never
-    /// attaches to an Excel the person is using. Charts and pivot tables are not supported yet.
+    /// attaches to an Excel the person is using.
     fn excel(&self, _req: &ExcelRequest) -> BackendResult<ExcelReply> {
         Err(BackendError::Unsupported("the excel channel".into()))
     }

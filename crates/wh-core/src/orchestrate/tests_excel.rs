@@ -542,3 +542,480 @@ fn the_audit_log_records_where_and_how_much_but_never_a_cell() {
     assert!(log.contains(r#""cols": 2"#), "{log}");
     assert!(log.contains("excel cells are not logged"), "{log}");
 }
+
+// ------------------------------------------------------------- format_conditional, chart, pivot
+
+use crate::backend::{ExcelChartKind, ExcelRule};
+
+/// A small sales table in A1:D7 of a new workbook: Region, Product, Qty, Price.
+fn sales_book(kit: &Kit) -> String {
+    let wb = new_book(kit);
+    call(
+        kit,
+        json!({"action": "excel", "op": "write", "workbook": wb, "range": "A1", "values": [
+            ["Region", "Product", "Qty", "Price"],
+            ["East", "Nut", 10, 1.5],
+            ["West", "Nut", 5, 1.5],
+            ["East", "Bolt", 7, 2],
+            ["West", "Bolt", 3, 2],
+            ["East", "Nut", 1, 1.5],
+            ["North", "Bolt", 4, 2]
+        ]}),
+    )
+    .unwrap();
+    wb
+}
+
+fn step(base: Value, extra: Value) -> Value {
+    let mut out = base;
+    out.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    out
+}
+
+#[test]
+fn a_conditional_format_reaches_excel_with_its_rule_and_a_converted_color() {
+    let kit = kit();
+    let wb = sales_book(&kit);
+    let fc = |extra: Value| {
+        call(
+            &kit,
+            step(
+                json!({"action": "excel", "op": "format_conditional", "workbook": wb,
+                       "sheet": "Sheet1", "range": "C2:C7"}),
+                extra,
+            ),
+        )
+    };
+    let said = fc(json!({"rule": "greater_than", "value": 5, "color": "#FF0000"})).unwrap();
+    assert!(
+        said.contains("greater_than") && said.contains("Sheet1!C2:C7"),
+        "{said}"
+    );
+    fc(json!({"rule": "LESS_THAN", "value": 0, "color": "#00ff00"})).unwrap();
+    fc(json!({"rule": "between", "value": "2", "value2": 6.5, "color": "#0000FF"})).unwrap();
+    fc(json!({"rule": "color_scale"})).unwrap();
+    let rules: Vec<ExcelRule> = kit
+        .fake
+        .excel_requests()
+        .into_iter()
+        .filter_map(|r| match r {
+            ExcelRequest::FormatConditional { rule, range, .. } => {
+                assert_eq!(range, "C2:C7");
+                Some(rule)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            ExcelRule::GreaterThan {
+                value: 5.0,
+                color: 0x0000FF
+            },
+            ExcelRule::LessThan {
+                value: 0.0,
+                color: 0x00FF00
+            },
+            ExcelRule::Between {
+                low: 2.0,
+                high: 6.5,
+                color: 0xFF0000
+            },
+            ExcelRule::ColorScale,
+        ]
+    );
+}
+
+#[test]
+fn a_chart_names_itself_and_says_where_it_went() {
+    let kit = kit();
+    let wb = sales_book(&kit);
+    let first = call(
+        &kit,
+        json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:D7", "kind": "column",
+               "title": "Sales"}),
+    )
+    .unwrap();
+    assert!(
+        first.contains("\"Chart 1\"") && first.contains("column") && first.contains("at G1"),
+        "{first}"
+    );
+    let second = call(
+        &kit,
+        json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:D7", "kind": "Pie",
+               "anchor": "$K$3"}),
+    )
+    .unwrap();
+    assert!(
+        second.contains("\"Chart 2\"") && second.contains("at K3"),
+        "{second}"
+    );
+    // a text `at` is a cell too, for callers that skip the MCP shim
+    let third = call(
+        &kit,
+        json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:D7", "kind": "line",
+               "at": "B20"}),
+    )
+    .unwrap();
+    assert!(third.contains("at B20"), "{third}");
+    let charts: Vec<_> = kit
+        .fake
+        .excel_requests()
+        .into_iter()
+        .filter_map(|r| match r {
+            ExcelRequest::Chart {
+                kind, title, at, ..
+            } => Some((kind, title, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        charts,
+        vec![
+            (ExcelChartKind::Column, Some("Sales".to_string()), None),
+            (ExcelChartKind::Pie, None, Some("K3".to_string())),
+            (ExcelChartKind::Line, None, Some("B20".to_string())),
+        ]
+    );
+    for (kind, xl) in [
+        (ExcelChartKind::Column, 51),
+        (ExcelChartKind::Line, 4),
+        (ExcelChartKind::Bar, 57),
+        (ExcelChartKind::Pie, 5),
+    ] {
+        assert_eq!(kind.xl_type(), xl);
+    }
+}
+
+#[test]
+fn a_pivot_sums_by_row_field_on_a_new_sheet() {
+    let kit = kit();
+    let wb = sales_book(&kit);
+    let said = call(
+        &kit,
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:D7",
+               "rows": "Region", "sum_field": "Qty"}),
+    )
+    .unwrap();
+    assert!(
+        said.contains("\"Pivot\"") && said.contains("table at A3:B7"),
+        "{said}"
+    );
+    let table = call(
+        &kit,
+        json!({"action": "excel", "op": "read", "workbook": wb, "sheet": "Pivot", "range": "A3:B7"}),
+    )
+    .unwrap();
+    assert!(
+        table.contains(
+            r#"[["Row Labels","Sum of Qty"],["East",18],["North",4],["West",8],["Grand Total",30]]"#
+        ),
+        "{table}"
+    );
+    // headers match without regard to case, a column field adds a grand total column, and the new
+    // sheet takes the name asked for
+    let cross = call(
+        &kit,
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:D7", "rows": "region",
+               "columns": "Product", "sum_field": " qty ", "name": "ByProduct"}),
+    )
+    .unwrap();
+    assert!(
+        cross.contains("\"ByProduct\"") && cross.contains("A3:D8"),
+        "{cross}"
+    );
+    let grid = call(
+        &kit,
+        json!({"action": "excel", "op": "read", "workbook": wb, "sheet": "ByProduct", "range": "A5:D8"}),
+    )
+    .unwrap();
+    assert!(
+        grid.contains(r#"["East",7,11,18]"#) && grid.contains(r#"["Grand Total",14,16,30]"#),
+        "{grid}"
+    );
+    // the same name twice is Excel's refusal, passed on
+    let why = call(
+        &kit,
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:D7",
+               "rows": "Region", "sum_field": "Qty"}),
+    )
+    .unwrap_err();
+    assert!(why.contains("Pivot") && why.contains("exists"), "{why}");
+}
+
+#[test]
+fn the_new_ops_are_acting_ops_and_follow_the_write_gates() {
+    let kit = kit();
+    let wb = sales_book(&kit);
+    let steps = [
+        json!({"action": "excel", "op": "format_conditional", "workbook": wb, "range": "C2:C7",
+               "rule": "color_scale"}),
+        json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:D7", "kind": "bar"}),
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:D7",
+               "rows": "Region", "sum_field": "Qty"}),
+    ];
+    let before = kit.fake.excel_requests().len();
+    for s in &steps {
+        let mut single = s.clone();
+        single["read_only"] = json!(true);
+        let why = call(&kit, single).unwrap_err();
+        assert!(why.contains("read_only"), "{why}");
+        let why = call(&kit, json!({"read_only": true, "actions": [s]})).unwrap_err();
+        assert!(why.contains("read_only"), "{why}");
+        let mut walled = s.clone();
+        walled["only_apps"] = json!(["notepad.exe"]);
+        let why = call(&kit, walled).unwrap_err();
+        assert!(why.contains("excel.exe"), "{why}");
+    }
+    let dir = kit.computer.config().paths().dir().to_path_buf();
+    crate::safety::lock(&dir, "playing").unwrap();
+    for s in &steps {
+        let why = call(&kit, s.clone()).unwrap_err();
+        assert!(why.contains("gaming lock"), "{why}");
+    }
+    crate::safety::unlock(&dir).unwrap();
+    assert_eq!(
+        kit.fake.excel_requests().len(),
+        before,
+        "none reached Excel"
+    );
+    // with excel.exe on the allowlist they go through
+    for s in &steps {
+        let mut ok = s.clone();
+        ok["only_apps"] = json!(["excel.exe"]);
+        assert!(call(&kit, ok.clone()).is_ok(), "{ok}");
+    }
+    // and the owner's switch still governs all three
+    let off = Kit::with_env(MapEnv::new().with("WINHANDS_AUTO_SHOT", "0"));
+    for s in &steps {
+        assert!(call(&off, s.clone()).unwrap_err().contains("power channel"));
+    }
+}
+
+#[test]
+fn bad_arguments_to_the_new_ops_are_refused_before_excel_hears_of_them() {
+    let kit = kit();
+    let wb = sales_book(&kit);
+    let before = kit.fake.excel_requests().len();
+    let fc =
+        json!({"action": "excel", "op": "format_conditional", "workbook": wb, "range": "C2:C7"});
+    let chart = json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:D7"});
+    let pivot = json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:D7",
+                       "rows": "Region", "sum_field": "Qty"});
+    let cases = [
+        (
+            step(
+                fc.clone(),
+                json!({"rule": "greater_than", "value": 1, "color": "red"}),
+            ),
+            "#RRGGBB",
+        ),
+        (step(fc.clone(), json!({"rule": "sparkle"})), "greater_than"),
+        (step(fc.clone(), json!({})), "needs rule"),
+        (
+            step(
+                fc.clone(),
+                json!({"rule": "greater_than", "color": "#FF0000"}),
+            ),
+            "needs value",
+        ),
+        (
+            step(fc.clone(), json!({"rule": "greater_than", "value": 1})),
+            "needs color",
+        ),
+        (
+            step(
+                fc.clone(),
+                json!({"rule": "between", "value": 1, "color": "#FF0000"}),
+            ),
+            "needs value2",
+        ),
+        (
+            step(
+                fc.clone(),
+                json!({"rule": "less_than", "value": "many", "color": "#FF0000"}),
+            ),
+            "float",
+        ),
+        (
+            step(
+                fc.clone(),
+                json!({"range": "Sheet1!C2", "rule": "color_scale"}),
+            ),
+            "needs range",
+        ),
+        (
+            step(chart.clone(), json!({"kind": "donut"})),
+            "column, line, bar, pie",
+        ),
+        (step(chart.clone(), json!({})), "needs kind"),
+        (
+            step(chart.clone(), json!({"kind": "pie", "anchor": "nowhere"})),
+            "anchor",
+        ),
+        (
+            step(chart.clone(), json!({"kind": "pie", "range": "A1:D1"})),
+            "header row",
+        ),
+        (
+            step(chart.clone(), json!({"kind": "pie", "range": "A:D"})),
+            "needs range",
+        ),
+        (
+            step(pivot.clone(), json!({"sum_field": ""})),
+            "needs sum_field",
+        ),
+        (step(pivot.clone(), json!({"rows": ""})), "needs rows"),
+        (
+            step(pivot.clone(), json!({"columns": "region"})),
+            "different",
+        ),
+        (step(pivot.clone(), json!({"name": "a/b"})), "1 to 31"),
+        (
+            step(pivot.clone(), json!({"range": "A1:A7"})),
+            "two columns",
+        ),
+        (step(pivot.clone(), json!({"range": "A1:D1"})), "header row"),
+    ];
+    for (s, needle) in cases {
+        let why = call(&kit, s.clone()).unwrap_err();
+        assert!(why.contains(needle), "{needle} not in {why} for {s}");
+    }
+    assert_eq!(kit.fake.excel_requests().len(), before);
+}
+
+#[test]
+fn a_pivot_header_that_is_not_there_is_named_and_no_cell_data_comes_back() {
+    let kit = kit();
+    let wb = new_book(&kit);
+    call(
+        &kit,
+        json!({"action": "excel", "op": "write", "workbook": wb, "values": [
+            ["SECRET-HEAD-A", "SECRET-HEAD-B", "SECRET-HEAD-C"],
+            ["SECRET-ROW", 1, 2]
+        ]}),
+    )
+    .unwrap();
+    for (extra, asked) in [
+        (
+            json!({"rows": "Regon", "sum_field": "SECRET-HEAD-B"}),
+            "Regon",
+        ),
+        (
+            json!({"rows": "SECRET-HEAD-A", "sum_field": "Qtty"}),
+            "Qtty",
+        ),
+        (
+            json!({"rows": "SECRET-HEAD-A", "sum_field": "SECRET-HEAD-B", "columns": "Prod"}),
+            "Prod",
+        ),
+    ] {
+        let why = call(
+            &kit,
+            step(
+                json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:C2"}),
+                extra,
+            ),
+        )
+        .unwrap_err();
+        assert!(why.contains(&format!("{asked:?}")), "{why}");
+        assert!(why.contains("A1:C2"), "{why}");
+        // the error never lists the headers or any cell that is there
+        let rest = why.replace(asked, "");
+        assert!(!rest.contains("SECRET"), "{why}");
+    }
+    // nothing was left behind: no stray sheet
+    let sheets = call(
+        &kit,
+        json!({"action": "excel", "op": "add_sheet", "workbook": wb, "name": "Check"}),
+    )
+    .unwrap();
+    assert!(sheets.contains("(sheets: Sheet1, Check)"), "{sheets}");
+}
+
+#[test]
+fn the_audit_log_for_the_new_ops_has_no_cell_text_headers_or_titles() {
+    let kit = kit();
+    let wb = new_book(&kit);
+    call(
+        &kit,
+        json!({"action": "excel", "op": "write", "workbook": wb, "values": [
+            ["SECRET-REGION", "SECRET-QTY"],
+            ["SECRET-EAST", 4],
+            ["SECRET-WEST", 6]
+        ]}),
+    )
+    .unwrap();
+    call(
+        &kit,
+        json!({"action": "excel", "op": "format_conditional", "workbook": wb, "range": "B2:B3",
+               "rule": "greater_than", "value": 5, "color": "#FFC7CE"}),
+    )
+    .unwrap();
+    call(
+        &kit,
+        json!({"action": "excel", "op": "chart", "workbook": wb, "range": "A1:B3", "kind": "column",
+               "title": "SECRET-TITLE"}),
+    )
+    .unwrap();
+    call(
+        &kit,
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:B3",
+               "rows": "SECRET-REGION", "sum_field": "SECRET-QTY"}),
+    )
+    .unwrap();
+    // a refused pivot logs through the failure route, which logs the arguments
+    let _ = call(
+        &kit,
+        json!({"action": "excel", "op": "pivot", "workbook": wb, "range": "A1:B3",
+               "rows": "SECRET-REGION", "sum_field": "SECRET-GONE", "name": "Second"}),
+    );
+    kit.clock.advance(std::time::Duration::from_secs(2));
+    call(
+        &kit,
+        json!({"actions": [
+            {"action": "excel", "op": "chart", "workbook": wb, "range": "A1:B3", "kind": "pie",
+             "title": "SECRET-TITLE-2"}
+        ]}),
+    )
+    .unwrap();
+    let log = std::fs::read_to_string(kit.computer.config().paths().audit_log()).unwrap();
+    // the one place a name the caller asked for may appear is the refusal text, and that name is
+    // not on the sheet; every header, title and cell that IS on the sheet stays out
+    assert!(!log.replace("SECRET-GONE", "").contains("SECRET"), "{log}");
+    for needle in [
+        r#""op": "format_conditional""#,
+        r#""op": "chart""#,
+        r#""op": "pivot""#,
+        r#""rule": "greater_than""#,
+        r#""kind": "column""#,
+        r#""range": "A1:B3""#,
+    ] {
+        assert!(log.contains(needle), "{needle} not in {log}");
+    }
+}
+
+#[test]
+fn written_text_is_literal_and_only_a_leading_equals_is_a_formula() {
+    let kit = kit();
+    let wb = new_book(&kit);
+    call(
+        &kit,
+        json!({"action": "excel", "op": "write", "workbook": wb, "values": [
+            ["007", "1/2", "TRUE", "-x", 7, true, "=A1&B1"]
+        ]}),
+    )
+    .unwrap();
+    let read = call(
+        &kit,
+        json!({"action": "excel", "op": "read", "workbook": wb, "range": "A1:F1", "formulas": true}),
+    )
+    .unwrap();
+    assert!(
+        read.contains(r#""values":[["007","1/2","TRUE","-x",7,true]]"#),
+        "{read}"
+    );
+}

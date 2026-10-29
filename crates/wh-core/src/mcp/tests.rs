@@ -69,15 +69,17 @@ fn the_definition_stays_within_its_budget() {
             .unwrap()
             .chars()
             .count();
-    assert!((2732..=3900).contains(&size), "{size}");
+    assert!((2732..=4175).contains(&size), "{size}");
     assert!(size < 4176, "smaller than the original baseline");
 }
 
 #[test]
 fn the_schema_has_no_titles_and_every_old_parameter_plus_the_new_ones() {
     let schema = Value::Object(input_schema());
-    assert!(!schema.to_string().contains("\"title\""));
     let props = schema["properties"].as_object().unwrap();
+    // no JSON-schema `title` annotations; `title` itself is the excel chart's parameter
+    assert!(props.values().all(|p| p.get("title").is_none()));
+    assert!(schema.get("title").is_none());
     for name in [
         "action",
         "coordinate",
@@ -326,6 +328,52 @@ fn the_excel_parameters_reach_the_daemon() {
     }
     let bad = build_payload(
         json!({"action": "excel", "values": "x"})
+            .as_object()
+            .unwrap(),
+        &defaults(),
+    );
+    assert!(bad.is_err());
+}
+
+#[test]
+fn the_excel_format_chart_and_pivot_parameters_reach_the_daemon() {
+    let p = payload(json!({
+        "action": "excel", "op": "format_conditional", "workbook": "x1", "range": "D2:D9",
+        "rule": "between", "value": 0, "value2": 2.5, "color": "#FFC7CE", "kind": "pie",
+        "title": "T", "anchor": "H2", "rows": "Region", "columns": "Product",
+        "sum_field": "Qty"
+    }));
+    assert_eq!(p["rule"], "between");
+    assert_eq!(p["value"], json!(0.0), "a zero threshold is still sent");
+    assert_eq!(p["value2"], json!(2.5));
+    for (key, want) in [
+        ("color", "#FFC7CE"),
+        ("kind", "pie"),
+        ("title", "T"),
+        ("anchor", "H2"),
+        ("rows", "Region"),
+        ("columns", "Product"),
+        ("sum_field", "Qty"),
+    ] {
+        assert_eq!(p[key], want, "{key}");
+    }
+    let bare = payload(json!({"action": "excel", "op": "new"}));
+    for key in [
+        "rule",
+        "value",
+        "value2",
+        "color",
+        "kind",
+        "title",
+        "anchor",
+        "rows",
+        "columns",
+        "sum_field",
+    ] {
+        assert!(!bare.contains_key(key), "{key}");
+    }
+    let bad = build_payload(
+        json!({"action": "excel", "value": "x"})
             .as_object()
             .unwrap(),
         &defaults(),

@@ -7,7 +7,14 @@
 //! between threads and a slow Excel only holds up Excel calls. The instance is always a new process
 //! of our own: `CoCreateInstance` is checked against the Excel processes that were running before,
 //! and a hit means Windows handed back the person's Excel, which is released untouched and refused.
-//! Macros are disabled on open. Charts and pivot tables are not supported yet.
+//! Macros are disabled on open.
+//!
+//! Each worker owns one Windows Job Object set to kill its members when the last handle to it
+//! closes, and its Excel process is put in it. The handle lives as long as the worker, so a daemon
+//! that is killed or crashes takes its hidden Excel down with it instead of leaving it running.
+//!
+//! Strings are written as literal text (a leading apostrophe, Excel's own text marker, which never
+//! becomes part of the stored string) unless they start with `=`.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -15,19 +22,31 @@ use std::mem::ManuallyDrop;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use wh_core::backend::excel::{Area, parse_area, parse_cell};
-use wh_core::backend::{BackendError, BackendResult, ExcelCell, ExcelReply, ExcelRequest};
+use wh_core::backend::excel::{
+    Area, default_chart_anchor, entered_text, find_header, parse_area, parse_cell,
+};
+use wh_core::backend::{
+    BackendError, BackendResult, ExcelCell, ExcelChartKind, ExcelReply, ExcelRequest, ExcelRule,
+};
 use windows::Win32::Foundation::{DISP_E_EXCEPTION, DISP_E_PARAMNOTFOUND, HWND};
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSIDFromProgID, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT,
     DISPPARAMS, EXCEPINFO, IDispatch, SAFEARRAY, SAFEARRAYBOUND,
 };
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 use windows::Win32::System::Ole::{
     DISPID_PROPERTYPUT, SafeArrayAccessData, SafeArrayCreate, SafeArrayGetDim, SafeArrayGetLBound,
     SafeArrayGetUBound, SafeArrayUnaccessData,
+};
+use windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, WaitForSingleObject,
 };
 use windows::Win32::System::Variant::{
     VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_ARRAY, VT_BOOL, VT_BSTR, VT_DATE,
@@ -36,16 +55,40 @@ use windows::Win32::System::Variant::{
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::core::{GUID, PCWSTR, w};
 
-use crate::util::{ensure_com, wide};
+use crate::util::{OwnedHandle, ensure_com, wide};
 
 /// `LOCALE_USER_DEFAULT`.
 const LOCALE: u32 = 0x0400;
+/// `xlCellValue`, the conditional-format type that compares a cell's value.
+const XL_CELL_VALUE: i32 = 1;
+/// `xlBetween`, `xlGreater`, `xlLess`: the operators of a cell-value conditional format.
+const XL_BETWEEN: i32 = 1;
+const XL_GREATER: i32 = 5;
+const XL_LESS: i32 = 6;
+/// `ColorScaleType` for `AddColorScale`: a three-color scale.
+const THREE_COLOR_SCALE: i32 = 3;
+/// `xlColumns`: series run down the columns of the source data.
+const XL_COLUMNS: i32 = 2;
+/// `xlDatabase`, the pivot cache source type for a range of cells.
+const XL_DATABASE: i32 = 1;
+/// `xlRowField` and `xlColumnField`, the pivot field orientations.
+const XL_ROW_FIELD: i32 = 1;
+const XL_COLUMN_FIELD: i32 = 2;
+/// `xlSum`, the pivot data field function.
+const XL_SUM: i32 = -4157;
+/// Size of a new chart in points.
+const CHART_WIDTH: f64 = 360.0;
+const CHART_HEIGHT: f64 = 216.0;
+/// How long a quit Excel gets to exit by itself before the job object ends it.
+const EXIT_WAIT_MS: u32 = 5000;
 /// Excel's `xlOpenXMLWorkbook`, the `.xlsx` file format.
 const XL_OPEN_XML_WORKBOOK: i32 = 51;
 /// `msoAutomationSecurityForceDisable`: a workbook opened here never runs its macros.
 const FORCE_DISABLE_MACROS: i32 = 3;
 /// The longest one Excel call may take before the caller is told it timed out.
 const CALL_LIMIT: Duration = Duration::from_secs(300);
+/// How long one automation call keeps asking a busy Excel again before it reports the refusal.
+const BUSY_PATIENCE: Duration = Duration::from_secs(10);
 /// How long shutdown waits for Excel to be told to quit.
 const QUIT_WAIT: Duration = Duration::from_secs(20);
 
@@ -209,27 +252,43 @@ fn invoke(
         params.rgdispidNamedArgs = &raw mut put_id;
         params.cNamedArgs = 1;
     }
-    let mut result = VARIANT::default();
-    let mut excep = EXCEPINFO::default();
-    let mut bad_arg = 0u32;
-    // SAFETY: `params` points at `args`, which outlives the call; the result, exception record and
-    // argument-error slot are locals that live for the call.
-    let outcome = unsafe {
-        target.Invoke(
-            id,
-            &GUID::zeroed(),
-            LOCALE,
-            flags,
-            &raw const params,
-            Some(&raw mut result),
-            Some(&raw mut excep),
-            Some(&raw mut bad_arg),
-        )
+    // Excel refuses calls while it is still busy with the last one (drawing a new chart, say) with
+    // RPC_E_SERVERCALL_RETRYLATER or RPC_E_CALL_REJECTED. Waiting and asking again is the documented
+    // answer. 2026-10-28: a pivot right after a chart failed this way on a 2,000-row sheet.
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(20);
+    let (outcome, result, description) = loop {
+        let mut result = VARIANT::default();
+        let mut excep = EXCEPINFO::default();
+        let mut bad_arg = 0u32;
+        // SAFETY: `params` points at `args`, which outlives the call; the result, exception record
+        // and argument-error slot are locals that live for the call.
+        let outcome = unsafe {
+            target.Invoke(
+                id,
+                &GUID::zeroed(),
+                LOCALE,
+                flags,
+                &raw const params,
+                Some(&raw mut result),
+                Some(&raw mut excep),
+                Some(&raw mut bad_arg),
+            )
+        };
+        // The exception record owns three strings that must be freed whether or not it was filled.
+        let description = ManuallyDrop::into_inner(excep.bstrDescription).to_string();
+        drop(ManuallyDrop::into_inner(excep.bstrSource));
+        drop(ManuallyDrop::into_inner(excep.bstrHelpFile));
+        let busy = outcome
+            .as_ref()
+            .is_err_and(|e| matches!(e.code().0 as u32, 0x8001_010A | 0x8001_0001));
+        if busy && started.elapsed() < BUSY_PATIENCE {
+            std::thread::sleep(pause);
+            pause = (pause * 2).min(Duration::from_millis(250));
+            continue;
+        }
+        break (outcome, result, description);
     };
-    // The exception record owns three strings that must be freed whether or not it was filled.
-    let description = ManuallyDrop::into_inner(excep.bstrDescription).to_string();
-    drop(ManuallyDrop::into_inner(excep.bstrSource));
-    drop(ManuallyDrop::into_inner(excep.bstrHelpFile));
     match outcome {
         Ok(()) => Ok(result),
         Err(e) => {
@@ -346,7 +405,8 @@ fn cell_of(v: &VARIANT) -> ExcelCell {
 fn variant_of(cell: &ExcelCell) -> VARIANT {
     match cell {
         ExcelCell::Empty => VARIANT::default(),
-        ExcelCell::Text(t) => VARIANT::from(t.as_str()),
+        // literal text unless it is a formula; see `entered_text`
+        ExcelCell::Text(t) => VARIANT::from(entered_text(t).as_ref()),
         ExcelCell::Number(n) => VARIANT::from(*n),
         ExcelCell::Bool(b) => VARIANT::from(*b),
     }
@@ -457,6 +517,11 @@ struct Session {
     app: Option<IDispatch>,
     books: HashMap<String, IDispatch>,
     made: u32,
+    /// The job object that kills its Excel when this session ends, whatever way the daemon dies.
+    /// Declared after `app` and `books` so they are released first.
+    job: Option<OwnedHandle>,
+    /// A handle on the current Excel process, to wait for it to exit after `Quit`.
+    process: Option<OwnedHandle>,
 }
 
 impl Session {
@@ -544,24 +609,69 @@ impl Session {
             }
             ExcelRequest::AddSheet { workbook, name } => {
                 let book = self.book(workbook)?;
-                let sheets = get_object(book, "Worksheets")?;
-                let count = number_of(&get(&sheets, "Count")?).unwrap_or(1.0) as i32;
-                let last = object(
-                    &method(&sheets, "Item", vec![VARIANT::from(count)])?,
-                    "Worksheets.Item",
-                )?;
-                // Add(Before, After): after the last sheet
-                let added = object(
-                    &method(&sheets, "Add", vec![missing(), VARIANT::from(last)])?,
-                    "Worksheets.Add",
-                )?;
-                if let Err(e) = put(&added, "Name", VARIANT::from(name.as_str())) {
-                    // a bad or taken name leaves a stray sheet behind; take it away again
-                    let _ = method(&added, "Delete", Vec::new());
-                    return Err(e);
-                }
+                add_sheet(book, name)?;
                 Ok(ExcelReply {
                     sheets: sheet_names(book)?,
+                    ..Default::default()
+                })
+            }
+            ExcelRequest::FormatConditional {
+                workbook,
+                sheet,
+                range,
+                rule,
+            } => {
+                let ws = self.sheet(workbook, sheet.as_deref())?;
+                let area = parse_area(range).ok_or_else(|| fail("bad range"))?;
+                let target = range_of(&ws, &area.address())?;
+                format_conditional(&target, rule)?;
+                Ok(ExcelReply {
+                    address: Some(area.address()),
+                    ..Default::default()
+                })
+            }
+            ExcelRequest::Chart {
+                workbook,
+                sheet,
+                range,
+                kind,
+                title,
+                at,
+            } => {
+                let ws = self.sheet(workbook, sheet.as_deref())?;
+                let area = parse_area(range).ok_or_else(|| fail("bad range"))?;
+                let anchor = at.clone().unwrap_or_else(|| default_chart_anchor(&area));
+                let name = add_chart(&ws, &area, *kind, title.as_deref(), &anchor)?;
+                Ok(ExcelReply {
+                    name: Some(name),
+                    address: Some(anchor),
+                    ..Default::default()
+                })
+            }
+            ExcelRequest::Pivot {
+                workbook,
+                sheet,
+                range,
+                rows,
+                sum_field,
+                columns,
+                name,
+            } => {
+                let source = self.sheet(workbook, sheet.as_deref())?;
+                let book = self.book(workbook)?;
+                let area = parse_area(range).ok_or_else(|| fail("bad range"))?;
+                let (sheet_name, address) = add_pivot(
+                    book,
+                    &source,
+                    &area,
+                    rows,
+                    sum_field,
+                    columns.as_deref(),
+                    name,
+                )?;
+                Ok(ExcelReply {
+                    name: Some(sheet_name),
+                    address: Some(address),
                     ..Default::default()
                 })
             }
@@ -639,18 +749,18 @@ impl Session {
         let app: IDispatch = unsafe { CoCreateInstance(&clsid, None, CLSCTX_LOCAL_SERVER) }
             .map_err(|e| fail(format!("could not start Excel: {e}")))?;
         // Never touch the person's Excel. A fresh process has a pid that was not running a moment ago.
-        if !before.is_empty() {
-            let hwnd = number_of(&get(&app, "Hwnd")?).unwrap_or(0.0) as isize;
-            let mut pid = 0u32;
-            // SAFETY: only reads the owning pid of a window handle into a local.
-            unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut c_void), Some(&raw mut pid)) };
+        let pid = if before.is_empty() {
+            excel_pid(&app).ok()
+        } else {
+            let pid = excel_pid(&app)?;
             if pid == 0 || before.contains(&pid) {
                 // dropping `app` only releases our reference; it does not quit anything
                 return Err(fail(
                     "Windows handed back an Excel that was already running; this tool will not use it",
                 ));
             }
-        }
+            Some(pid)
+        };
         put(&app, "Visible", VARIANT::from(false))?;
         put(&app, "DisplayAlerts", VARIANT::from(false))?;
         // best effort: no macros, no workbook events, no link prompts
@@ -662,7 +772,39 @@ impl Session {
         let _ = put(&app, "EnableEvents", VARIANT::from(false));
         let _ = put(&app, "AskToUpdateLinks", VARIANT::from(false));
         self.app = Some(app);
+        self.confine(pid);
         Ok(())
+    }
+
+    /// Put the Excel process `pid` in this session's job object, so the operating system ends it
+    /// when the daemon dies. Failing to is not fatal: the tool still works and still quits Excel
+    /// on a normal shutdown, it just loses the protection against a hard kill, and says so.
+    fn confine(&mut self, pid: Option<u32>) {
+        let Some(pid) = pid.filter(|p| *p != 0) else {
+            eprintln!(
+                "excel: could not read the Excel process id, so it is not tied to this process's life"
+            );
+            return;
+        };
+        if self.job.is_none() {
+            match new_kill_on_close_job() {
+                Ok(job) => self.job = Some(job),
+                Err(why) => {
+                    eprintln!(
+                        "excel: no job object, a killed daemon would leave Excel running: {why}"
+                    );
+                    return;
+                }
+            }
+        }
+        if let Some(job) = &self.job {
+            match assign_to_job(job, pid) {
+                Ok(process) => self.process = Some(process),
+                Err(why) => eprintln!(
+                    "excel: could not put Excel (pid {pid}) in the job object, a killed daemon would leave it running: {why}"
+                ),
+            }
+        }
     }
 
     /// Close what is open without saving and quit our Excel. Best effort, safe to repeat.
@@ -672,6 +814,280 @@ impl Session {
         }
         if let Some(app) = self.app.take() {
             let _ = method(&app, "Quit", Vec::new());
+            // Excel does not exit while a reference to it is held, and the job object would end it
+            // mid-shutdown; let go, then give it a moment to leave on its own.
+            drop(app);
+            if let Some(process) = self.process.as_ref() {
+                // SAFETY: waits on a process handle we opened with SYNCHRONIZE and still own.
+                unsafe { WaitForSingleObject(process.0, EXIT_WAIT_MS) };
+            }
+        }
+        self.process = None;
+    }
+}
+
+/// The process id behind Excel's main window.
+fn excel_pid(app: &IDispatch) -> XResult<u32> {
+    let hwnd = number_of(&get(app, "Hwnd")?).unwrap_or(0.0) as isize;
+    let mut pid = 0u32;
+    // SAFETY: only reads the owning pid of a window handle into a local.
+    unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut c_void), Some(&raw mut pid)) };
+    Ok(pid)
+}
+
+/// A job object whose processes are all killed when its last handle closes.
+fn new_kill_on_close_job() -> Result<OwnedHandle, String> {
+    // SAFETY: an unnamed job object with default security; the handle is ours to close.
+    let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+        .map(OwnedHandle::new)
+        .map_err(|e| format!("CreateJobObject: {e}"))?;
+    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: `info` is a live extended-limit record and the length given is its exact size.
+    unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            (&raw const info).cast::<c_void>(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    }
+    .map_err(|e| format!("SetInformationJobObject: {e}"))?;
+    Ok(job)
+}
+
+/// Move process `pid` into `job`; the returned handle can be waited on until the process exits.
+fn assign_to_job(job: &OwnedHandle, pid: u32) -> Result<OwnedHandle, String> {
+    // SAFETY: OpenProcess takes plain values; the handle it returns is ours to close.
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .map(OwnedHandle::new)
+    .map_err(|e| format!("OpenProcess: {e}"))?;
+    // SAFETY: both handles are live and owned by us for the whole call.
+    unsafe { AssignProcessToJobObject(job.0, process.0) }
+        .map_err(|e| format!("AssignProcessToJobObject: {e}"))?;
+    Ok(process)
+}
+
+/// A new worksheet after the last one, named `name`. A bad or taken name leaves no stray sheet.
+fn add_sheet(book: &IDispatch, name: &str) -> XResult<IDispatch> {
+    let sheets = get_object(book, "Worksheets")?;
+    let count = number_of(&get(&sheets, "Count")?).unwrap_or(1.0) as i32;
+    let last = object(
+        &method(&sheets, "Item", vec![VARIANT::from(count)])?,
+        "Worksheets.Item",
+    )?;
+    // Add(Before, After): after the last sheet
+    let added = object(
+        &method(&sheets, "Add", vec![missing(), VARIANT::from(last)])?,
+        "Worksheets.Add",
+    )?;
+    if let Err(e) = put(&added, "Name", VARIANT::from(name)) {
+        // a bad or taken name leaves a stray sheet behind; take it away again
+        let _ = method(&added, "Delete", Vec::new());
+        return Err(e);
+    }
+    Ok(added)
+}
+
+/// Add one conditional format to `target` (a Range).
+fn format_conditional(target: &IDispatch, rule: &ExcelRule) -> XResult<()> {
+    let conditions = get_object(target, "FormatConditions")?;
+    let (operator, formulas, color) = match rule {
+        ExcelRule::ColorScale => {
+            method(
+                &conditions,
+                "AddColorScale",
+                vec![VARIANT::from(THREE_COLOR_SCALE)],
+            )?;
+            return Ok(());
+        }
+        ExcelRule::GreaterThan { value, color } => (XL_GREATER, vec![VARIANT::from(*value)], color),
+        ExcelRule::LessThan { value, color } => (XL_LESS, vec![VARIANT::from(*value)], color),
+        ExcelRule::Between { low, high, color } => (
+            XL_BETWEEN,
+            vec![VARIANT::from(*low), VARIANT::from(*high)],
+            color,
+        ),
+    };
+    let mut args = vec![VARIANT::from(XL_CELL_VALUE), VARIANT::from(operator)];
+    args.extend(formulas);
+    let condition = object(&method(&conditions, "Add", args)?, "FormatConditions.Add")?;
+    let fill = get_object(&condition, "Interior")?;
+    put(&fill, "Color", VARIANT::from(*color as i32))?;
+    Ok(())
+}
+
+/// Add a chart of `area` with its top-left corner at the cell `anchor`; returns Excel's name for it.
+fn add_chart(
+    sheet: &IDispatch,
+    area: &Area,
+    kind: ExcelChartKind,
+    title: Option<&str>,
+    anchor: &str,
+) -> XResult<String> {
+    let corner = range_of(sheet, anchor)?;
+    let left = number_of(&get(&corner, "Left")?).unwrap_or(0.0);
+    let top = number_of(&get(&corner, "Top")?).unwrap_or(0.0);
+    let source = range_of(sheet, &area.address())?;
+    // Shapes.AddChart2 (Excel 2013 and later); ChartObjects.Add is the older route to the same chart
+    let shapes = get_object(sheet, "Shapes")?;
+    let made = method(
+        &shapes,
+        "AddChart2",
+        vec![
+            VARIANT::from(-1i32),
+            VARIANT::from(kind.xl_type()),
+            VARIANT::from(left),
+            VARIANT::from(top),
+            VARIANT::from(CHART_WIDTH),
+            VARIANT::from(CHART_HEIGHT),
+        ],
+    )
+    .and_then(|v| object(&v, "Shapes.AddChart2"));
+    let (holder, chart) = match made {
+        Ok(shape) => {
+            let chart = get_object(&shape, "Chart")?;
+            (shape, chart)
+        }
+        Err(e) if e.gone => return Err(e),
+        Err(_) => {
+            let objects = object(
+                &method(sheet, "ChartObjects", Vec::new())?,
+                "Worksheet.ChartObjects",
+            )?;
+            let args = vec![
+                VARIANT::from(left),
+                VARIANT::from(top),
+                VARIANT::from(CHART_WIDTH),
+                VARIANT::from(CHART_HEIGHT),
+            ];
+            let co = object(&method(&objects, "Add", args)?, "ChartObjects.Add")?;
+            let chart = get_object(&co, "Chart")?;
+            (co, chart)
+        }
+    };
+    let finish = || -> XResult<String> {
+        put(&chart, "ChartType", VARIANT::from(kind.xl_type()))?;
+        method(
+            &chart,
+            "SetSourceData",
+            vec![VARIANT::from(source.clone()), VARIANT::from(XL_COLUMNS)],
+        )?;
+        if let Some(text) = title {
+            put(&chart, "HasTitle", VARIANT::from(true))?;
+            let heading = get_object(&chart, "ChartTitle")?;
+            put(&heading, "Text", VARIANT::from(text))?;
+        }
+        Ok(text_of(&get(&holder, "Name")?).unwrap_or_default())
+    };
+    finish().inspect_err(|_| {
+        // do not leave a half-made chart on the sheet
+        let _ = method(&holder, "Delete", Vec::new());
+    })
+}
+
+/// Build a pivot table of `area` on a new sheet called `name`. Returns the sheet's name and the
+/// table's address. The headers are checked first, and a missing one is named in the error
+/// without listing what the header row does hold.
+fn add_pivot(
+    book: &IDispatch,
+    source: &IDispatch,
+    area: &Area,
+    rows: &str,
+    sum_field: &str,
+    columns: Option<&str>,
+    name: &str,
+) -> XResult<(String, String)> {
+    let header_row = Area { rows: 1, ..*area };
+    let header_cells = read_grid(&get(&range_of(source, &header_row.address())?, "Value2")?)?;
+    let headers = header_cells.into_iter().next().unwrap_or_default();
+    let header = |want: &str, role: &str| {
+        find_header(&headers, want).ok_or_else(|| {
+            fail(format!(
+                "no column headed {want:?} in the first row of {} ({role})",
+                area.address()
+            ))
+        })
+    };
+    let rows = header(rows, "rows")?;
+    let sum_field = header(sum_field, "sum_field")?;
+    let columns = columns.map(|c| header(c, "columns")).transpose()?;
+
+    let source_name = text_of(&get(source, "Name")?).unwrap_or_default();
+    let reference = format!(
+        "'{}'!R{}C{}:R{}C{}",
+        source_name.replace('\'', "''"),
+        area.row,
+        area.col,
+        area.row + area.rows - 1,
+        area.col + area.cols - 1
+    );
+    let added = add_sheet(book, name)?;
+    let build = || -> XResult<String> {
+        let caches = object(
+            &method(book, "PivotCaches", Vec::new())?,
+            "Workbook.PivotCaches",
+        )?;
+        let cache = object(
+            &method(
+                &caches,
+                "Create",
+                vec![
+                    VARIANT::from(XL_DATABASE),
+                    VARIANT::from(reference.as_str()),
+                ],
+            )?,
+            "PivotCaches.Create",
+        )?;
+        let corner = range_of(&added, "A3")?;
+        let table = object(
+            &method(
+                &cache,
+                "CreatePivotTable",
+                vec![VARIANT::from(corner), VARIANT::from("PivotTable1")],
+            )?,
+            "PivotCache.CreatePivotTable",
+        )?;
+        let field = |header: &str| -> XResult<IDispatch> {
+            object(
+                &method(&table, "PivotFields", vec![VARIANT::from(header)])?,
+                "PivotTable.PivotFields",
+            )
+        };
+        put(&field(&rows)?, "Orientation", VARIANT::from(XL_ROW_FIELD))?;
+        if let Some(columns) = &columns {
+            put(
+                &field(columns)?,
+                "Orientation",
+                VARIANT::from(XL_COLUMN_FIELD),
+            )?;
+        }
+        method(
+            &table,
+            "AddDataField",
+            vec![
+                VARIANT::from(field(&sum_field)?),
+                VARIANT::from(format!("Sum of {sum_field}").as_str()),
+                VARIANT::from(XL_SUM),
+            ],
+        )?;
+        let shown = get_object(&table, "TableRange1")?;
+        Ok(text_of(&get(&shown, "Address")?)
+            .unwrap_or_default()
+            .replace('$', ""))
+    };
+    match build() {
+        Ok(address) => Ok((name.to_string(), address)),
+        Err(e) => {
+            // do not leave a half-built pivot sheet behind
+            let _ = method(&added, "Delete", Vec::new());
+            Err(e)
         }
     }
 }
@@ -924,5 +1340,331 @@ mod tests {
             ExcelCell::Number((rows - 1) as f64 * 2.0)
         );
         host.shutdown();
+    }
+
+    /// Unwrap an Excel call, showing Excel's own message when it failed.
+    fn ok<T>(r: XResult<T>) -> T {
+        r.unwrap_or_else(|f| panic!("{}", f.msg))
+    }
+
+    /// Run `body` on its own thread against a bare [`Session`], the way the worker does, so a test
+    /// can reach Excel's objects directly. The session quits its Excel when `body` returns.
+    fn with_session<T: Send + 'static>(body: impl FnOnce(&mut Session) -> T + Send + 'static) -> T {
+        std::thread::spawn(move || {
+            // SAFETY: plain COM init on this thread, which only drives Excel; undone below.
+            let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+            let mut session = Session::default();
+            let out = body(&mut session);
+            session.quit();
+            drop(session);
+            if inited {
+                // SAFETY: balances the CoInitializeEx above; every interface went with `session`.
+                unsafe { CoUninitialize() };
+            }
+            out
+        })
+        .join()
+        .expect("the session thread panicked")
+    }
+
+    #[test]
+    #[ignore = "drives a real hidden Excel; run with: cargo test -p wh-win --release -- --ignored excel"]
+    fn excel_conditional_format_chart_pivot_and_literal_text_survive_save_and_reopen() {
+        let _one = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            excel_pids().is_empty(),
+            "another Excel is running; this test needs to own the only one"
+        );
+        let started = Instant::now();
+        let path =
+            std::env::temp_dir().join(format!("hekaton-excel-feat-{}.xlsx", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path_s = path.to_string_lossy().into_owned();
+        let saved_path = path_s.clone();
+        with_session(move |s| {
+            let t = |x: &str| ExcelCell::Text(x.into());
+            let n = ExcelCell::Number;
+            let regions = ["East", "West", "North", "South"];
+            let mut values = vec![vec![t("Region"), t("Product"), t("Qty"), t("Price")]];
+            let mut total = 0.0;
+            for i in 0..200usize {
+                let qty = (i % 9 + 1) as f64;
+                total += qty;
+                let product = if i == 0 {
+                    "007".to_string()
+                } else {
+                    format!("P{}", i % 5)
+                };
+                values.push(vec![
+                    t(regions[i % 4]),
+                    t(&product),
+                    n(qty),
+                    n(1.5 + (i % 3) as f64),
+                ]);
+            }
+            let lap = Instant::now();
+            let wb = s
+                .handle(&ExcelRequest::New)
+                .expect("new")
+                .workbook
+                .expect("handle");
+            eprintln!("new: {:?}", lap.elapsed());
+            let lap = Instant::now();
+            s.handle(&ExcelRequest::Write {
+                workbook: wb.clone(),
+                sheet: None,
+                range: "A1".into(),
+                values,
+            })
+            .expect("write 200 rows");
+            eprintln!("write 201 x 4: {:?}", lap.elapsed());
+
+            let lap = Instant::now();
+            s.handle(&ExcelRequest::FormatConditional {
+                workbook: wb.clone(),
+                sheet: None,
+                range: "C2:C201".into(),
+                rule: ExcelRule::GreaterThan {
+                    value: 5.0,
+                    color: 0x0000FF,
+                },
+            })
+            .expect("conditional format");
+            eprintln!("conditional format: {:?}", lap.elapsed());
+
+            let lap = Instant::now();
+            let chart = s
+                .handle(&ExcelRequest::Chart {
+                    workbook: wb.clone(),
+                    sheet: None,
+                    range: "C1:D201".into(),
+                    kind: ExcelChartKind::Column,
+                    title: Some("Qty and price".into()),
+                    at: None,
+                })
+                .expect("chart");
+            eprintln!(
+                "chart {:?} at {:?}: {:?}",
+                chart.name,
+                chart.address,
+                lap.elapsed()
+            );
+            assert!(
+                chart.name.is_some_and(|n| !n.is_empty()),
+                "the chart is named"
+            );
+            assert_eq!(chart.address.as_deref(), Some("G1"));
+
+            let lap = Instant::now();
+            let pivot = s
+                .handle(&ExcelRequest::Pivot {
+                    workbook: wb.clone(),
+                    sheet: None,
+                    range: "A1:D201".into(),
+                    rows: "Region".into(),
+                    sum_field: "Qty".into(),
+                    columns: None,
+                    name: "Pivot".into(),
+                })
+                .expect("pivot");
+            eprintln!(
+                "pivot on {:?} at {:?}: {:?}",
+                pivot.name,
+                pivot.address,
+                lap.elapsed()
+            );
+            assert_eq!(pivot.name.as_deref(), Some("Pivot"));
+            let address = pivot.address.expect("the pivot's address");
+
+            // a header that is not there is named, with no stray sheet left behind
+            let err = s
+                .handle(&ExcelRequest::Pivot {
+                    workbook: wb.clone(),
+                    sheet: None,
+                    range: "A1:D201".into(),
+                    rows: "Regon".into(),
+                    sum_field: "Qty".into(),
+                    columns: None,
+                    name: "Second".into(),
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("Regon") && !err.contains("Product"), "{err}");
+
+            let lap = Instant::now();
+            s.handle(&ExcelRequest::SaveAs {
+                workbook: wb.clone(),
+                path: saved_path.clone(),
+            })
+            .expect("save_as");
+            s.handle(&ExcelRequest::Close { workbook: wb })
+                .expect("close");
+            eprintln!("save and close: {:?}", lap.elapsed());
+
+            // reopen the file in a fresh instance and check what was saved
+            let lap = Instant::now();
+            let wb2 = s
+                .handle(&ExcelRequest::Open { path: saved_path })
+                .expect("reopen")
+                .workbook
+                .expect("handle");
+            let sheets = ok(sheet_names(ok(s.book(&wb2))));
+            assert_eq!(sheets, vec!["Sheet1".to_string(), "Pivot".to_string()]);
+            let table = s
+                .handle(&ExcelRequest::Read {
+                    workbook: wb2.clone(),
+                    sheet: Some("Pivot".into()),
+                    range: address.clone(),
+                    formulas: false,
+                })
+                .expect("read the pivot");
+            let grand = table
+                .values
+                .last()
+                .and_then(|row| row.last())
+                .cloned()
+                .expect("a grand total cell");
+            assert_eq!(
+                grand,
+                ExcelCell::Number(total),
+                "the pivot's Grand Total is the sum written ({address}: {:?})",
+                table.values
+            );
+            assert_eq!(
+                table.values.first().map(|r| r[0].clone()),
+                Some(ExcelCell::Text("Row Labels".into()))
+            );
+
+            let ws = ok(s.sheet(&wb2, Some("Sheet1")));
+            let charts = ok(get(
+                &ok(method(&ws, "ChartObjects", Vec::new())
+                    .and_then(|v| object(&v, "ChartObjects"))),
+                "Count",
+            ));
+            assert_eq!(number_of(&charts), Some(1.0), "one chart survived the save");
+            let conditions = ok(get_object(
+                &ok(range_of(&ws, "C2:C201")),
+                "FormatConditions",
+            ));
+            let count = number_of(&ok(get(&conditions, "Count"))).unwrap_or(0.0);
+            assert!(count >= 1.0, "the conditional format survived: {count}");
+
+            let product = s
+                .handle(&ExcelRequest::Read {
+                    workbook: wb2.clone(),
+                    sheet: Some("Sheet1".into()),
+                    range: "B2:B3".into(),
+                    formulas: true,
+                })
+                .expect("read the 007 cell");
+            eprintln!(
+                "B2:B3 values {:?}, formulas {:?}",
+                product.values, product.formulas
+            );
+            assert_eq!(product.values[0][0], ExcelCell::Text("007".into()));
+            assert_eq!(product.values[1][0], ExcelCell::Text("P1".into()));
+            // the quote prefix is a cell format, not part of the string: a number-looking read is text
+            let qty = s
+                .handle(&ExcelRequest::Read {
+                    workbook: wb2.clone(),
+                    sheet: Some("Sheet1".into()),
+                    range: "C2".into(),
+                    formulas: false,
+                })
+                .expect("read a number");
+            assert_eq!(qty.values, vec![vec![ExcelCell::Number(1.0)]]);
+            eprintln!("reopen and check: {:?}", lap.elapsed());
+            s.handle(&ExcelRequest::Close { workbook: wb2 })
+                .expect("close again");
+        });
+        let _ = std::fs::remove_file(&path);
+        let gone = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(200));
+            excel_pids().is_empty()
+        });
+        assert!(gone, "an Excel process is still running after the session");
+        eprintln!("whole format/chart/pivot test: {:?}", started.elapsed());
+    }
+
+    /// The child half of the job object test: own a hidden Excel, say its pid, then wait to be killed.
+    /// Without `WH_EXCEL_JOB_CHILD` in the environment this does nothing.
+    #[test]
+    #[ignore = "helper process of the job object test (drives a real hidden Excel)"]
+    fn excel_job_child_owner() {
+        use std::io::Write;
+        if std::env::var_os("WH_EXCEL_JOB_CHILD").is_none() {
+            return;
+        }
+        let host = Host::default();
+        host.run(&ExcelRequest::New).expect("new");
+        let pid = excel_pids().first().copied().unwrap_or(0);
+        println!("EXCEL_PID={pid}");
+        let _ = std::io::stdout().flush();
+        std::thread::sleep(Duration::from_secs(300));
+        host.shutdown();
+    }
+
+    #[test]
+    #[ignore = "drives a real hidden Excel; run with: cargo test -p wh-win --release -- --ignored excel"]
+    fn excel_job_object_ends_an_orphaned_excel_when_its_owner_is_killed() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        if std::env::var_os("WH_EXCEL_JOB_CHILD").is_some() {
+            return;
+        }
+        let _one = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            excel_pids().is_empty(),
+            "another Excel is running; this test needs to own the only one"
+        );
+        let started = Instant::now();
+        // module_path is `wh_win::excel::tests`; the test filter wants it without the crate name
+        let here = module_path!().split_once("::").map_or("", |(_, rest)| rest);
+        let mut child = Command::new(std::env::current_exe().expect("the test binary"))
+            .arg(format!("{here}::excel_job_child_owner"))
+            .args(["--exact", "--ignored", "--nocapture"])
+            .env("WH_EXCEL_JOB_CHILD", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the owner process");
+        let out = child.stdout.take().expect("the owner's output");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                if let Some(pid) = line.trim().strip_prefix("EXCEL_PID=") {
+                    let _ = tx.send(pid.parse::<u32>().unwrap_or(0));
+                    break;
+                }
+            }
+        });
+        let pid = rx.recv_timeout(Duration::from_secs(90)).unwrap_or(0);
+        let alive = pid != 0 && excel_pids().contains(&pid);
+        eprintln!(
+            "owner started Excel pid {pid} after {:?}",
+            started.elapsed()
+        );
+        // the owner dies without running any cleanup
+        let _ = child.kill();
+        let _ = child.wait();
+        let t = Instant::now();
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            excel_pids().is_empty()
+        });
+        eprintln!(
+            "Excel gone {:?} after the owner was killed: {gone}",
+            t.elapsed()
+        );
+        if !gone {
+            // do not leave the test's own Excel behind
+            for p in excel_pids() {
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &p.to_string()])
+                    .output();
+            }
+        }
+        assert!(alive, "the owner never started an Excel");
+        assert!(gone, "the owner was killed and its Excel kept running");
     }
 }
