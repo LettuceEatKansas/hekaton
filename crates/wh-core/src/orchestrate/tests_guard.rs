@@ -168,7 +168,7 @@ fn a_store_app_is_judged_by_the_program_inside_its_frame() {
 }
 
 #[test]
-fn a_regex_scope_matches_the_lowercased_title_case_insensitively() {
+fn title_scopes_match_the_title_in_any_case() {
     let kit = Kit::new();
     let wiki = add(&kit, "The WIKI page - Edge", "msedge.exe", 1, "C");
     let other = add(&kit, "Wikipedia - Edge", "msedge.exe", 2, "C");
@@ -180,10 +180,14 @@ fn a_regex_scope_matches_the_lowercased_title_case_insensitively() {
         kit.ctx(json!({"only_apps": ["msedge.exe:re:(["]}))
             .check_allowed(wiki),
     );
-    // a substring scope is NOT lowercased: a capital in it never matches the lowercased title
+    // 2026-10-29: a plain title part matches in any case ("com.apple.TextEdit:Untitled" used to
+    // refuse its own window), and still only that app's matching windows
+    kit.ctx(json!({"only_apps": ["msedge.exe:WIKI page"]}))
+        .check_allowed(wiki)
+        .unwrap();
     refused(
-        kit.ctx(json!({"only_apps": ["msedge.exe:WIKI"]}))
-            .check_allowed(wiki),
+        kit.ctx(json!({"only_apps": ["msedge.exe:WIKI page"]}))
+            .check_allowed(other),
     );
 }
 
@@ -508,19 +512,27 @@ fn a_bare_app_name_may_launch_its_allowlisted_exe() {
 fn a_mac_app_name_in_the_allowlist_allows_its_bundle() {
     let kit = Kit::new();
     kit.front("Untitled", "com.apple.TextEdit", 5);
-    kit.step_only(&["TextEdit"], json!({"action": "key", "text": "cmd+a", "shot": false}))
-        .unwrap();
+    kit.step_only(
+        &["TextEdit"],
+        json!({"action": "key", "text": "cmd+a", "shot": false}),
+    )
+    .unwrap();
     let err = kit
-        .step_only(&["Calculator"], json!({"action": "key", "text": "cmd+a", "shot": false}))
+        .step_only(
+            &["Calculator"],
+            json!({"action": "key", "text": "cmd+a", "shot": false}),
+        )
         .unwrap_err();
     assert!(err.to_string().contains("may not touch"), "{err}");
     // a dotted entry is a bundle id and must match all of it
     assert!(
-        kit.step_only(&["apple.textedit"], json!({"action": "key", "text": "cmd+a", "shot": false}))
-            .is_err()
+        kit.step_only(
+            &["apple.textedit"],
+            json!({"action": "key", "text": "cmd+a", "shot": false})
+        )
+        .is_err()
     );
 }
-
 
 #[cfg(not(windows))]
 #[test]

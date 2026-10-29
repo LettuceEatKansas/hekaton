@@ -100,7 +100,11 @@ pub(crate) fn normalize_only_app(entry: &str) -> String {
 /// A Mac app name or bundle id the allowlist names: listed as is, or the name is the last part of a
 /// listed bundle id ("safari", "textedit", "google chrome" for com.google.Chrome).
 fn mac_app_listed(app: &str, names: &BTreeSet<String>) -> bool {
-    if app.is_empty() || !app.chars().all(|c| c.is_alphanumeric() || " -_.".contains(c)) {
+    if app.is_empty()
+        || !app
+            .chars()
+            .all(|c| c.is_alphanumeric() || " -_.".contains(c))
+    {
         return false;
     }
     let squashed: String = app.chars().filter(|c| *c != ' ').collect();
@@ -108,9 +112,9 @@ fn mac_app_listed(app: &str, names: &BTreeSet<String>) -> bool {
     names.contains(app)
         || names.iter().any(|n| {
             n.contains('.')
-                && n.rsplit('.').next().is_some_and(|last| {
-                    last == app || last == squashed || last == last_word
-                })
+                && n.rsplit('.')
+                    .next()
+                    .is_some_and(|last| last == app || last == squashed || last == last_word)
         })
 }
 
@@ -354,10 +358,12 @@ impl Ctx<'_> {
     fn allows_bundle_name(&self, name: &str) -> bool {
         !cfg!(windows)
             && name.contains('.')
-            && name
-                .rsplit('.')
-                .next()
-                .is_some_and(|last| self.o.only_apps.iter().any(|a| !a.contains('.') && a == last))
+            && name.rsplit('.').next().is_some_and(|last| {
+                self.o
+                    .only_apps
+                    .iter()
+                    .any(|a| !a.contains('.') && a == last)
+            })
     }
 
     fn check_allowed_at(&self, w: WindowRef, depth: u32) -> StepResult<()> {
@@ -398,7 +404,8 @@ impl Ctx<'_> {
         }
         // "msedge.exe:inprivate" allows that app only when its lowercased window title contains the
         // part after ':' (so an eval can use a private Edge window but never the owner's own Edge
-        // profile). The part is not lowercased: write it in lower case, or use re: for any case.
+        // profile). 2026-10-29: the part used to need writing in lower case, so
+        // "com.apple.TextEdit:Untitled" refused its own window; any case matches now (re: as before).
         let parts: Vec<&str> = self
             .o
             .only_apps
@@ -412,7 +419,13 @@ impl Ctx<'_> {
                 .as_ref()
                 .map(|i| i.title.to_lowercase())
                 .unwrap_or_default();
-            if parts.iter().any(|p| scope_matches(p, &title, true)) {
+            if parts.iter().any(|p| {
+                if p.starts_with("re:") {
+                    scope_matches(p, &title, true)
+                } else {
+                    title.contains(&p.to_lowercase())
+                }
+            }) {
                 return Ok(());
             }
         }
