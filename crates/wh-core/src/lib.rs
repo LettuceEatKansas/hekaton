@@ -29,6 +29,7 @@ pub mod paths;
 pub mod prof;
 pub mod recipes;
 pub mod request;
+pub mod safety;
 pub mod scale;
 pub mod settle;
 pub mod state;

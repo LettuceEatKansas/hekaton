@@ -305,3 +305,30 @@ fn the_exe_is_wh_when_it_is_called_wh() {
     #[cfg(windows)]
     assert!(invoked_as_wh(OsStr::new(r"C:\tools\bin\wh.exe")));
 }
+
+#[test]
+fn only_a_person_at_a_terminal_can_release_the_gaming_lock() {
+    let c = cfg(MapEnv::new());
+    let dir = c.paths().dir();
+    let mut out = Vec::new();
+    assert_eq!(run_unlock(dir, false, &mut || None, &mut out), 0, "not on");
+    wh_core::safety::lock(dir, "gaming").unwrap();
+    // a model running `unlock` through a non-interactive shell
+    let mut out = Vec::new();
+    assert_eq!(
+        run_unlock(dir, false, &mut || Some("unlock".into()), &mut out),
+        1
+    );
+    assert!(wh_core::safety::locked(dir).is_some());
+    // a person who does not type the word
+    assert_eq!(
+        run_unlock(dir, true, &mut || Some("yes".into()), &mut out),
+        1
+    );
+    assert!(wh_core::safety::locked(dir).is_some());
+    assert_eq!(
+        run_unlock(dir, true, &mut || Some("unlock\n".into()), &mut out),
+        0
+    );
+    assert!(wh_core::safety::locked(dir).is_none());
+}

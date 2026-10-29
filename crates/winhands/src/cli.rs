@@ -20,7 +20,7 @@ use crate::start::Starter;
 use crate::wh::{self, Exit};
 
 /// The short usage line.
-pub const USAGE: &str = "usage: hands (or winhands) <acknowledge|status|start|stop|pause|resume|doctor|daemon|mcp|wh|--version|--build-info>";
+pub const USAGE: &str = "usage: hands (or winhands) <acknowledge|status|start|stop|pause|resume|lock|unlock|doctor|daemon|mcp|wh|--version|--build-info>";
 
 fn exe_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winhands"))
@@ -131,6 +131,8 @@ pub fn main(args: Vec<String>) -> i32 {
         "pause" => cmd_pause(true),
         "resume" => cmd_pause(false),
         "acknowledge" => cmd_acknowledge(),
+        "lock" => cmd_lock(&rest),
+        "unlock" => cmd_unlock(),
         "doctor" => cmd_doctor(rest),
         other => {
             println!("winhands: unknown command {:?}", other);
@@ -474,6 +476,78 @@ fn cmd_acknowledge() -> i32 {
         Ok(code) => code,
         Err(e) => {
             eprintln!("winhands: could not write the acknowledgement: {e}");
+            1
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------ gaming lock
+
+/// `lock [reason...]`: refuse every input until the owner runs `unlock`. Anyone may turn it on.
+fn cmd_lock(rest: &[String]) -> i32 {
+    let cfg = Config::from_system();
+    match wh_core::safety::lock(cfg.paths().dir(), &rest.join(" ")) {
+        Ok(()) => {
+            println!("winhands: gaming lock on; no input is sent until you run `hekaton unlock`");
+            0
+        }
+        Err(e) => {
+            eprintln!("winhands: could not write the gaming lock: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_unlock() -> i32 {
+    let cfg = Config::from_system();
+    let mut read_answer = || {
+        print!("> ");
+        let _ = io::stdout().flush();
+        let mut line = String::new();
+        match io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(line),
+        }
+    };
+    run_unlock(
+        cfg.paths().dir(),
+        io::stdin().is_terminal(),
+        &mut read_answer,
+        &mut io::stdout(),
+    )
+}
+
+/// Release the gaming lock, only for a person at a real terminal who types "unlock". A model
+/// running this through a non-interactive shell gets a refusal: that is not the owner saying yes.
+pub fn run_unlock(
+    dir: &std::path::Path,
+    interactive: bool,
+    read_answer: &mut dyn FnMut() -> Option<String>,
+    out: &mut dyn Write,
+) -> i32 {
+    if wh_core::safety::locked(dir).is_none() {
+        let _ = writeln!(out, "winhands: the gaming lock is not on");
+        return 0;
+    }
+    if !interactive {
+        let _ = writeln!(
+            out,
+            "winhands: unlock needs the owner at a real terminal; nothing changed"
+        );
+        return 1;
+    }
+    let _ = writeln!(out, "Type unlock to let the tool send input again.");
+    if read_answer().is_none_or(|a| a.trim() != "unlock") {
+        let _ = writeln!(out, "winhands: not released");
+        return 1;
+    }
+    match wh_core::safety::unlock(dir) {
+        Ok(_) => {
+            let _ = writeln!(out, "winhands: gaming lock off");
+            0
+        }
+        Err(e) => {
+            let _ = writeln!(out, "winhands: could not remove the gaming lock: {e}");
             1
         }
     }

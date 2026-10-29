@@ -127,6 +127,8 @@ pub struct Computer {
     tool_lock: Mutex<()>,
     /// The previous blind call's trailing settle, still running; the next call joins it first.
     pub(crate) pending_settle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The last `game_lock: "auto"` process scan: when it ran and the game it found.
+    game_scan: Mutex<Option<(std::time::Duration, Option<String>)>>,
 }
 
 impl Computer {
@@ -135,6 +137,7 @@ impl Computer {
         serde_json::json!({
             "backend": self.backend.name(), "version": env!("CARGO_PKG_VERSION"),
             "paused": self.pause.is_paused(), "read_only": crate::config::truthy(&self.cfg.get("read_only")),
+            "profile": self.cfg.profile().name(), "game_lock": self.game_lock(),
             "max_actions": ACTION_LIMIT, "max_images": 8, "budget_ms": 60000,
             "max_budget_ms": 120000, "compact": true, "sessions": true,
             "snapshot_scope": "single unscoped screenshot; tokens consumed per attempted request",
@@ -177,7 +180,45 @@ impl Computer {
             owned_mouse: Mutex::new(false),
             tool_lock: Mutex::new(()),
             pending_settle: Mutex::new(None),
+            game_scan: Mutex::new(None),
         }
+    }
+
+    /// Why input is refused right now, or `None`: the owner's gaming lock, or under
+    /// `game_lock: "auto"` a running game. The process scan is reused for two seconds.
+    pub(crate) fn game_lock(&self) -> Option<String> {
+        if let Some(reason) = crate::safety::locked(self.cfg.paths().dir()) {
+            let why = if reason.is_empty() {
+                String::new()
+            } else {
+                format!(" ({reason})")
+            };
+            return Some(format!(
+                "the owner turned the gaming lock on{why}; only the owner can release it, with \
+                 `hekaton unlock` at a terminal"
+            ));
+        }
+        if !self.cfg.game_lock_auto() {
+            return None;
+        }
+        let now = self.clock.now();
+        let mut scan = self.game_scan.lock().unwrap_or_else(|e| e.into_inner());
+        let game = match scan.as_ref() {
+            Some((at, game)) if now.saturating_sub(*at) < std::time::Duration::from_secs(2) => {
+                game.clone()
+            }
+            _ => {
+                let procs = self.backend.process_table().unwrap_or_default();
+                let game = crate::safety::running_game(&procs, &self.cfg.game_processes());
+                *scan = Some((now, game.clone()));
+                game
+            }
+        };
+        game.map(|exe| {
+            format!(
+                "{exe} is running and game_lock is \"auto\"; input resumes once the game closes"
+            )
+        })
     }
 
     /// Wait for the previous blind call's background settle. True when there was one.

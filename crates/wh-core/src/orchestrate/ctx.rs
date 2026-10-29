@@ -102,6 +102,9 @@ impl<'a> Ctx<'a> {
                 "read-only mode refuses desktop input".into(),
             ));
         }
+        if let Some(why) = self.c.game_lock() {
+            return Err(BackendError::Denied(format!("gaming lock: {why}")));
+        }
         self.check_cancelled()
             .map_err(|error| BackendError::Denied(error.to_string()))
     }

@@ -300,3 +300,87 @@ fn a_blind_call_settles_in_the_background_and_the_next_call_waits_for_it() {
         "a call that returns a shot settles inline"
     );
 }
+
+#[test]
+fn the_gaming_lock_refuses_input_but_not_a_look_until_the_owner_releases_it() {
+    let kit = quiet();
+    kit.front("Editor", "notepad.exe", 7);
+    let dir = kit.computer.config().paths().dir().to_path_buf();
+    crate::safety::lock(&dir, "playing").unwrap();
+    let refused = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a"}), &kit.who);
+    assert!(!refused.ok);
+    let why = refused.error.unwrap();
+    assert!(
+        why.contains("gaming lock") && why.contains("(playing)"),
+        "{why}"
+    );
+    assert!(kit.fake.events().is_empty());
+    let look = kit
+        .computer
+        .execute(&json!({"action":"list_windows"}), &kit.who);
+    assert!(look.ok, "{:?}", look.error);
+    crate::safety::unlock(&dir).unwrap();
+    let typed = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a"}), &kit.who);
+    assert!(typed.ok, "{:?}", typed.error);
+    assert!(!kit.fake.events().is_empty());
+}
+
+#[test]
+fn auto_game_lock_holds_while_a_steam_game_runs() {
+    let kit = Kit::with_env(
+        MapEnv::new()
+            .with("WINHANDS_AUTO_SHOT", "0")
+            .with("WINHANDS_GAME_LOCK", "auto"),
+    );
+    kit.front("Editor", "notepad.exe", 7);
+    kit.fake.set_processes(vec![crate::backend::ProcessInfo {
+        pid: 900,
+        parent_pid: 0,
+        exe_name: "Deadlock.exe".into(),
+        exe_path: Some(r"D:\SteamLibrary\steamapps\common\Deadlock\deadlock.exe".into()),
+        started_at: None,
+        elevated: false,
+    }]);
+    let refused = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a"}), &kit.who);
+    assert!(refused.error.unwrap().contains("Deadlock.exe is running"));
+    assert!(kit.fake.events().is_empty());
+    kit.fake.set_processes(Vec::new());
+    kit.clock.advance(std::time::Duration::from_secs(3));
+    let typed = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a"}), &kit.who);
+    assert!(typed.ok, "{:?}", typed.error);
+}
+
+#[test]
+fn strict_ignores_the_models_destructive_flag_and_needs_an_allowlist() {
+    let kit = Kit::with_env(
+        MapEnv::new()
+            .with("WINHANDS_AUTO_SHOT", "0")
+            .with("WINHANDS_PROFILE", "strict"),
+    );
+    kit.front("Terminal", "term.exe", 4);
+    let bare = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a"}), &kit.who);
+    assert!(bare.error.unwrap().contains("only_apps"));
+    assert!(kit.fake.events().is_empty());
+    let flagged = kit.computer.execute(
+        &json!({"action": "type", "text": r"rm -rf C:\Windows\System32",
+                "allow_destructive": true, "only_apps": ["term.exe"]}),
+        &kit.who,
+    );
+    let text = flagged.result.unwrap_or_default() + &flagged.error.unwrap_or_default();
+    assert!(text.contains("refused:"), "{text}");
+    assert_eq!(kit.fake.typed_text(), "");
+    let look = kit
+        .computer
+        .execute(&json!({"action":"list_windows"}), &kit.who);
+    assert!(look.ok, "a look needs no allowlist");
+}

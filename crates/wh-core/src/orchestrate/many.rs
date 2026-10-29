@@ -760,12 +760,36 @@ impl Computer {
         let mut map = map.clone();
         // The owner's hard line. Per call, never sticky: the refusals are on unless THIS call asked
         // for them off, and the next call starts from on again.
-        let policy = Policy::take_from_args(&mut map);
+        let profile = self.cfg.profile();
+        let mut policy = Policy::take_from_args(&mut map);
+        if !profile.honours_call_opt_in() {
+            // strict: a flag the model wrote is not the owner's approval
+            policy = Policy::REFUSE;
+        }
         let args = Value::Object(map.clone());
         let release = map.get("action").and_then(Value::as_str) == Some("left_mouse_up")
             && !map.contains_key("actions");
         if self.pause.is_paused() && !release {
             return self.fail(&args, &StepError::permission("paused by user hotkey"));
+        }
+        if !release && !only_observes(&args) {
+            if let Some(why) = self.game_lock() {
+                return self.fail(
+                    &args,
+                    &StepError::permission(format!("gaming lock: {why}. No input was sent.")),
+                );
+            }
+            if profile.needs_allowlist()
+                && !args.get("only_apps").is_some_and(truthy)
+                && self.cfg.only_apps_default().is_empty()
+            {
+                return self.fail(
+                    &args,
+                    &StepError::permission(
+                        "the strict profile needs only_apps on every call that acts; no input was sent",
+                    ),
+                );
+            }
         }
         if let Err(refused) = crate::ack::check_acknowledged(&self.cfg, "computer", &args) {
             return self.fail(&args, &refused.into());

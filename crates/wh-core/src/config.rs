@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 
 use crate::env::{Env, SystemEnv};
 use crate::paths::Paths;
+use crate::safety::Profile;
 
 /// The exact line the machine's owner has to type. Every refusal quotes this one string.
 ///
@@ -28,7 +29,7 @@ pub const ACK_COMMAND: &str = "winhands acknowledge";
 pub const LOOPBACK_ADDRESSES: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
 /// Every key this module knows, in the order of the Python `DEFAULTS` table.
-pub const KEYS: [&str; 26] = [
+pub const KEYS: [&str; 29] = [
     "port",
     "bind",
     "allow_remote_bind",
@@ -55,6 +56,9 @@ pub const KEYS: [&str; 26] = [
     "paste_over",
     "protect_processes",
     "read_only",
+    "profile",
+    "game_lock",
+    "game_processes",
 ];
 
 /// The built-in default of `key`, or `None` for a key winhands does not know.
@@ -112,6 +116,12 @@ pub fn default_value(key: &str) -> Option<Value> {
         "paste_over" => Value::from(6),
         // comma-separated exe names never clicked or typed into, whoever is calling
         "protect_processes" => Value::from(""),
+        // named limits: "strict", "normal" or "hackathon" (crate::safety::Profile)
+        "profile" => Value::from("normal"),
+        // "auto" refuses input while a game runs; "off" leaves only the owner's `lock`
+        "game_lock" => Value::from("off"),
+        // comma-separated exe names that count as games besides anything under steamapps\common
+        "game_processes" => Value::from(""),
         _ => return None,
     })
 }
@@ -234,6 +244,11 @@ impl Config {
         if let Some(v) = self.read_file().get(key) {
             return v.clone();
         }
+        if key != "profile"
+            && let Some(v) = self.profile().default_for(key)
+        {
+            return v;
+        }
         default.unwrap_or(Value::Null)
     }
 
@@ -349,8 +364,29 @@ impl Config {
 
     /// Should an acting step wait for a person who just used the input devices?
     /// Python `human_pause()`.
+    /// Always on under the strict profile.
     pub fn human_pause(&self) -> bool {
-        self.flag("human_pause")
+        self.flag("human_pause") || self.profile() == Profile::Strict
+    }
+
+    /// The owner's safety profile. A name it does not know reads as strict, so a typo never
+    /// loosens anything.
+    pub fn profile(&self) -> Profile {
+        Profile::from_name(&self.text("profile")).unwrap_or(Profile::Strict)
+    }
+
+    /// Does a running game hold the gaming lock on (`game_lock: "auto"`)?
+    pub fn game_lock_auto(&self) -> bool {
+        self.text("game_lock").trim().eq_ignore_ascii_case("auto")
+    }
+
+    /// Exe names that count as games for `game_lock: "auto"`, lowercased.
+    pub fn game_processes(&self) -> std::collections::BTreeSet<String> {
+        self.text("game_processes")
+            .split(',')
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty())
+            .collect()
     }
 
     /// "pixels" or "norm1000", lowercased. Python `coords()`.
@@ -607,6 +643,44 @@ mod tests {
         assert!(!off.cfg.human_pause());
     }
 
+    #[test]
+    fn a_profile_moves_defaults_but_an_explicit_value_and_the_pause_stay() {
+        assert_eq!(fx("profile-default").cfg.profile(), Profile::Normal);
+        let fast = fx_env(
+            "profile-fast",
+            MapEnv::new().with("WINHANDS_PROFILE", "hackathon"),
+        );
+        assert_eq!(fast.cfg.settle_max_s(), 1.0);
+        fast.write_config(r#"{"settle_ms": 1200}"#);
+        assert_eq!(
+            fast.cfg.settle_max_s(),
+            1.2,
+            "explicit config beats the profile"
+        );
+        let strict = fx_env(
+            "profile-strict",
+            MapEnv::new()
+                .with("WINHANDS_PROFILE", "strict")
+                .with("WINHANDS_HUMAN_PAUSE", "0"),
+        );
+        assert_eq!(strict.cfg.clip_max(), 5000);
+        assert!(strict.cfg.human_pause(), "strict keeps the pause on");
+        let typo = fx_env(
+            "profile-typo",
+            MapEnv::new().with("WINHANDS_PROFILE", "hackaton"),
+        );
+        assert_eq!(typo.cfg.profile(), Profile::Strict, "a typo never loosens");
+        let auto = fx_env(
+            "game-auto",
+            MapEnv::new()
+                .with("WINHANDS_GAME_LOCK", "Auto")
+                .with("WINHANDS_GAME_PROCESSES", "javaw.exe, Wardogs.exe"),
+        );
+        assert!(auto.cfg.game_lock_auto());
+        assert!(auto.cfg.game_processes().contains("wardogs.exe"));
+        assert!(!fx("game-off").cfg.game_lock_auto());
+    }
+
     // ---- ported from tests/test_20261008_speed_fixes.py and test_shutdown_hygiene.py ----
 
     #[test]
@@ -712,7 +786,7 @@ mod tests {
 
     #[test]
     fn every_default_in_the_table_matches_config_py() {
-        let expect: [(&str, Value); 25] = [
+        let expect: [(&str, Value); 28] = [
             ("port", Value::from(47811)),
             ("bind", Value::from("127.0.0.1")),
             ("allow_remote_bind", Value::from(false)),
@@ -738,6 +812,9 @@ mod tests {
             ("uia_ms", Value::from(300)),
             ("paste_over", Value::from(6)),
             ("protect_processes", Value::from("")),
+            ("profile", Value::from("normal")),
+            ("game_lock", Value::from("off")),
+            ("game_processes", Value::from("")),
         ];
         for (key, value) in expect {
             assert_eq!(default_value(key), Some(value), "default of {key}");
