@@ -146,6 +146,12 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Time between settle looks. 70 ms suits a look that costs tens of milliseconds; a backend
+    /// whose looks read a live frame (a few ms) can look more often and call a still screen sooner.
+    fn settle_look_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(70)
+    }
+
     /// A cheap, roughly `width` x `height` look at `region`, for telling whether the screen is still
     /// moving. A backend that cannot shrink while copying returns the full-size capture.
     fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {

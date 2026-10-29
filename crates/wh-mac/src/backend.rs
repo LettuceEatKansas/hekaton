@@ -189,6 +189,17 @@ impl Backend for MacBackend {
         std::env::var_os("WINHANDS_SETTLE_SYNC").is_none()
     }
 
+    fn settle_look_interval(&self) -> Duration {
+        // A look reads the live stream's newest frame in ~10 ms (see crate::stream), so looking
+        // every 45 ms calls a still screen ~50 ms sooner. Two calm looks still span 90 ms, which
+        // a macOS window or sheet animation (200-300 ms) does not pass for still.
+        if std::env::var_os("WINHANDS_NO_STREAM").is_some() {
+            Duration::from_millis(70)
+        } else {
+            Duration::from_millis(45)
+        }
+    }
+
     fn virtual_screen(&self) -> BackendResult<Rect> {
         Ok(displays::union(&displays::list()?))
     }

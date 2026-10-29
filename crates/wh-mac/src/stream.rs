@@ -6,7 +6,7 @@
 //! screen-recording indicator only shows while an agent is working. Until a new stream delivers its
 //! first frame, callers use the one-shot path. `WINHANDS_NO_STREAM=1` turns streaming off.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -38,6 +38,8 @@ const MAX_STREAM_WIDTH: u32 = 3840;
 const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
 /// `SCFrameStatusComplete`: a frame with new pixels.
 const FRAME_COMPLETE: i64 = 0;
+/// `SCFrameStatusIdle`: nothing changed since the last frame.
+const FRAME_IDLE: i64 = 1;
 
 /// CoreMedia's `CMSampleBuffer`, only ever behind a pointer.
 #[repr(C)]
@@ -225,13 +227,13 @@ fn scale_bgra(
 pub(crate) struct Feed {
     latest: Mutex<Option<Frame>>,
     stopped: AtomicBool,
+    /// Set while the stream reports a blank or suspended display (asleep, locked): its last frame
+    /// is then old, so readers capture fresh instead.
+    paused: AtomicBool,
 }
 
-/// The newest complete frame in a sample, retained.
-fn complete_frame(sample: *mut OpaqueSample) -> Option<Frame> {
-    if sample.is_null() {
-        return None;
-    }
+/// The frame status a sample carries; complete when it says nothing.
+fn frame_status(sample: *mut OpaqueSample) -> i64 {
     // SAFETY: the sample is live for the handler call; every CF read below borrows from it.
     unsafe {
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, 0);
@@ -243,10 +245,16 @@ fn complete_frame(sample: *mut OpaqueSample) -> Option<Frame> {
             if !number.is_null() {
                 CFNumberGetValue(number, CF_NUMBER_SINT64, (&raw mut status).cast());
             }
-            if status != FRAME_COMPLETE {
-                return None;
-            }
+            return status;
         }
+    }
+    FRAME_COMPLETE
+}
+
+/// The pixel buffer of a complete sample, retained.
+fn complete_frame(sample: *mut OpaqueSample) -> Option<Frame> {
+    // SAFETY: the sample is live for the handler call.
+    unsafe {
         let buffer = CMSampleBufferGetImageBuffer(sample);
         if buffer.is_null() {
             return None;
@@ -271,8 +279,17 @@ define_class!(
             if kind.0 != SCStreamOutputType::Screen.0 {
                 return;
             }
+            if sample.is_null() {
+                return;
+            }
+            let feed = self.ivars();
+            let status = frame_status(sample);
+            feed.paused.store(status > FRAME_IDLE, Ordering::Relaxed);
+            if status != FRAME_COMPLETE {
+                return;
+            }
             if let Some(frame) = complete_frame(sample) {
-                *self.ivars().latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+                *feed.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
             }
         }
     }
@@ -309,6 +326,8 @@ type LiveMap = Arc<Mutex<HashMap<u32, Live>>>;
 #[derive(Default)]
 pub(crate) struct Feeds {
     live: LiveMap,
+    /// Displays whose stream is being started on a helper thread.
+    starting: Arc<Mutex<HashSet<u32>>>,
     reaper: OnceLock<()>,
 }
 
@@ -356,14 +375,41 @@ impl Feeds {
         }
         if let Some(l) = live.get_mut(&cg_id) {
             l.last_use = Instant::now();
+            if l.feed.paused.load(Ordering::Relaxed) {
+                return None;
+            }
             let frame = l.feed.latest.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
             let per_point = f64::from(frame.size().0) / f64::from(points.width().max(1));
             return Some((frame, per_point));
         }
-        let display = display()?;
-        let started = start(&display, size)?;
-        live.insert(cg_id, started);
         drop(live);
+        if !self
+            .starting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cg_id)
+        {
+            return None;
+        }
+        let Some(display) = display() else {
+            self.starting.lock().unwrap_or_else(|e| e.into_inner()).remove(&cg_id);
+            return None;
+        };
+        // Setting a stream up takes ~30 ms; this call takes the one-shot path meanwhile.
+        let display = Shared(display);
+        let (live, starting) = (Arc::clone(&self.live), Arc::clone(&self.starting));
+        let spawned = thread::Builder::new()
+            .name("winhands-stream-start".into())
+            .spawn(move || {
+                let display = display;
+                if let Some(started) = start(&display.0, size) {
+                    live.lock().unwrap_or_else(|e| e.into_inner()).insert(cg_id, started);
+                }
+                starting.lock().unwrap_or_else(|e| e.into_inner()).remove(&cg_id);
+            });
+        if spawned.is_err() {
+            self.starting.lock().unwrap_or_else(|e| e.into_inner()).remove(&cg_id);
+        }
         self.start_reaper();
         None
     }

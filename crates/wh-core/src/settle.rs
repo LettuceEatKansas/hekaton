@@ -30,9 +30,9 @@ pub const UIA_RICH_MIN: usize = 4;
 /// How long a window's "exposes UIA" answer is trusted (`computer._UIA_RICH_TTL_S`).
 pub const UIA_RICH_TTL: Duration = Duration::from_secs(10);
 
-/// Pause before the first look, and between looks.
+/// Pause before the first look. The gap between looks is the backend's
+/// [`Backend::settle_look_interval`].
 const FIRST_LOOK_DELAY: Duration = Duration::from_millis(40);
-const LOOK_INTERVAL: Duration = Duration::from_millis(70);
 
 /// How the loop behaves.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,6 +143,7 @@ pub fn settle_with_frame(
 ) -> BackendResult<SettledFrame> {
     let _p = crate::prof::span("settle");
     let calm_needed = params.calm_needed.max(1);
+    let interval = backend.settle_look_interval();
     let start = clock.now();
     let look = || backend.capture_preview(region, PREVIEW_SIZE.0, PREVIEW_SIZE.1);
     checked_sleep(clock, FIRST_LOOK_DELAY, guard)?;
@@ -154,7 +155,7 @@ pub fn settle_with_frame(
     while clock.now().saturating_sub(start) < params.max {
         // 2026-10-11 (macOS): a capture alone takes ~50 ms, so the gap counts from the last look's
         // start, not its end; sleeping the full interval after it made every settle ~120 ms a look.
-        let gap = LOOK_INTERVAL.saturating_sub(clock.now().saturating_sub(looked));
+        let gap = interval.saturating_sub(clock.now().saturating_sub(looked));
         checked_sleep(
             clock,
             gap.min(params.max.saturating_sub(clock.now().saturating_sub(start))),
