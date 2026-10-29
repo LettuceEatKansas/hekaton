@@ -20,6 +20,11 @@
 //!    databases, LSASS memory.
 //! 5. UAC consent: clicking Yes/Allow on a consent.exe or credential prompt.
 //!
+//! The macOS equivalents of 1 to 4 live in the `mac` submodule (`destructive/mac.rs`) and are checked
+//! by the same entry points: `rm -r` of `/System`, `~` and the other roots, `diskutil erase*`,
+//! `dd` onto `/dev/disk*`, `tmutil delete`, `csrutil disable`, `security dump-keychain`, keychain,
+//! browser and SSH-key theft, and so on. Consent on the Mac is handled in `wh-mac` (roles.rs).
+//!
 //! These refusals are ALWAYS on: whether or not `only_apps` is set, whether or not the machine has
 //! been acknowledged, and for every front end (MCP, the `wh` command line, a raw HTTP call).
 //!
@@ -40,6 +45,8 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::backend::{Backend, Point};
+
+mod mac;
 
 /// The argument name of the per-call opt-in.
 pub const OPT_IN: &str = "allow_destructive";
@@ -177,16 +184,21 @@ pub fn is_system_path(path: &str) -> bool {
 
 // Files whose contents ARE the credentials.
 static CREDENTIAL_FILES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [
+    let windows = [
         r"\\ntds\.dit\b",
         r"\\config\\(sam|security|system)\b",
         r"\\user data\\[^\\]*\\?(login data|cookies|web data)\b",
         r"\\(login data|cookies)( for account)?\b.*\\user data\\",
         r"\\logins\.json\b|\\key[34]\.db\b", // Firefox
-    ]
-    .iter()
-    .map(|p| Regex::new(p).expect("CREDENTIAL_FILES"))
-    .collect()
+    ];
+    // The macOS stores (Keychains, Application Support browser folders, Safari cookies). They are
+    // matched on the same backslash-normalised text, so they sit in the same list.
+    windows
+        .iter()
+        .map(|p| p.to_string())
+        .chain(mac::CREDENTIAL_FILES.iter().cloned())
+        .map(|p| Regex::new(&p).expect("CREDENTIAL_FILES"))
+        .collect()
 });
 
 /// True for the files whose contents are credentials (NTDS.dit, SAM/SECURITY/SYSTEM hives, browser
@@ -222,7 +234,7 @@ fn rule(what: &'static str, category: Category, pattern: &str, flags: &str) -> R
 static COMMAND_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     use Category::{CredentialTheft, KillingRecovery, OsDestruction, TurningOffProtection};
     let at_start = |tail: &str| format!("{CMD_START}{tail}");
-    vec![
+    let mut rules = vec![
         // 1. OS destruction
         rule(
             "a format command",
@@ -347,7 +359,9 @@ static COMMAND_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             r"\bmimikatz\b|\bsekurlsa::|\blsadump::",
             "i",
         ),
-    ]
+    ];
+    rules.extend(mac::rules());
+    rules
 });
 
 /// A destructive verb at a command position followed by its arguments (group `rest`).
@@ -428,6 +442,11 @@ impl Policy {
                 }
             }
         }
+        // The macOS half: rm/mv of a whole root or the OS trees or Time Machine backups, readers and
+        // copiers aimed at a key or credential store (see `destructive/mac.rs`).
+        if let Some((what, category)) = mac::check_args(text) {
+            return Err(refuse(what, category, where_));
+        }
         if is_credential_path(text) {
             return Err(refuse(
                 "a credential store path",
@@ -450,6 +469,9 @@ impl Policy {
                 Category::OsDestruction,
                 where_,
             ));
+        }
+        if let Some((what, category)) = mac::check_path(path) {
+            return Err(refuse(what, category, where_));
         }
         if is_credential_path(path) {
             return Err(refuse(
