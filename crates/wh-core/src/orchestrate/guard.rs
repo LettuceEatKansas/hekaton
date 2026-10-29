@@ -426,13 +426,23 @@ impl Ctx<'_> {
         }
         let env = self.cfg().env();
         let low = text.to_lowercase().trim().to_string();
-        let (exe, rest) = real_launch_target(&low);
+        let (mut exe, rest) = real_launch_target(&low);
         let names: BTreeSet<String> = self
             .o
             .only_apps
             .iter()
             .map(|a| a.split(':').next().unwrap_or("").to_string())
             .collect();
+        // A bare app name ("excel") launches the program of the same name; allowed when exactly
+        // that program is. A URI or Store id has ':' or '!' and never matches.
+        if exe.is_empty()
+            && low
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            && names.contains(&format!("{low}.exe"))
+        {
+            exe = format!("{low}.exe");
+        }
         let names_list = names.iter().cloned().collect::<Vec<_>>().join(", ");
         if exe.is_empty() {
             // A name like "EvalPad" may only focus a window that is already open and allowed. A URI or

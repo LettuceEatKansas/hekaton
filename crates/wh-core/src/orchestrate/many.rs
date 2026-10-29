@@ -167,6 +167,7 @@ impl CallOpts {
         Ok(Self {
             cancel_generation: c.pause.generation(),
             saved_paths: Default::default(),
+            input_follows: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
             read_only: args.get("read_only").is_some_and(truthy) || truthy(&c.cfg.get("read_only")),
             helper_images: args.get("max_images").is_none_or(|v| v.as_u64() != Some(0))
@@ -189,6 +190,7 @@ impl CallOpts {
         Self {
             cancel_generation: 0,
             saved_paths: Default::default(),
+            input_follows: Default::default(),
             deadline: None,
             read_only: false,
             helper_images: true,
@@ -425,6 +427,15 @@ impl Ctx<'_> {
                 crate::prof::step_done(action, t.elapsed());
             }
             step_mark = Some((step_action_text(step), std::time::Instant::now()));
+            let input_follows = items.get(i + 1).is_some_and(|next| {
+                next.step
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .is_some_and(|a| is_action(a) && !is_passive(a) && !a.starts_with("wait"))
+            });
+            self.o
+                .input_follows
+                .store(input_follows, std::sync::atomic::Ordering::Relaxed);
             if !item.header.is_empty() {
                 notes.push(item.header.clone()); // a recipe step: say which recipe is running
             }

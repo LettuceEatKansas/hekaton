@@ -1136,3 +1136,34 @@ fn a_whole_batch_runs_from_launch_to_a_saved_file() {
     assert!(out.images.is_empty());
     assert_eq!(kit.fake.clipboard_text().unwrap(), "owner's text");
 }
+
+// 2026-10-28 gauntlet L2: "wait 1.5" returned after 0.6 s on a calm screen and the table pasted next
+// landed on Excel's start screen. A wait before blind input runs its full time.
+#[test]
+fn a_wait_before_blind_input_runs_its_full_time() {
+    let kit = Kit::new();
+    kit.front("Editor", "notepad.exe", 7);
+    let start = kit.clock.now();
+    let out = kit.computer.execute(
+        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "key", "text": "a"}], "shot": false}),
+        &kit.who,
+    );
+    assert!(out.ok, "{:?}", out.error);
+    assert!(
+        kit.clock.now() - start >= Duration::from_secs(2),
+        "{:?}",
+        out.result
+    );
+
+    let start = kit.clock.now();
+    let out = kit.computer.execute(
+        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "screenshot"}]}),
+        &kit.who,
+    );
+    assert!(out.ok, "{:?}", out.error);
+    assert!(
+        kit.clock.now() - start < Duration::from_millis(1600),
+        "a wait before a look may still end early: {:?}",
+        out.result
+    );
+}

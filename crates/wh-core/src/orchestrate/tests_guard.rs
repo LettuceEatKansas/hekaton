@@ -486,3 +486,17 @@ fn keys_into_an_explorer_file_list_are_refused_under_an_allowlist() {
     )
     .unwrap();
 }
+
+// 2026-10-28 gauntlet L2: open_app "excel" under only_apps ["excel.exe"] was refused because only
+// a short table of friendly names mapped to programs.
+#[test]
+fn a_bare_app_name_may_launch_its_allowlisted_exe() {
+    let kit = Kit::new();
+    let ctx = kit.ctx(json!({"only_apps": ["excel.exe"]}));
+    ctx.check_launch_allowed("excel").unwrap();
+    ctx.check_launch_allowed("Excel").unwrap();
+    for bad in ["word", "excel:", "ms-excel:ofe|u|x", "excelx"] {
+        let err = refused(ctx.check_launch_allowed(bad));
+        assert!(err.to_string().starts_with("refused: "), "{bad}: {err}");
+    }
+}

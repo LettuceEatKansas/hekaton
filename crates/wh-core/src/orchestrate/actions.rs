@@ -298,7 +298,13 @@ impl Ctx<'_> {
                 // animation instead: return once the screen settles, after at least 40% of the time
                 // asked (enemy turns pause between attacks). In a first Gemini run, 56% of all acting
                 // time was waits it added itself (66 of 117 s).
-                let took = if d > 0.3 {
+                // ... unless the next step acts blind: then a calm screen may only mean the app has
+                // not started drawing what comes next, so the full time is waited.
+                let blind_next = self
+                    .o
+                    .input_follows
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let took = if d > 0.3 && !blind_next {
                     self.settle(Some(d), 0.4 * d, 2)?
                 } else {
                     self.sleep(d);
