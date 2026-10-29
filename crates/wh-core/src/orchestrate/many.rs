@@ -166,6 +166,7 @@ impl CallOpts {
         };
         Ok(Self {
             cancel_generation: c.pause.generation(),
+            saved_paths: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
             read_only: args.get("read_only").is_some_and(truthy) || truthy(&c.cfg.get("read_only")),
             helper_images: args.get("max_images").is_none_or(|v| v.as_u64() != Some(0))
@@ -187,6 +188,7 @@ impl CallOpts {
             .clamp(crate::scale::SHOT_LONG_MIN, crate::scale::SHOT_LONG_MAX);
         Self {
             cancel_generation: 0,
+            saved_paths: Default::default(),
             deadline: None,
             read_only: false,
             helper_images: true,

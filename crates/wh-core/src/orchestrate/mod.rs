@@ -258,6 +258,9 @@ impl Computer {
 pub(crate) struct CallOpts {
     /// Pause generation captured before running any steps. Resuming cannot revive cancelled work.
     pub cancel_generation: u64,
+    /// Paths this call saved through `file_dialog`: wait_for_file may watch them even under
+    /// only_apps (shared with recipe steps, which clone these options).
+    pub saved_paths: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Absolute deadline on the injected clock.
     pub deadline: Option<Duration>,
     /// Refuse any operation that can mutate desktop or clipboard state.

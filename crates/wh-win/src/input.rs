@@ -40,6 +40,8 @@ const DRAG_STEP_GAP: Duration = Duration::from_millis(15);
 /// it arrived, so the game often never saw the card over its target and the drop did nothing. About
 /// 0.35 s per drag now.
 const DRAG_DWELL: Duration = Duration::from_millis(120);
+/// How long a chord's modifiers are held before and after its key is tapped.
+const CHORD_HOLD: Duration = Duration::from_millis(15);
 
 // ------------------------------------------------------------------------------------ pure helpers
 
@@ -271,19 +273,45 @@ impl Injector {
         self.send(&[vk_input(windows_vk(key), up)])
     }
 
-    /// Press `keys` in order and release them in reverse as one `SendInput` batch, `repeat` times.
+    /// Press `keys` in order and release them in reverse, `repeat` times. A lone key is one batch.
+    /// A chord holds every key but the last, waits [`CHORD_HOLD`], taps the last, waits again and
+    /// lets go: sent as one burst, WinUI apps (Windows 11 Notepad) read the held Ctrl too late and
+    /// typed "S" for ctrl+shift+s (2026-10-28 gauntlet L1). The held keys go up even when the guard
+    /// stops the chord half way.
     pub(crate) fn chord(
         &self,
         keys: &[Key],
         repeat: u32,
         guard: InputGuard<'_>,
     ) -> BackendResult<()> {
-        let mut batch: Vec<INPUT> = Vec::with_capacity(keys.len() * 2);
-        batch.extend(keys.iter().map(|k| vk_input(windows_vk(*k), false)));
-        batch.extend(keys.iter().rev().map(|k| vk_input(windows_vk(*k), true)));
+        let Some((last, held)) = keys.split_last() else {
+            return Ok(());
+        };
+        let down: Vec<INPUT> = held
+            .iter()
+            .map(|k| vk_input(windows_vk(*k), false))
+            .collect();
+        let up: Vec<INPUT> = held
+            .iter()
+            .rev()
+            .map(|k| vk_input(windows_vk(*k), true))
+            .collect();
+        let tap = [
+            vk_input(windows_vk(*last), false),
+            vk_input(windows_vk(*last), true),
+        ];
         for _ in 0..repeat.max(1) {
             guard()?;
-            self.send(&batch)?;
+            if held.is_empty() {
+                self.send(&tap)?;
+            } else {
+                self.send(&down)?;
+                sleep(CHORD_HOLD);
+                let tapped = guard().and_then(|()| self.send(&tap));
+                sleep(CHORD_HOLD);
+                self.send(&up)?;
+                tapped?;
+            }
             sleep(Duration::from_millis(10));
         }
         Ok(())

@@ -1591,3 +1591,25 @@ fn keys_into_an_agent_host_are_refused_when_the_caller_is_unknown() {
         .unwrap();
     assert_eq!(kit.fake.typed_text(), "hello");
 }
+
+// 2026-10-28 gauntlet L1: a scoped task saved a file through file_dialog, then was refused when it
+// waited for that same file. Its own save may be watched; any other path outside %TEMP% may not.
+#[test]
+fn under_an_allowlist_the_file_this_call_saved_may_be_watched() {
+    let kit = Kit::new();
+    let base = kit.tmp.path().parent().unwrap().join("elsewhere");
+    let saved = base.join("saved.txt").to_string_lossy().to_string();
+    let other = base.join("other.txt").to_string_lossy().to_string();
+    let ctx = kit.ctx(json!({"only_apps": ["notepad.exe"]}));
+    assert!(
+        ctx.check_wait_path_allowed(&saved, "wait_for_file may only watch")
+            .is_err()
+    );
+    ctx.o.saved_paths.lock().unwrap().push(saved.clone());
+    ctx.check_wait_path_allowed(&saved, "wait_for_file may only watch")
+        .unwrap();
+    assert!(
+        ctx.check_wait_path_allowed(&other, "wait_for_file may only watch")
+            .is_err()
+    );
+}

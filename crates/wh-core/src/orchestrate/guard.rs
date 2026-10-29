@@ -634,6 +634,17 @@ impl Ctx<'_> {
         if self.o.only_apps.is_empty() {
             return Ok(());
         }
+        // The file this very call saved through file_dialog (an allowed app's own dialog) may be
+        // watched: checking your own save is not probing the disk (2026-10-28 gauntlet L1).
+        let p_norm = norm_abs(path);
+        if self
+            .o
+            .saved_paths
+            .lock()
+            .is_ok_and(|saved| saved.iter().any(|s| norm_abs(s) == p_norm))
+        {
+            return Ok(());
+        }
         let env = self.cfg().env();
         let temp = env
             .var("TEMP")
@@ -645,7 +656,7 @@ impl Ctx<'_> {
                 "refused: no %TEMP% set, cannot verify wait_for_file's path is safe",
             ));
         }
-        let (temp_norm, p_norm) = (norm_abs(&temp), norm_abs(path));
+        let temp_norm = norm_abs(&temp);
         if !(p_norm == temp_norm || p_norm.starts_with(&format!("{temp_norm}/"))) {
             return Err(StepError::target(format!(
                 "refused: under this task's allowlist, {what} paths under {temp} (got {path})"

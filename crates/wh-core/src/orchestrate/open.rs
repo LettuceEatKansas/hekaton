@@ -715,6 +715,9 @@ impl Ctx<'_> {
             let gone =
                 self.info(dialog).is_none_or(|i| i.hidden) || self.be().element(&edit).is_err();
             if gone {
+                if let Ok(mut saved) = self.o.saved_paths.lock() {
+                    saved.push(path.clone());
+                }
                 return Ok(format!("file dialog: entered {path} and confirmed"));
             }
         }

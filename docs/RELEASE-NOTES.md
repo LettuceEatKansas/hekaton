@@ -12,6 +12,30 @@ Builds read their source identity from Git. A source archive without Git metadat
 
 Changing the product name does not require changing existing state directories, ports, task labels, Mac bundle identifiers, or signing identities. Preserve those identifiers through the compatibility period so saved agent settings and Mac permissions continue to work.
 
+## Measured speed and reliability fixes (2026-10-28)
+
+All numbers below come from live side-by-side runs on the development Windows 11 machine: the installed build on port 47811 and this build on port 47911, driven by `bench/drive.py`, ten repeats per call, median wall time measured by the client. They describe one machine and one screen state, not a general guarantee.
+
+Per-call overhead fell from about 21 ms to under 2 ms. Every request used to rebuild the caller's process ancestry from a full process snapshot. The chain is now cached per process ID and process start time for 60 seconds, so a recycled process ID never inherits another process's chain.
+
+| Call | Installed | This build |
+| --- | --- | --- |
+| cursor_position | 21.2 ms | 1.8 ms |
+| list_windows | 21.5 ms | 1.7 ms |
+| screenshot (full screen) | 66.4 ms | 48.1 ms |
+| screenshot (one window) | 64.0 ms | 49.6 ms |
+| read (Explorer window) | 347.4 ms | 321.9 ms |
+
+`zoom` with text now resolves the exact text of all OCR rows in one UI Automation pass instead of one pass per row. On a region dominated by a text document this took a zoom from 884 ms to about 110 ms with identical output. On regions without document text the time is unchanged.
+
+`profile=true` now returns `metrics.phases`, the wall time and call count spent in capture, encoding, UI Automation, OCR, input, settling and the other phases of the call. Phases are inclusive, so they can sum to more than the call.
+
+Key chords such as ctrl+shift+s now hold the modifiers for 15 ms around the final key. Windows 11 Notepad and other WinUI apps sometimes ignored modifiers sent in a single burst and typed the bare letter.
+
+Under an app allowlist, `wait_for_file` may now watch a file that a `file_dialog` step in the same call has just saved. Previously it refused any path outside the temporary folder, which failed the save-and-verify pattern. Other paths keep the old rule.
+
+Notepad gauntlet (Unicode, emoji, right-to-left and CJK text typed, saved through Save As and verified byte for byte, in one call with no screenshot): this build passed 5 of 5 runs in about 2.7 s and roughly 96 estimated input tokens. The installed build saved correct files 3 of 3 times but its verification step was refused each time.
+
 ## Bounded requests and separate controls
 
 The HTTP server uses four desktop workers and an eight-request queue. Health, pause, resume, and shutdown use two separate control workers and their own eight-request queue. A full queue returns HTTP 503 with an explicit statement that the rejected request was not executed.
