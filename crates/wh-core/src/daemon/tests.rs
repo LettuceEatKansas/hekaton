@@ -204,7 +204,15 @@ fn no_hotkey_at_all_is_not_an_error() {
 #[test]
 fn every_post_needs_the_token_even_unknown_routes() {
     let r = rig();
-    for path in ["/computer", "/nope", "/shutdown", "/batch", "/pause"] {
+    for path in [
+        "/computer",
+        "/nope",
+        "/shutdown",
+        "/batch",
+        "/pause",
+        "/approve",
+        "/deny",
+    ] {
         let res = r.send("POST", path, Some("wrong"), &json!({}));
         assert_eq!(res.status, 401, "{path}");
         assert_eq!(body(&res), json!({"error": "unauthorized"}));
@@ -865,4 +873,17 @@ fn the_hotkey_candidates_are_the_python_chain() {
         !names.iter().any(|n| n.ends_with("shift+k")),
         "the contested combo stays out"
     );
+}
+
+#[test]
+fn approve_and_deny_answer_a_chat_code_and_refuse_one_that_is_not_waiting() {
+    let r = rig();
+    for path in ["/approve", "/deny"] {
+        let res = r.post(path, json!({"code": "ZZ2Z"}));
+        assert_eq!(res.status, 400, "{path}");
+        assert_eq!(body(&res)["ok"], false);
+        let why = body(&res)["error"].as_str().unwrap().to_string();
+        assert!(why.contains("no waiting approval ZZ2Z"), "{why}");
+        assert_eq!(r.post(path, json!({})).status, 400, "no code at all");
+    }
 }
