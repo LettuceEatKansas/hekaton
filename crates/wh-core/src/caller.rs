@@ -278,9 +278,12 @@ const CHAIN_CACHE_MAX: usize = 64;
 /// processes (2026-10-28), paid on every call before this cache. The key includes the start time, so a
 /// recycled pid is a different key and never inherits a dead process's chain. A process whose start
 /// time cannot be read is never cached.
+/// When a chain was walked, and the chain.
+type CachedChain = (Instant, Vec<(u32, String)>);
+
 #[derive(Debug, Default)]
 pub struct ChainCache {
-    map: Mutex<HashMap<(u32, u64), (Instant, Vec<(u32, String)>)>>,
+    map: Mutex<HashMap<(u32, u64), CachedChain>>,
 }
 
 impl ChainCache {
