@@ -166,6 +166,26 @@ fn a_mistyped_key_name_is_an_error_not_typed_text() {
 }
 
 #[test]
+fn space_separated_keys_are_pressed_in_turn_and_modifier_words_stay_one_chord() {
+    let kit = Kit::new();
+    kit.front("Editor", "editor.exe", 30);
+    let chords = record_chords(&kit);
+    let (note, _) = kit
+        .step(json!({"action": "key", "text": "ctrl+a Delete Return"}))
+        .unwrap();
+    assert_eq!(note, "pressed ctrl+a, delete, enter in turn");
+    let seen = chords.lock().unwrap().clone();
+    assert_eq!(seen, vec![ctrl('a'), vec![Key::Delete], vec![Key::Enter]]);
+    chords.lock().unwrap().clear();
+    kit.step(json!({"action": "key", "text": "ctrl shift s"}))
+        .unwrap();
+    let seen = chords.lock().unwrap().clone();
+    assert_eq!(seen, vec![vec![Key::Ctrl, Key::Shift, Key::Char('s')]]);
+    let err = err_of(kit.step(json!({"action": "key", "text": "Home Retun"})));
+    assert!(err.message().starts_with("unknown key"), "{err}");
+}
+
+#[test]
 fn key_repeat_is_clamped_and_a_lone_symbol_repeats() {
     let kit = Kit::new();
     kit.step(json!({"action": "key", "text": "%", "repeat": 3}))
@@ -1414,14 +1434,27 @@ fn list_windows_lists_hidden_ones_on_request() {
 #[test]
 fn list_windows_under_only_apps_names_only_allowed_windows() {
     let kit = Kit::new();
-    kit.window("Untitled - Notepad", "notepad.exe", 1, Rect::from_xywh(0, 0, 10, 10));
-    kit.window("Inbox - Mail", "outlook.exe", 2, Rect::from_xywh(0, 0, 10, 10));
+    kit.window(
+        "Untitled - Notepad",
+        "notepad.exe",
+        1,
+        Rect::from_xywh(0, 0, 10, 10),
+    );
+    kit.window(
+        "Inbox - Mail",
+        "outlook.exe",
+        2,
+        Rect::from_xywh(0, 0, 10, 10),
+    );
     let (out, _) = kit
         .step_only(&["notepad.exe"], json!({"action": "list_windows"}))
         .unwrap();
     assert!(out.contains("Untitled - Notepad"), "{out}");
     assert!(!out.contains("Inbox"), "{out}");
-    assert!(out.ends_with("(1 windows of apps outside only_apps not shown)"), "{out}");
+    assert!(
+        out.ends_with("(1 windows of apps outside only_apps not shown)"),
+        "{out}"
+    );
     let (plain, _) = kit.step(json!({"action": "list_windows"})).unwrap();
     assert!(plain.contains("Inbox"), "{plain}");
 }
@@ -1669,17 +1702,39 @@ fn a_trailing_newline_is_a_real_enter_press() {
 fn read_finds_a_window_by_its_app_and_takes_window_as_well_as_text() {
     let kit = Kit::new();
     let front = kit.front("Untitled", "TextEdit.exe", 5);
-    kit.fake.set_tree(front, Element::new("r", Role::Window, "Untitled"));
-    let mail = kit.window("Compose Mail - Gmail", "com.apple.Safari", 6, Rect::from_xywh(100, 0, 100, 100));
-    kit.fake.set_tree(mail, Element::new("r", Role::Window, "Compose Mail - Gmail"));
-    let (out, _) = kit.step(json!({"action": "read", "window": "Safari"})).unwrap();
+    kit.fake
+        .set_tree(front, Element::new("r", Role::Window, "Untitled"));
+    let mail = kit.window(
+        "Compose Mail - Gmail",
+        "com.apple.Safari",
+        6,
+        Rect::from_xywh(100, 0, 100, 100),
+    );
+    kit.fake.set_tree(
+        mail,
+        Element::new("r", Role::Window, "Compose Mail - Gmail"),
+    );
+    let (out, _) = kit
+        .step(json!({"action": "read", "window": "Safari"}))
+        .unwrap();
     assert!(out.starts_with("window \"Compose Mail - Gmail\""), "{out}");
-    let (out, _) = kit.step(json!({"action": "read", "text": "textedit"})).unwrap();
+    let (out, _) = kit
+        .step(json!({"action": "read", "text": "textedit"}))
+        .unwrap();
     assert!(out.starts_with("window \"Untitled\""), "{out}");
     // two windows of one app stay ambiguous: never guess which one
-    kit.window("Inbox - Gmail", "com.apple.Safari", 6, Rect::from_xywh(300, 0, 100, 100));
+    kit.window(
+        "Inbox - Gmail",
+        "com.apple.Safari",
+        6,
+        Rect::from_xywh(300, 0, 100, 100),
+    );
     let err = err_of(kit.step(json!({"action": "read", "text": "Safari"})));
-    assert!(err.message().contains("ambiguous window"), "{}", err.message());
+    assert!(
+        err.message().contains("ambiguous window"),
+        "{}",
+        err.message()
+    );
 }
 
 // ---------------------------------------------------------------------------- press (2026-10-29)
@@ -1689,7 +1744,12 @@ fn pressable_app(kit: &Kit) -> WindowRef {
     let mut seven = Element::new("seven", Role::Button, "7").at(Rect::new(10, 10, 50, 50));
     seven.affordances.push(crate::backend::Affordance::Invoke);
     let label = Element::new("pic", Role::Button, "Logo").at(Rect::new(100, 10, 140, 50));
-    kit.fake.set_tree(w, Element::new("root", Role::Window, "Calc").with_child(seven).with_child(label));
+    kit.fake.set_tree(
+        w,
+        Element::new("root", Role::Window, "Calc")
+            .with_child(seven)
+            .with_child(label),
+    );
     w
 }
 
@@ -1723,7 +1783,11 @@ fn press_needs_a_number_from_a_read() {
     let kit = Kit::new();
     pressable_app(&kit);
     let err = err_of(kit.step(json!({"action": "press", "text": "Save"})));
-    assert!(err.message().starts_with("press needs text"), "{}", err.message());
+    assert!(
+        err.message().starts_with("press needs text"),
+        "{}",
+        err.message()
+    );
     let err = err_of(kit.step(json!({"action": "press", "text": "5"})));
     assert!(err.message().contains("read it first"), "{}", err.message());
 }
@@ -1744,5 +1808,8 @@ fn typing_into_the_same_box_skips_the_settle_between_steps() {
     ], "shot": false}))
     .unwrap();
     let enter_looks = kit.fake.preview_count() + kit.fake.capture_count() - before;
-    assert!(typed_looks < enter_looks, "{typed_looks} vs {enter_looks}: Enter still waits");
+    assert!(
+        typed_looks < enter_looks,
+        "{typed_looks} vs {enter_looks}: Enter still waits"
+    );
 }

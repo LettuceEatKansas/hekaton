@@ -720,7 +720,7 @@ fn read_text_refuses_when_the_clipboard_holds_files_and_when_nothing_comes_back(
     let out = kit.ctx(json!({})).read_text("", "").unwrap();
     assert_eq!(
         out,
-        "read_text: the front window gave no text (it may draw its text as pictures); use zoom"
+        "read_text: the window gave no text (it is empty, or it draws its text as pictures); use zoom to look"
     );
     use crate::backend::Backend;
     assert_eq!(kit.fake.clipboard_text().unwrap(), "mine");
@@ -753,7 +753,11 @@ fn read_text_refuses_explorer_and_the_allowlist_still_applies() {
     );
     let empty = plain_kit();
     assert_eq!(
-        empty.ctx(json!({})).read_text("", "").unwrap_err().message(),
+        empty
+            .ctx(json!({}))
+            .read_text("", "")
+            .unwrap_err()
+            .message(),
         "no window is in front to read"
     );
     // a protected process is refused too
@@ -819,7 +823,8 @@ fn a_link_and_its_own_text_at_one_spot_are_one_match() {
 fn read_text_reads_the_named_window_not_the_front_one() {
     let kit = plain_kit();
     let doc = kit.window("Untitled", "TextEdit", 7, Rect::from_xywh(10, 10, 400, 300));
-    kit.fake.set_document(doc, "Name | Handle\nDrew Binsky | @drewbinsky");
+    kit.fake
+        .set_document(doc, "Name | Handle\nDrew Binsky | @drewbinsky");
     let page = kit.front("YouTube", "Brave Browser", 8);
     kit.fake.set_document(page, "Subscribe\nHome");
     let out = kit
@@ -829,5 +834,27 @@ fn read_text_reads_the_named_window_not_the_front_one() {
     assert!(out.contains("2: Drew Binsky | @drewbinsky"), "{out}");
     assert!(!out.contains("Subscribe"), "{out}");
     use crate::backend::Backend;
-    assert_eq!(kit.fake.foreground_window().unwrap(), Some(page), "UIA text needs no focus change");
+    assert_eq!(
+        kit.fake.foreground_window().unwrap(),
+        Some(page),
+        "UIA text needs no focus change"
+    );
+}
+
+#[test]
+fn read_text_query_brings_the_value_under_a_short_label_and_cuts_long_paragraphs() {
+    let kit = Kit::new();
+    let w = kit.front("Japan - Wikipedia", "Brave Browser", 9);
+    let long = format!("The total population {}", "x".repeat(400));
+    kit.fake.set_document(
+        w,
+        &format!("Area\n\n• Total\n377,975 km2\n{long}\n• Total\n• Total\n"),
+    );
+    let out = kit.ctx(json!({})).read_text("total", "").unwrap();
+    assert!(out.contains("3: • Total\n   4: 377,975 km2"), "{out}");
+    assert!(out.contains("5: The total population xxx"), "{out}");
+    assert!(out.contains("..."), "{out}");
+    assert!(out.len() < 600, "{out}");
+    // a label followed by another match does not repeat it as a value
+    assert!(out.contains("6: • Total\n7: • Total"), "{out}");
 }

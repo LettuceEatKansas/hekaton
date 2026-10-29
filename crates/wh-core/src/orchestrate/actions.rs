@@ -273,7 +273,11 @@ impl Ctx<'_> {
                 // UIA first: the window's elements as `N Type "name" [state]`, no picture needed.
                 let refs = self.c.window_refs();
                 // 2026-10-28: a model wrote read(window="Safari") and silently got the front window.
-                let target = if text.is_empty() { text_arg(step, "window") } else { text.clone() };
+                let target = if text.is_empty() {
+                    text_arg(step, "window")
+                } else {
+                    text.clone()
+                };
                 let hwnd = refs.resolve((!target.is_empty()).then_some(target.as_str()))?;
                 self.check_allowed(self.root_of(hwnd))?;
                 // 2026-10-08 (W10): read is passive, so it no longer raises an occluded Chromium
@@ -588,7 +592,11 @@ impl Ctx<'_> {
     /// centre instead. 2026-10-29: computer-use presses by element at ~67 ms; a located click_text
     /// cost ~270 ms before the click.
     fn press_ref(&self, step: &Args, text: &str) -> StepResult<String> {
-        let raw = if text.is_empty() { text_arg(step, "ref") } else { text.to_string() };
+        let raw = if text.is_empty() {
+            text_arg(step, "ref")
+        } else {
+            text.to_string()
+        };
         let Ok(n) = raw.trim().parse::<usize>() else {
             return Err(StepError::value(
                 "press needs text: an element number from read, e.g. 12",
@@ -617,10 +625,21 @@ impl Ctx<'_> {
             .map_err(|e| StepError::target(format!("element {n} is gone ({e}); read again")))?;
         self.input_guard()?;
         self.check_allowed(self.root_of(host))?;
-        let p = Point { x: el.center.0, y: el.center.1 };
+        let p = Point {
+            x: el.center.0,
+            y: el.center.1,
+        };
         self.check_irreversible(p, step)?;
-        if self.be().perform(&el.id, ElementAction::Press).unwrap_or(false) {
-            return Ok(format!("pressed {n} {} {}", el.native_role, py_repr(&el.name)));
+        if self
+            .be()
+            .perform(&el.id, ElementAction::Press)
+            .unwrap_or(false)
+        {
+            return Ok(format!(
+                "pressed {n} {} {}",
+                el.native_role,
+                py_repr(&el.name)
+            ));
         }
         self.set_last_point(p);
         self.host_at(p)?;
@@ -754,7 +773,17 @@ impl Ctx<'_> {
                 ))
             }
             "key" => {
-                let combo = combo_now;
+                let pieces: Vec<String> = text.split_whitespace().map(normalize_key_text).collect();
+                let is_mod = |p: &String| {
+                    parse_key_combo(p, Platform::current())
+                        .is_ok_and(|k| k.len() == 1 && k[0].is_modifier())
+                };
+                // "ctrl shift s" is one chord (normalize_key_text drops the spaces)
+                let combo = if pieces.len() > 1 && pieces[..pieces.len() - 1].iter().all(is_mod) {
+                    pieces.join("+")
+                } else {
+                    combo_now
+                };
                 let reps = int_or(step, "repeat", 1)?.clamp(1, 100) as u32;
                 let trimmed = text.trim();
                 let lone = trimmed.chars().count() == 1;
@@ -783,6 +812,24 @@ impl Ctx<'_> {
                         py_repr(text),
                         self.type_text(text)?
                     ));
+                }
+                if pieces.len() > 1
+                    && parse_key_combo(&combo, Platform::current()).is_err()
+                    && pieces
+                        .iter()
+                        .all(|p| parse_key_combo(p, Platform::current()).is_ok())
+                {
+                    // 2026-10-29 Mac demo: a worker sent key "1 2 3 4 Return" (the xdotool style
+                    // computer-use takes) and got "unknown key", then spent a step per digit.
+                    // Space-separated keys are pressed one after another; "ctrl shift s" is still
+                    // one chord.
+                    for _ in 0..reps {
+                        for p in &pieces {
+                            self.send_combo(p, 1)?;
+                            self.sleep(0.012);
+                        }
+                    }
+                    return Ok(format!("pressed {} in turn", pieces.join(", ")));
                 }
                 let focus = self.be().focus_token().unwrap_or(0);
                 self.c.mem().pre_key = (self.be().foreground_window().ok().flatten(), focus);

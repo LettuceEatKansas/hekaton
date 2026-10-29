@@ -739,7 +739,7 @@ impl Ctx<'_> {
 
     // ------------------------------------------------------------------ open_app on a URL
 
-    fn is_browser(&self, w: WindowRef) -> bool {
+    pub(crate) fn is_browser(&self, w: WindowRef) -> bool {
         let Some(i) = self.info(w) else {
             return false;
         };

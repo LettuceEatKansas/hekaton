@@ -43,7 +43,9 @@ pub(crate) fn one_per_spot(cands: Vec<Cand>) -> Vec<Cand> {
     let mut kept: Vec<Cand> = Vec::with_capacity(cands.len());
     for c in cands {
         let dup = kept.iter().any(|k| {
-            (k.x - c.x).abs() <= 4 && (k.y - c.y).abs() <= 4 && k.label.eq_ignore_ascii_case(&c.label)
+            (k.x - c.x).abs() <= 4
+                && (k.y - c.y).abs() <= 4
+                && k.label.eq_ignore_ascii_case(&c.label)
         });
         if !dup {
             kept.push(c);
@@ -1232,11 +1234,17 @@ impl Ctx<'_> {
                 self.sleep(0.15);
             }
             text = self.doc_text_by_copy()?;
-            source = "select-all + copy; selection cleared";
+            // 2026-10-29 Mac demo: a web page's select-all is not dropped by the arrow key (only an
+            // editable box's is), so the page stayed highlighted while the note said "cleared".
+            source = if self.is_browser(root) {
+                "select-all + copy; the page stays highlighted until the next click"
+            } else {
+                "select-all + copy; selection cleared"
+            };
         }
         if text.trim().is_empty() {
             return Ok(
-                "read_text: the front window gave no text (it may draw its text as pictures); use zoom"
+                "read_text: the window gave no text (it is empty, or it draws its text as pictures); use zoom to look"
                     .to_string(),
             );
         }
@@ -1248,11 +1256,39 @@ impl Ctx<'_> {
         );
         let q = query.trim().to_lowercase();
         if !q.is_empty() {
+            // 2026-10-29 Mac demo: read_text("Total") on a Wikipedia page gave the infobox label
+            // ("Total") without its value on the next line, and every long paragraph with the word
+            // in full. A short line that ends in the word now brings the next non-blank line (the value), and a
+            // long one is cut to its first 200 characters.
             let found: Vec<String> = lines
                 .iter()
                 .enumerate()
                 .filter(|(_, ln)| ln.to_lowercase().contains(&q))
-                .map(|(i, ln)| format!("{}: {}", i + 1, ln.trim()))
+                .map(|(i, ln)| {
+                    let ln = ln.trim();
+                    let mut row = if ln.chars().count() > 200 {
+                        format!("{}: {}...", i + 1, ln.chars().take(200).collect::<String>())
+                    } else {
+                        format!("{}: {}", i + 1, ln)
+                    };
+                    // a label: short, and nothing but punctuation after the word asked for
+                    let lower = ln.to_lowercase();
+                    let after = lower.rfind(&q).map_or("", |at| &lower[at + q.len()..]);
+                    if ln.chars().count() <= 60
+                        && after.chars().all(|c| !c.is_alphanumeric())
+                        && let Some((j, next)) = lines
+                            .iter()
+                            .enumerate()
+                            .skip(i + 1)
+                            .take(3)
+                            .find(|(_, n)| !n.trim().is_empty())
+                        && !next.to_lowercase().contains(&q)
+                    {
+                        let next: String = next.trim().chars().take(200).collect();
+                        row.push_str(&format!("\n   {}: {next}", j + 1));
+                    }
+                    row
+                })
                 .collect();
             if found.is_empty() {
                 return Ok(format!(
