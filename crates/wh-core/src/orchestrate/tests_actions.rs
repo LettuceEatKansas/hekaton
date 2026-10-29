@@ -1853,3 +1853,40 @@ fn typing_into_the_same_box_skips_the_settle_between_steps() {
         "{typed_looks} vs {enter_looks}: Enter still waits"
     );
 }
+
+#[test]
+fn a_plain_allow_is_clicked_but_lasting_grants_and_tainted_prompts_are_not() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            ("Allow", Role::Button, Rect::new(20, 20, 60, 40)),
+            ("Always Allow", Role::Button, Rect::new(100, 20, 160, 40)),
+        ],
+    );
+    let only = &["app.exe"];
+    let click =
+        |x: i32| kit.step_only(only, json!({"action": "left_click", "coordinate": [x, 30]}));
+    click(30).unwrap();
+    assert_eq!(
+        clicks(&kit).len(),
+        1,
+        "an ordinary prompt is answered like a person would"
+    );
+    let lasting = err_of(click(130));
+    assert!(
+        lasting.message().contains("('always allow')"),
+        "{}",
+        lasting.message()
+    );
+    // right after a page carried instructions aimed at an AI, its Allow is the likely payoff
+    *kit.computer.tainted_until.lock().unwrap() =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+    let tainted = err_of(click(30));
+    assert!(
+        tainted.message().contains("('allow')"),
+        "{}",
+        tainted.message()
+    );
+    assert_eq!(clicks(&kit).len(), 1);
+}

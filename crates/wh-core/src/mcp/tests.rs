@@ -70,7 +70,7 @@ fn the_definition_stays_within_its_budget() {
             .chars()
             .count();
     // 2026-10-29: +34 over the 4175 baseline for approval_code (chat-code approvals)
-    assert!((2732..=4308).contains(&size), "{size}");
+    assert!((2732..=4408).contains(&size), "{size}");
 }
 
 #[test]

@@ -49,13 +49,11 @@ const IRREVERSIBLE_WORDS: &[&str] = &[
     "post",
     "publish",
     "uninstall",
-    // Browser permission prompts, sign-in grants, downloads and extensions: one click hands a site
-    // the camera, an account or a file to run.
-    "allow",
+    // Grants that outlast the click: Keychain's "Always Allow" opens a secret to every later request,
+    // a sign-in grant hands an account to a third party, an extension runs on every page.
     "always allow",
     "authorize",
     "grant access",
-    "download",
     "add extension",
     "add to chrome",
     "add to brave",
@@ -64,8 +62,20 @@ const IRREVERSIBLE_WORDS: &[&str] = &[
     "advertisement",
 ];
 
-static IRREVERSIBLE_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    IRREVERSIBLE_WORDS
+/// Clicked freely, the way a person answers an ordinary prompt, but gated while the call is tainted
+/// (`Computer::tainted`): right after a page carried instructions aimed at an AI, its "Allow" or
+/// "Download" is the likely payoff. 2026-10-29: the owner wants plain prompts clicked; "allow" and
+/// "download" used to be on the list above and stopped every permission prompt.
+const WARY_WORDS: &[&str] = &["allow", "download"];
+
+static WARY_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> =
+    LazyLock::new(|| word_matchers(WARY_WORDS));
+
+static IRREVERSIBLE_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> =
+    LazyLock::new(|| word_matchers(IRREVERSIBLE_WORDS));
+
+fn word_matchers(words: &'static [&'static str]) -> Vec<(&'static str, Regex)> {
+    words
         .iter()
         .map(|word| {
             (
@@ -74,7 +84,7 @@ static IRREVERSIBLE_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::n
             )
         })
         .collect()
-});
+}
 
 /// Friendly launch names and the program they start (`_FRIENDLY_EXE`).
 const FRIENDLY_EXE: [(&str, &str); 7] = [
@@ -711,7 +721,12 @@ impl Ctx<'_> {
             return Ok(());
         }
         let low = name.to_lowercase();
-        for (word, rx) in IRREVERSIBLE_MATCHERS.iter() {
+        let wary: &[(&str, Regex)] = if self.c.tainted() {
+            &WARY_MATCHERS
+        } else {
+            &[]
+        };
+        for (word, rx) in IRREVERSIBLE_MATCHERS.iter().chain(wary) {
             if rx.is_match(&low) {
                 let reason = format!(
                     "refused: {} looks like an irreversible action ({}); {}",
