@@ -36,7 +36,7 @@ pub const MAX_ANCESTORS: usize = 16;
 /// call 2026-09-24): they must stay usable as ordinary apps. Their own windows are still protected when
 /// they drive winhands, because one of their processes owns every one of its windows, so the pid match
 /// covers it.
-pub const GENERIC_HOSTS: [&str; 30] = [
+pub const GENERIC_HOSTS: [&str; 31] = [
     "python.exe",
     "pythonw.exe",
     "bash.exe",
@@ -47,6 +47,7 @@ pub const GENERIC_HOSTS: [&str; 30] = [
     "conhost.exe",
     "node.exe",
     "winhands.exe",
+    "hekaton.exe",
     "py.exe",
     "uv.exe",
     "git.exe",

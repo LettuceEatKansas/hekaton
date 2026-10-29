@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "winhands: desktop control for AI agents (daemon, MCP server, CLI)"
+description = "Hekaton: desktop control for AI agents (daemon, MCP server, CLI). winhands, winhandsd and wh stay as compatible names."
 
 [lib]
 name = "winhands_lib"
@@ -15,8 +15,8 @@ name = "winhands"
 path = "src/main.rs"
 
 [[bin]]
-name = "hands"
-path = "src/bin/hands.rs"
+name = "hekaton"
+path = "src/bin/hekaton.rs"
 
 # The daemon with no console window (windows_subsystem = "windows"), for a scheduled task to start.
 [[bin]]

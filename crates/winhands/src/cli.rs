@@ -20,7 +20,7 @@ use crate::start::Starter;
 use crate::wh::{self, Exit};
 
 /// The short usage line.
-pub const USAGE: &str = "usage: hands (or winhands) <acknowledge|status|start|stop|pause|resume|lock|unlock|doctor|daemon|mcp|wh|--version|--build-info>";
+pub const USAGE: &str = "usage: hekaton (or winhands) <acknowledge|status|start|stop|pause|resume|lock|unlock|doctor|daemon|mcp|wh|--version|--build-info>";
 
 fn exe_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winhands"))
