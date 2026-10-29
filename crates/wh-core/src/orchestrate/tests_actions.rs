@@ -611,6 +611,21 @@ fn irreversible_looking_buttons_are_refused_under_an_allowlist() {
 }
 
 #[test]
+fn strict_does_not_take_the_models_allow_irreversible() {
+    let kit = Kit::with_env(crate::env::MapEnv::new().with("WINHANDS_SAFETY_PROFILE", "strict"));
+    app_with(
+        &kit,
+        &[("Submit Order", Role::Button, Rect::new(20, 20, 60, 40))],
+    );
+    let err = err_of(kit.step_only(
+        &["app.exe"],
+        json!({"action": "left_click", "coordinate": [30, 30], "allow_irreversible": true}),
+    ));
+    assert!(err.message().contains("irreversible"), "{}", err.message());
+    assert!(clicks(&kit).is_empty());
+}
+
+#[test]
 fn the_irreversible_words_are_the_documented_set() {
     for (name, hit) in [
         ("Send", "send"),

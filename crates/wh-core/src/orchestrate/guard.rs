@@ -616,7 +616,10 @@ impl Ctx<'_> {
     /// keystroke; a person double-checks the label before hitting Buy, so the tool does too. Python
     /// `_check_irreversible`.
     pub(crate) fn check_irreversible(&self, p: Point, args: &Args) -> StepResult<()> {
-        if self.o.only_apps.is_empty() || is_truthy(args, "allow_irreversible") {
+        // strict: the model's own flag is not the owner's approval
+        let opted_in =
+            is_truthy(args, "allow_irreversible") && self.cfg().profile().honours_call_opt_in();
+        if self.o.only_apps.is_empty() || opted_in {
             return Ok(());
         }
         let name = self.irreversible_name_at(p);

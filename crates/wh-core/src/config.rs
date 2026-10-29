@@ -56,7 +56,7 @@ pub const KEYS: [&str; 29] = [
     "paste_over",
     "protect_processes",
     "read_only",
-    "profile",
+    "safety_profile",
     "game_lock",
     "game_processes",
 ];
@@ -117,7 +117,7 @@ pub fn default_value(key: &str) -> Option<Value> {
         // comma-separated exe names never clicked or typed into, whoever is calling
         "protect_processes" => Value::from(""),
         // named limits: "strict", "normal" or "hackathon" (crate::safety::Profile)
-        "profile" => Value::from("normal"),
+        "safety_profile" => Value::from("normal"),
         // "auto" refuses input while a game runs; "off" leaves only the owner's `lock`
         "game_lock" => Value::from("off"),
         // comma-separated exe names that count as games besides anything under steamapps\common
@@ -244,7 +244,7 @@ impl Config {
         if let Some(v) = self.read_file().get(key) {
             return v.clone();
         }
-        if key != "profile"
+        if key != "safety_profile"
             && let Some(v) = self.profile().default_for(key)
         {
             return v;
@@ -372,7 +372,7 @@ impl Config {
     /// The owner's safety profile. A name it does not know reads as strict, so a typo never
     /// loosens anything.
     pub fn profile(&self) -> Profile {
-        Profile::from_name(&self.text("profile")).unwrap_or(Profile::Strict)
+        Profile::from_name(&self.text("safety_profile")).unwrap_or(Profile::Strict)
     }
 
     /// Does a running game hold the gaming lock on (`game_lock: "auto"`)?
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(fx("profile-default").cfg.profile(), Profile::Normal);
         let fast = fx_env(
             "profile-fast",
-            MapEnv::new().with("WINHANDS_PROFILE", "hackathon"),
+            MapEnv::new().with("WINHANDS_SAFETY_PROFILE", "hackathon"),
         );
         assert_eq!(fast.cfg.settle_max_s(), 1.0);
         fast.write_config(r#"{"settle_ms": 1200}"#);
@@ -660,14 +660,14 @@ mod tests {
         let strict = fx_env(
             "profile-strict",
             MapEnv::new()
-                .with("WINHANDS_PROFILE", "strict")
+                .with("WINHANDS_SAFETY_PROFILE", "strict")
                 .with("WINHANDS_HUMAN_PAUSE", "0"),
         );
         assert_eq!(strict.cfg.clip_max(), 5000);
         assert!(strict.cfg.human_pause(), "strict keeps the pause on");
         let typo = fx_env(
             "profile-typo",
-            MapEnv::new().with("WINHANDS_PROFILE", "hackaton"),
+            MapEnv::new().with("WINHANDS_SAFETY_PROFILE", "hackaton"),
         );
         assert_eq!(typo.cfg.profile(), Profile::Strict, "a typo never loosens");
         let auto = fx_env(
@@ -812,7 +812,7 @@ mod tests {
             ("uia_ms", Value::from(300)),
             ("paste_over", Value::from(6)),
             ("protect_processes", Value::from("")),
-            ("profile", Value::from("normal")),
+            ("safety_profile", Value::from("normal")),
             ("game_lock", Value::from("off")),
             ("game_processes", Value::from("")),
         ];

@@ -3,7 +3,7 @@
 //! A profile changes limits, never protections: every profile keeps `only_apps`, the irreversible
 //! button guard, the human-activity pause, the acknowledgement gate, protected processes,
 //! `read_only`, stop and cancel, and typing focus binding. `strict` adds checks on top; `hackathon`
-//! only shortens waits. The profile comes from the owner's config or environment (`profile`), never
+//! only shortens waits. The profile comes from the owner's config or environment (`safety_profile`), never
 //! from a call, so a model cannot pick a looser one.
 //!
 //! The gaming lock refuses every input until it is released. The owner turns it on with

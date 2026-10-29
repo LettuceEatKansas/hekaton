@@ -363,7 +363,7 @@ fn strict_ignores_the_models_destructive_flag_and_needs_an_allowlist() {
     let kit = Kit::with_env(
         MapEnv::new()
             .with("WINHANDS_AUTO_SHOT", "0")
-            .with("WINHANDS_PROFILE", "strict"),
+            .with("WINHANDS_SAFETY_PROFILE", "strict"),
     );
     kit.front("Terminal", "term.exe", 4);
     let bare = kit

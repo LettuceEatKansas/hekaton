@@ -137,7 +137,7 @@ impl Computer {
         serde_json::json!({
             "backend": self.backend.name(), "version": env!("CARGO_PKG_VERSION"),
             "paused": self.pause.is_paused(), "read_only": crate::config::truthy(&self.cfg.get("read_only")),
-            "profile": self.cfg.profile().name(), "game_lock": self.game_lock(),
+            "safety_profile": self.cfg.profile().name(), "game_lock": self.game_lock(),
             "max_actions": ACTION_LIMIT, "max_images": 8, "budget_ms": 60000,
             "max_budget_ms": 120000, "compact": true, "sessions": true,
             "snapshot_scope": "single unscoped screenshot; tokens consumed per attempted request",

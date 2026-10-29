@@ -396,7 +396,7 @@ impl Daemon {
             "elevated": elevated,
             "paused": self.computer.pause_flag().is_paused(),
             "read_only": truthy(&cfg.get("read_only")),
-            "profile": cfg.profile().name(),
+            "safety_profile": cfg.profile().name(),
             "game_lock": self.computer.game_lock(),
             "version": VERSION,
             "hotkey": self.hotkey(),
