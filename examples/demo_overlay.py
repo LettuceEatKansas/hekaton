@@ -80,7 +80,7 @@ def line(start, end, style, x, y, text, layer=0):
     return f"Dialogue: {layer},{ts(start)},{ts(end)},{style},,0,0,0,,{{\\pos({x},{y})}}{text}\n"
 
 
-def build(events, vstart, duration):
+def build(events, vstart, duration, hands="machands"):
     rel = lambda t: t - vstart
     prompt = next(e for e in events if e["kind"] == "prompt")
     answer = next((e for e in events if e["kind"] == "answer"), None)
@@ -119,8 +119,8 @@ def build(events, vstart, duration):
     out.append(line(0, end_all, "Small", W - 300, VH + 120, "since the prompt was sent"))
 
     # right panel: step log, rebuilt at every event
-    out.append(line(0, end_all, "Head", PX, 18, f"{esc(model_name)}  →  machands"))
-    out.append(line(0, end_all, "Small", PX, 52, "model decides · machands acts"))
+    out.append(line(0, end_all, "Head", PX, 18, f"{esc(model_name)}  →  {esc(hands)}"))
+    out.append(line(0, end_all, "Small", PX, 52, f"model decides · {esc(hands)} acts"))
     log = []          # finished lines
     states = []       # (time, text)
 
@@ -178,6 +178,7 @@ def main():
     ap.add_argument("--lead", type=float, default=2.5,
                     help="seconds of recording kept before the prompt is sent; earlier frames are cut "
                          "(they show the screen before the run hid other apps)")
+    ap.add_argument("--hands", default="machands", help="name of the hands layer shown in the panel")
     ap.add_argument("--blur", action="append", default=[],
                     help="x:y:w:h in recording pixels (1920x1080), optional @start-end seconds")
     args = ap.parse_args()
@@ -188,7 +189,7 @@ def main():
         capture_output=True, text=True, check=True).stdout)
     t_prompt = next(e["t"] for e in events if e["kind"] == "prompt")
     cut = max(0.0, t_prompt - args.video_start - args.lead)
-    ass, end_all = build(events, args.video_start + cut, dur - cut)
+    ass, end_all = build(events, args.video_start + cut, dur - cut, args.hands)
     ass_path = Path(args.out).with_suffix(".ass")
     ass_path.write_text(ass)
 
@@ -201,7 +202,7 @@ def main():
         if when:
             a, z = when.split("-")
             en = f":enable='between(t,{a},{z})'"
-        r = max(1, min(20, (min(int(w), int(h)) - 1) // 4))   # chroma is half size, boxblur radius < half of it
+        r = max(1, min(20, min(int(w), int(h)) // 4 - 1))   # chroma is half size, boxblur radius < half of it
         graph.append(f"{chain}split[m{i}][c{i}];[c{i}]crop={w}:{h}:{x}:{y},boxblur={r}:4[b{i}];"
                      f"[m{i}][b{i}]overlay={x}:{y}{en}[v{i}]")
         chain = f"[v{i}]"
