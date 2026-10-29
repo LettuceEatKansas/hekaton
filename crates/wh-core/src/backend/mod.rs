@@ -168,6 +168,24 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:list_windows` (including `is_cloaked`, `_process_name`, `_is_elevated`).
     fn list_windows(&self, include_hidden: bool) -> BackendResult<Vec<WindowInfo>>;
 
+    /// Everything drawn on screen now, topmost first: app windows and, where the platform can
+    /// tell, menus and notification banners. Used to hide apps a task may not see from its
+    /// pictures. `banners` asks for notification banners too, which can cost a few ms more.
+    /// The default is the visible app windows.
+    fn screen_layers(&self, banners: bool) -> BackendResult<Vec<ScreenLayer>> {
+        let _ = banners;
+        Ok(self
+            .list_windows(false)?
+            .into_iter()
+            .filter(|w| !w.minimized && !w.hidden)
+            .map(|w| ScreenLayer {
+                rect: w.rect,
+                app: w.app,
+                title: w.title,
+            })
+            .collect())
+    }
+
     /// A live read of one window, whether or not `list_windows` would show it (a popup, a dialog,
     /// the desktop). `Err(WindowGone)` when it no longer exists.
     ///

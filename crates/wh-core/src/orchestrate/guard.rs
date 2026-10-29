@@ -26,7 +26,7 @@ use crate::textutil::py_repr;
 /// 2026-09-21: Start menu and search are NOT here. Under an allowlist, typing into Start launched the
 /// Microsoft Store and the model installed Paint. And ApplicationFrameHost is resolved to the Store
 /// app it hosts, not allowed wholesale.
-const SHELL: [&str; 3] = [
+pub(crate) const SHELL: [&str; 3] = [
     "explorer.exe",
     "shellexperiencehost.exe",
     "textinputhost.exe",
@@ -355,7 +355,7 @@ impl Ctx<'_> {
     /// macOS: a process is a bundle id (com.apple.textedit), and owners and models write the app's
     /// name ("TextEdit"). An allowlist entry without dots allows the bundle whose last part it is
     /// (2026-10-28 bench: only_apps ["TextEdit"] refused TextEdit itself).
-    fn allows_bundle_name(&self, name: &str) -> bool {
+    pub(crate) fn allows_bundle_name(&self, name: &str) -> bool {
         !cfg!(windows)
             && name.contains('.')
             && name.rsplit('.').next().is_some_and(|last| {

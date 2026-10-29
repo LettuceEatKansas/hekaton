@@ -111,9 +111,10 @@ impl Ctx<'_> {
 
     /// Capture a rectangle of the screen (Python `_grab`).
     pub(crate) fn grab(&self, region: Rect) -> StepResult<Image> {
-        Ok(self
+        let img = self
             .be()
-            .capture(crate::backend::CaptureTarget::Region(region))?)
+            .capture(crate::backend::CaptureTarget::Region(region))?;
+        Ok(self.hide_private(img))
     }
 
     /// Recognise text in `img`. `None` when no engine answers (the caller treats that as no text).
@@ -139,9 +140,11 @@ impl Ctx<'_> {
     }
 
     /// Encode the final settled pixels instead of capturing the same screen a second time.
+    /// Settled frames come from the live feed, not [`Self::grab`], so other apps are hidden here.
     pub(crate) fn encode_full_frame(&self, img: &Image) -> StepResult<String> {
         let (w, h) = self.scale().shot_size();
-        self.encode_frame(img, w.max(1) as u32, h.max(1) as u32, true)
+        let img = self.hide_private(img.clone());
+        self.encode_frame(&img, w.max(1) as u32, h.max(1) as u32, true)
     }
 
     /// Remember where the pointer acted, for the marker on the next screenshot.

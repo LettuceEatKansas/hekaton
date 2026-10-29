@@ -7,7 +7,7 @@ use serde_json::json;
 use super::StepError;
 use super::guard::{basename, normalize_only_app, real_launch_target};
 use super::testkit::Kit;
-use crate::backend::{Rect, WindowInfo, WindowKind, WindowRef};
+use crate::backend::{Backend, Rect, WindowInfo, WindowKind, WindowRef};
 
 fn add(kit: &Kit, title: &str, app: &str, pid: u32, class: &str) -> WindowRef {
     let mut info = WindowInfo::basic(title, app, pid, Rect::from_xywh(0, 0, 50, 50));
@@ -544,4 +544,40 @@ fn a_mac_app_name_may_open_when_its_bundle_id_is_allowed() {
     ctx.check_launch_allowed("Google Chrome").unwrap();
     refused(ctx.check_launch_allowed("Terminal"));
     refused(ctx.check_launch_allowed("safari; rm -rf ~"));
+}
+
+// 2026-10-29: pictures leave the machine. Under only_apps, apps the task may not touch are painted
+// over; a password manager is painted over always.
+#[test]
+fn pictures_hide_apps_outside_only_apps_and_password_managers_always() {
+    let kit = Kit::new();
+    let mail = kit.window("Inbox", "mail.exe", 9, Rect::from_xywh(250, 0, 70, 60));
+    let _ = mail;
+    kit.front("Editor", "notepad.exe", 7);
+    let vault = kit.window(
+        "Vault",
+        "1password.exe",
+        11,
+        Rect::from_xywh(0, 120, 60, 40),
+    );
+    let _ = vault;
+    let px = |img: &crate::backend::Image, x: i32, y: i32| {
+        let o = img.origin();
+        let i = (((y - o.y) as usize) * img.width() as usize + (x - o.x) as usize) * 4;
+        img.rgba()[i..i + 4].to_vec()
+    };
+    let grey = vec![48, 48, 48, 255];
+    let all = kit.fake.virtual_screen().unwrap();
+    // no allowlist: only the password manager is hidden
+    let shot = kit.ctx(json!({})).grab(all).unwrap();
+    assert_eq!(px(&shot, 20, 140), grey);
+    assert_ne!(px(&shot, 255, 5), grey);
+    // only notepad: mail is hidden where notepad does not cover it
+    let shot = kit
+        .ctx(json!({"only_apps": ["notepad.exe"]}))
+        .grab(all)
+        .unwrap();
+    assert_eq!(px(&shot, 20, 140), grey);
+    assert_ne!(px(&shot, 50, 50), grey, "the allowed app in front");
+    assert_eq!(px(&shot, 305, 5), grey, "mail outside notepad");
 }

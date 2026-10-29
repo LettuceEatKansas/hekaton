@@ -34,6 +34,8 @@ pub struct MacBackend {
     /// The last few `window_info` answers. One key press asks for the same window's details six
     /// times over in its safety checks, ~2 ms each from the window server (2026-10-29 profile).
     info_cache: std::sync::Mutex<Vec<(std::time::Instant, WindowRef, WindowInfo)>>,
+    /// Bundle ids of on-screen surfaces by (pid, owner name), for [`Backend::screen_layers`].
+    layer_bundles: std::sync::Mutex<std::collections::HashMap<(i32, String), String>>,
 }
 
 /// How long a cached `window_info` answer stays good. Short enough that a window the user drags or
@@ -70,6 +72,7 @@ impl MacBackend {
             procs: Procs::default(),
             hotkeys: Hotkeys::default(),
             info_cache: std::sync::Mutex::default(),
+            layer_bundles: std::sync::Mutex::default(),
         }
     }
 
@@ -243,6 +246,14 @@ impl Backend for MacBackend {
 
     fn list_windows(&self, include_hidden: bool) -> BackendResult<Vec<WindowInfo>> {
         Ok(winlist::list(include_hidden, &self.display_rects()))
+    }
+
+    fn screen_layers(&self, banners: bool) -> BackendResult<Vec<wh_core::backend::ScreenLayer>> {
+        Ok(winlist::screen_layers(
+            &self.layer_bundles,
+            &self.display_rects(),
+            banners,
+        ))
     }
 
     fn window_info(&self, window: WindowRef) -> BackendResult<WindowInfo> {

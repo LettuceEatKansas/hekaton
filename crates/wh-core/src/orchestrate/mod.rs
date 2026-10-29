@@ -32,6 +32,7 @@ mod folder;
 mod guard;
 mod many;
 mod open;
+mod privacy;
 mod recipe;
 mod refs;
 mod repeat;

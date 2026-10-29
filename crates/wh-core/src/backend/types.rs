@@ -238,6 +238,17 @@ pub enum WindowKind {
     FileManager,
 }
 
+/// One surface on screen, for hiding apps from pictures ([`super::Backend::screen_layers`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenLayer {
+    /// Where it is drawn, in input coordinates.
+    pub rect: Rect,
+    /// The owning application, as in [`WindowInfo::app`] ("" when the OS does not say).
+    pub app: String,
+    /// Its title, "" when it has none.
+    pub title: String,
+}
+
 /// One top-level window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowInfo {

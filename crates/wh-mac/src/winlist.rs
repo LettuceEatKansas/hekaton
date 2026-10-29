@@ -143,6 +143,106 @@ pub(crate) fn foreground_id(on_screen: &[RawWindow]) -> Option<(i32, u32)> {
 }
 
 /// The on-screen windows, front to back.
+/// Every visible surface, topmost first, with its app's bundle id: windows, menus, the menu bar,
+/// notification banners. `bundles` caches bundle ids by pid and owner name between calls (a lookup
+/// is an NSRunningApplication query; a picture asks for this on every capture). The owner name is
+/// part of the key so a pid reused by another app is looked up again.
+///
+/// Surfaces above the app layer that fill a whole display are skipped: Notification Center and
+/// the Dock each keep a transparent full-screen overlay (2026-10-29: hiding Notification Center
+/// painted the entire screen grey). A real banner or Dock is a smaller surface of its own.
+pub(crate) fn screen_layers(
+    bundles: &std::sync::Mutex<HashMap<(i32, String), String>>,
+    displays: &[Rect],
+    want_banners: bool,
+) -> Vec<wh_core::backend::ScreenLayer> {
+    let area = |r: &Rect| i64::from(r.width().max(0)) * i64::from(r.height().max(0));
+    let overlay = |r: &RawWindow| {
+        r.layer != 0
+            && displays.iter().any(|d| {
+                r.bounds
+                    .intersect(d)
+                    .is_some_and(|i| area(&i) * 10 >= area(d) * 9)
+            })
+    };
+    let raws = copy_list(ON_SCREEN, 0);
+    let Ok(mut cache) = bundles.lock() else {
+        return Vec::new();
+    };
+    if cache.len() > 512 {
+        cache.clear();
+    }
+    // Notification banners are drawn inside Notification Center's overlay; Accessibility knows
+    // where each one is.
+    let mut banners: Vec<wh_core::backend::ScreenLayer> = Vec::new();
+    for r in raws.iter().filter(|r| r.alpha > 0.01 && overlay(r)) {
+        let bundle = cache
+            .entry((r.pid, r.owner_name.clone()))
+            .or_insert_with(|| apps::bundle_id(r.pid))
+            .clone();
+        if !want_banners || bundle != "com.apple.notificationcenterui" || !ax::trusted() {
+            continue;
+        }
+        // Banners sit a few levels down in the full-screen system-dialog window, inside the
+        // side panel. The desktop widgets (their own windows, `widget*` identifiers) never hold
+        // one, so they are skipped: walking them doubled the cost of a picture.
+        let small = |b: &Rect| !b.is_empty() && area(b) * 2 < area(&r.bounds);
+        let rect_of = |el: &Ax| match (el.position(), el.size()) {
+            (Some(p), Some(sz)) => Some(rect_from_f64(p.x, p.y, sz.width, sz.height)),
+            _ => None,
+        };
+        let mut level: Vec<Ax> = ax_windows(r.pid)
+            .into_iter()
+            .map(|w| w.el)
+            .filter(|el| el.string("AXSubrole").as_deref() == Some("AXSystemDialog"))
+            .collect();
+        for _ in 0..8 {
+            let mut next = Vec::new();
+            for el in level {
+                // Only banners and alerts: the same app also holds desktop widgets and its
+                // side panel, which must not be painted over the owner's windows.
+                let banner = el.string("AXSubrole").is_some_and(|s| {
+                    s.contains("NotificationCenterBanner") || s.contains("NotificationCenterAlert")
+                });
+                match rect_of(&el) {
+                    Some(b) if banner && small(&b) => banners.push(wh_core::backend::ScreenLayer {
+                        rect: b,
+                        app: bundle.clone(),
+                        title: String::new(),
+                    }),
+                    _ if next.len() < 64
+                        && !el
+                            .string("AXIdentifier")
+                            .is_some_and(|i| i.starts_with("widget")) =>
+                    {
+                        next.extend(el.elements("AXChildren"))
+                    }
+                    _ => {}
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            level = next;
+        }
+    }
+    let rest: Vec<RawWindow> = raws
+        .into_iter()
+        .filter(|r| r.alpha > 0.01 && !r.bounds.is_empty() && !overlay(r))
+        .collect();
+    banners.extend(rest.into_iter().map(|r| {
+        wh_core::backend::ScreenLayer {
+            app: cache
+                .entry((r.pid, r.owner_name.clone()))
+                .or_insert_with(|| apps::bundle_id(r.pid))
+                .clone(),
+            title: r.title.unwrap_or_default(),
+            rect: r.bounds,
+        }
+    }));
+    banners
+}
+
 pub(crate) fn on_screen_list() -> Vec<RawWindow> {
     copy_list(ON_SCREEN, 0)
 }
