@@ -288,19 +288,28 @@ impl Ctx<'_> {
     /// XAML apps (Notepad, new Explorer) keep one focus handle, so a missing change is not proof
     /// nothing opened: stop polling after 0.4 s and let settle watch the pixels. Python
     /// `_wait_focus_change`.
-    fn wait_focus_change(&self) -> StepResult<()> {
+    ///
+    /// `next_finds_its_own_target`: the next step (`file_dialog`) waits for the dialog's name box
+    /// itself, so once focus has moved the screen settle is skipped (2026-10-28: saved ~250 ms per
+    /// Save As).
+    fn wait_focus_change(&self, next_finds_its_own_target: bool) -> StepResult<()> {
         let max_s = 1.5;
         let (fg0, focus0) = self.c.mem().pre_key;
         let t = self.now();
-        self.sleep(0.12);
+        let mut moved = false;
+        self.sleep(0.03);
         while self.now() - t < 0.4 {
             self.check_cancelled()?;
             let fg = self.be().foreground_window().ok().flatten();
             let focus = self.be().focus_token().unwrap_or(0);
             if fg != fg0 || focus != focus0 {
+                moved = true;
                 break;
             }
-            self.sleep(0.05);
+            self.sleep(0.03);
+        }
+        if moved && next_finds_its_own_target {
+            return Ok(());
         }
         self.settle(Some((max_s - (self.now() - t)).max(0.2)), 0.15, 2)?;
         Ok(())
@@ -403,6 +412,8 @@ impl Ctx<'_> {
         let input_before = self.be().input_events();
         let mut acted_in_call = false; // an acting step has already finished in this call
         let mut pre_input_failure = false; // a step failed before anything was sent
+        // profile=true: wall time per step, its settle included (2026-10-28).
+        let mut step_mark: Option<(String, std::time::Instant)> = None;
         for (i, item) in items.iter().enumerate() {
             let Value::Object(step) = &item.step else {
                 return Err(StepError::value(format!(
@@ -410,6 +421,10 @@ impl Ctx<'_> {
                     i + 1
                 )));
             };
+            if let Some((action, t)) = step_mark.take() {
+                crate::prof::step_done(action, t.elapsed());
+            }
+            step_mark = Some((step_action_text(step), std::time::Instant::now()));
             if !item.header.is_empty() {
                 notes.push(item.header.clone()); // a recipe step: say which recipe is running
             }
@@ -526,7 +541,10 @@ impl Ctx<'_> {
                     } else if raw_action == Some("key") && is_opener(&normalize_key_text(&text)) {
                         // 2026-09-21 eval: ctrl+n then type in one batch saved an EMPTY file: the
                         // paste landed before Notepad's new tab (or the Save As dialog) had focus.
-                        if let Err(error) = self.wait_focus_change() {
+                        let next_is_dialog = items.get(i + 1).is_some_and(|n| {
+                            n.step.get("action").and_then(Value::as_str) == Some("file_dialog")
+                        });
+                        if let Err(error) = self.wait_focus_change(next_is_dialog) {
                             failure = Some(StepFailure {
                                 step: (i + 1) as u32,
                                 error,
@@ -546,6 +564,10 @@ impl Ctx<'_> {
                 }
             }
         }
+        if let Some((action, t)) = step_mark.take() {
+            crate::prof::step_done(action, t.elapsed());
+        }
+        let final_mark = std::time::Instant::now();
         let last = last_executed.as_deref();
         if self.cfg().auto_shot()
             && !Self::no_trailing_shot(last)
@@ -560,9 +582,14 @@ impl Ctx<'_> {
                 // rest.
                 let min_s = if acted { self.settle_floor_s() } else { 0.0 };
                 let observation = (|| -> StepResult<()> {
-                    let (waited, final_frame) = self.settle_frame(None, min_s, 2)?;
+                    let settled = self.settle_looks(None, min_s, 2)?;
+                    let waited = settled.elapsed.as_secs_f64();
                     self.remember_target();
                     if want_shot && shots.len() < max_images {
+                        let final_frame = match settled.full() {
+                            Some(image) => image,
+                            None => self.grab(self.display_rect())?,
+                        };
                         shots.push(self.encode_full_frame(&final_frame)?);
                         notes.push(format!(
                             "screen settled in {:.0} ms [image {}: {}]",
@@ -585,6 +612,9 @@ impl Ctx<'_> {
                     }
                 }
             }
+        }
+        if final_mark.elapsed() >= std::time::Duration::from_millis(1) {
+            crate::prof::step_done("(final settle)".into(), final_mark.elapsed());
         }
         Ok(ManyResult {
             text: notes.join("\n"),
@@ -806,7 +836,7 @@ impl Computer {
                     text.push_str(&format!("\n[snapshot {id}]"));
                 }
                 let profile = map.get("profile").is_some_and(truthy);
-                let metrics = profile.then(|| json!({"elapsed_ms": done.elapsed_ms, "completed_steps": done.completed_steps, "input_sent": done.input_sent, "images": images.len(), "image_bytes_base64": images.iter().map(String::len).sum::<usize>(), "phases": crate::prof::take()}));
+                let metrics = profile.then(|| json!({"elapsed_ms": done.elapsed_ms, "completed_steps": done.completed_steps, "input_sent": done.input_sent, "images": images.len(), "image_bytes_base64": images.iter().map(String::len).sum::<usize>(), "phases": crate::prof::take(), "steps": crate::prof::take_steps()}));
                 if profile {
                     text.push_str(&format!(
                         "\n[{} ms; {} completed; input_sent={}]",

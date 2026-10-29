@@ -80,6 +80,9 @@ struct State {
     screens: VecDeque<Image>,
     last_screen: Option<Image>,
     captures: u64,
+    /// `capture_preview` shrinks like the Windows backend instead of returning a full capture.
+    shrink_previews: bool,
+    previews: u64,
     /// The rectangle of every capture, in order.
     capture_log: Vec<Rect>,
     trees: HashMap<WindowRef, Element>,
@@ -183,6 +186,8 @@ impl FakeBackend {
                 screens: VecDeque::new(),
                 last_screen: None,
                 captures: 0,
+                shrink_previews: false,
+                previews: 0,
                 capture_log: Vec::new(),
                 trees: HashMap::new(),
                 performed: Vec::new(),
@@ -338,6 +343,17 @@ impl FakeBackend {
     /// The rectangle of every capture taken so far, oldest first (what a crop was asked to cover).
     pub fn captured_rects(&self) -> Vec<Rect> {
         self.st().capture_log.clone()
+    }
+
+    /// Make `capture_preview` return shrunk looks (counted by [`Self::preview_count`], not as
+    /// captures), as the Windows backend does.
+    pub fn set_shrink_previews(&self, on: bool) {
+        self.st().shrink_previews = on;
+    }
+
+    /// How many shrunk previews have been taken.
+    pub fn preview_count(&self) -> u64 {
+        self.st().previews
     }
 
     /// How many captures have been taken.
@@ -781,6 +797,19 @@ impl Backend for FakeBackend {
                 a.bottom.max(b.bottom),
             )
         }))
+    }
+
+    fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        let full = self.capture(CaptureTarget::Region(region))?;
+        let mut s = self.st();
+        if !s.shrink_previews {
+            return Ok(full);
+        }
+        s.captures -= 1;
+        s.capture_log.pop();
+        s.previews += 1;
+        drop(s);
+        crate::imaging::resize(&full, width, height).map_err(|e| BackendError::Os(e.to_string()))
     }
 
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image> {

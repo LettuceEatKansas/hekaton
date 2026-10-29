@@ -178,16 +178,18 @@ impl Ctx<'_> {
         min_s: f64,
         calm_needed: u32,
     ) -> StepResult<f64> {
-        self.settle_frame(max_s, min_s, calm_needed)
-            .map(|(elapsed, _)| elapsed)
+        self.settle_looks(max_s, min_s, calm_needed)
+            .map(|s| s.elapsed.as_secs_f64())
     }
 
-    pub(crate) fn settle_frame(
+    /// [`Self::settle`] returning the looks; [`crate::settle::SettledFrame::full`] or a fresh grab
+    /// gives the response its full-size pixels.
+    pub(crate) fn settle_looks(
         &self,
         max_s: Option<f64>,
         min_s: f64,
         calm_needed: u32,
-    ) -> StepResult<(f64, Image)> {
+    ) -> StepResult<crate::settle::SettledFrame> {
         self.check_cancelled()?;
         let mut params = SettleParams::from_config(self.cfg())
             .with_min(secs(min_s))
@@ -205,7 +207,6 @@ impl Ctx<'_> {
                     .map_err(|e| crate::backend::BackendError::Denied(e.message().to_string()))
             },
         )
-        .map(|s| (s.elapsed.as_secs_f64(), s.image))
         .map_err(StepError::from)
     }
 

@@ -10,8 +10,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::backend::{
-    Backend, BackendError, BackendResult, CaptureTarget, ElementFilter, Image, Rect, TreeLimits,
-    WakePolicy, WindowRef,
+    Backend, BackendError, BackendResult, ElementFilter, Image, Rect, TreeLimits, WakePolicy,
+    WindowRef,
 };
 use crate::clock::Clock;
 use crate::config::Config;
@@ -94,12 +94,27 @@ pub fn settle(
     settle_with_frame(backend, clock, region, params, &|| Ok(())).map(|s| s.elapsed)
 }
 
+/// Size of each settle look. The backend may shrink the screen to this while copying it, which is
+/// far cheaper than a full copy (2026-10-28: 25-30 ms for 2560x1440 by `BitBlt`).
+pub const PREVIEW_SIZE: (u32, u32) = (320, 180);
+
 /// Last frame used to establish readiness. Reusing it avoids a duplicate final capture.
 pub struct SettledFrame {
     /// Time spent observing and waiting.
     pub elapsed: Duration,
-    /// Most recent captured pixels.
+    /// Most recent captured pixels: full size when the backend could not shrink the looks, else a
+    /// [`PREVIEW_SIZE`] preview that only a change check should use (see [`SettledFrame::full`]).
     pub image: Image,
+    region: Rect,
+}
+
+impl SettledFrame {
+    /// The last look when it is a full-size capture of the region, else `None` (capture again).
+    pub fn full(self) -> Option<Image> {
+        let full = i64::from(self.image.width()) == i64::from(self.region.width())
+            && i64::from(self.image.height()) == i64::from(self.region.height());
+        full.then_some(self.image)
+    }
 }
 
 fn checked_sleep(
@@ -129,8 +144,9 @@ pub fn settle_with_frame(
     let _p = crate::prof::span("settle");
     let calm_needed = params.calm_needed.max(1);
     let start = clock.now();
+    let look = || backend.capture_preview(region, PREVIEW_SIZE.0, PREVIEW_SIZE.1);
     checked_sleep(clock, FIRST_LOOK_DELAY, guard)?;
-    let mut image = backend.capture(CaptureTarget::Region(region))?;
+    let mut image = look()?;
     guard()?;
     let mut prev = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;
     let mut calm = 0u32;
@@ -140,7 +156,7 @@ pub fn settle_with_frame(
             LOOK_INTERVAL.min(params.max.saturating_sub(clock.now().saturating_sub(start))),
             guard,
         )?;
-        image = backend.capture(CaptureTarget::Region(region))?;
+        image = look()?;
         guard()?;
         let cur = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;
         // Two calm reads in a row: a slow fade changes little per frame and fooled a single check
@@ -167,6 +183,7 @@ pub fn settle_with_frame(
     Ok(SettledFrame {
         elapsed: clock.now().saturating_sub(start),
         image,
+        region,
     })
 }
 

@@ -436,7 +436,7 @@ impl Ctx<'_> {
                 self.check_wait_path_allowed(&path, "wait_for_file may only watch")?;
                 let timeout = wait_timeout(step)?;
                 let (found, took) =
-                    self.poll(|| Path::new(&path).exists().then_some(()), timeout, 0.25);
+                    self.poll(|| Path::new(&path).exists().then_some(()), timeout, 0.05);
                 if found.is_some() {
                     format!("wait_for_file: {path} appeared after {took:.1}s")
                 } else {

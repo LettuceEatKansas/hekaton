@@ -253,7 +253,7 @@ impl Ctx<'_> {
         let mut title = before.clone();
         let deadline = self.now() + 1.5;
         while self.now() < deadline {
-            self.sleep(0.1);
+            self.sleep(0.05);
             let Some(cur) = self.window_line(target) else {
                 break;
             };
@@ -350,7 +350,7 @@ impl Ctx<'_> {
         let mut last_change = self.now();
         let deadline = self.now() + timeout;
         while self.now() < deadline {
-            self.sleep(0.1);
+            self.sleep(0.05);
             let Some(cur) = self.window_line(last.window) else {
                 break;
             };
@@ -557,7 +557,8 @@ impl Ctx<'_> {
 
         let deadline = self.now() + wait;
         while self.now() < deadline {
-            self.sleep(0.2);
+            // 2026-10-28: 50 ms polls (listing windows costs ~2 ms); 200 ms wasted ~100 ms per launch.
+            self.sleep(0.05);
             let wins2 = self.c.window_refs().list(false)?;
             for w in wins2 {
                 // Explorer reuses one process for every window, so a new PID never appears. Accept a
@@ -614,6 +615,7 @@ impl Ctx<'_> {
         path = repair_escapes(&path, &|p| Path::new(p).is_file());
         // the owner's hard line
         self.o.policy.check_path(&path, "the file dialog path")?;
+        let find_span = crate::prof::span("dialog_find");
         let deadline = self.now() + 3.0;
         let mut edit = None;
         let mut dlg_root: Option<WindowRef> = None;
@@ -624,7 +626,7 @@ impl Ctx<'_> {
                 edit = self.be().find_file_dialog_field(fg).ok().flatten();
             }
             if edit.is_none() {
-                self.sleep(0.2);
+                self.sleep(0.05);
             }
         }
         let Some(edit) = edit else {
@@ -633,6 +635,8 @@ impl Ctx<'_> {
                  ctrl+shift+s or ctrl+o)",
             ));
         };
+        drop(find_span);
+        let fill_span = crate::prof::span("dialog_fill");
         let dialog = dlg_root.unwrap_or_else(|| WindowRef::from_raw(0));
         // 2026-09-21: under only_apps, the dialog itself was never checked, so it filled and confirmed
         // a file path in whatever app's Save As happened to be in front, allowlisted or not.
@@ -669,12 +673,19 @@ impl Ctx<'_> {
                         .type_text(ch.encode_utf8(&mut buf), &crate::backend::no_guard)?;
                 }
             }
-            self.sleep(0.15);
-            shown = match self.be().element(&edit) {
-                Ok(el) => el.value.unwrap_or_default().trim().to_string(),
-                Err(_) => path.clone(),
-            };
-            if shown.to_lowercase() == path.to_lowercase() {
+            // Poll the box instead of one read after a fixed 150 ms (2026-10-28).
+            let (matched, _) = self.poll(
+                || {
+                    shown = match self.be().element(&edit) {
+                        Ok(el) => el.value.unwrap_or_default().trim().to_string(),
+                        Err(_) => path.clone(),
+                    };
+                    (shown.to_lowercase() == path.to_lowercase()).then_some(())
+                },
+                0.3,
+                0.03,
+            );
+            if matched.is_some() {
                 landed = true;
                 break;
             }
@@ -687,12 +698,14 @@ impl Ctx<'_> {
                 py_repr(&shown)
             ));
         }
+        drop(fill_span);
+        let _confirm_span = crate::prof::span("dialog_confirm");
         self.send_combo("enter", 1)?;
         // Wait for the dialog to go. A new standard popup (#32770) of the same program means a
         // question like "already exists, replace?" or "not valid": report its text, never answer it.
         let end = self.now() + 3.0;
         while self.now() < end {
-            self.sleep(0.2);
+            self.sleep(0.04);
             let fg_now = self.be().foreground_window().ok().flatten();
             if let Some(fg_now) = fg_now
                 && fg_now != dialog

@@ -136,6 +136,13 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:grab` (and so `computer.py:_grab`, `screenshot_b64`, `settle`).
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image>;
 
+    /// A cheap, roughly `width` x `height` look at `region`, for telling whether the screen is still
+    /// moving. A backend that cannot shrink while copying returns the full-size capture.
+    fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        let _ = (width, height);
+        self.capture(CaptureTarget::Region(region))
+    }
+
     // ------------------------------------------------------------------ windows
 
     /// Top-level application windows in z-order, topmost first (the `EnumWindows` order):

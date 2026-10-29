@@ -225,3 +225,41 @@ fn status_is_available_while_busy_and_paused_without_observing_desktop() {
     assert_eq!(value["paused"], true);
     assert_eq!(value["max_actions"], 50);
 }
+
+#[test]
+fn settle_looks_at_previews_and_grabs_full_pixels_only_for_a_returned_shot() {
+    let kit = Kit::new();
+    // Bigger than a preview, so the looks really are shrunk.
+    kit.fake.set_displays(vec![crate::backend::Display {
+        id: 1,
+        name: "big".into(),
+        rect: Rect::from_xywh(0, 0, 1280, 720),
+        scale: 1.0,
+        primary: true,
+    }]);
+    kit.fake.set_screen(super::testkit::textured(1280, 720));
+    kit.front("Editor", "notepad.exe", 7);
+    kit.fake.set_shrink_previews(true);
+    let blind = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a","shot":false}), &kit.who);
+    assert!(blind.ok, "{:?}", blind.error);
+    assert!(blind.images.is_empty());
+    assert!(kit.fake.preview_count() >= 2);
+    assert_eq!(
+        kit.fake.capture_count(),
+        0,
+        "a blind call never needs full pixels"
+    );
+
+    let shown = kit
+        .computer
+        .execute(&json!({"action":"key","text":"b","shot":true}), &kit.who);
+    assert!(shown.ok, "{:?}", shown.error);
+    assert_eq!(shown.images.len(), 1);
+    assert_eq!(
+        kit.fake.capture_count(),
+        1,
+        "one full grab after the screen settled"
+    );
+}

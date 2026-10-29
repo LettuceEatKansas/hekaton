@@ -858,3 +858,51 @@ fn the_note_recipe_stops_before_typing_when_no_blank_document_appears() {
         "never typed into an existing document"
     );
 }
+
+// 2026-10-28: once Save As has taken focus, file_dialog waits for its own name box, so the opener
+// skips the screen settle. Without a focus change it still settles.
+#[test]
+fn an_opener_before_file_dialog_skips_the_settle_once_focus_moved() {
+    let kit = Kit::with_env(crate::env::MapEnv::new().with("WINHANDS_AUTO_SHOT", "0"));
+    let editor = kit.front("Untitled - Notepad", "notepad.exe", 7);
+    let dlg = kit.window("Save As", "notepad.exe", 7, Rect::new(0, 0, 200, 100));
+    kit.fake.update_window(dlg, |i| i.class = "#32770".into());
+    kit.fake.set_tree(
+        dlg,
+        Element::new("root", Role::Window, "Save As").with_child(
+            Element::new(FIELD, Role::Edit, "File name:")
+                .at(Rect::new(10, 10, 100, 30))
+                .valued("old.txt"),
+        ),
+    );
+    kit.fake.set_file_dialog_field(dlg, ElementId(FIELD.into()));
+    kit.fake.set_foreground(Some(editor));
+    kit.fake.set_chord_hook(move |fake, keys| {
+        if keys.last() == Some(&Key::Char('s')) {
+            fake.set_foreground(Some(dlg));
+        }
+        if keys == [cmd_key(), Key::Char('v')] {
+            let text = crate::backend::Backend::clipboard_text(fake).unwrap();
+            fake.set_element_value(&ElementId(FIELD.into()), &text);
+        }
+        if keys == [Key::Enter] {
+            fake.close_window(dlg);
+        }
+    });
+    let out = kit
+        .run(json!({"actions": [
+            {"action": "key", "text": "ctrl+shift+s"},
+            {"action": "file_dialog", "text": "C:/x/y.txt"}
+        ], "only_apps": ["notepad.exe"]}))
+        .unwrap();
+    assert!(
+        out.text.contains(r"entered C:\x\y.txt and confirmed"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        kit.fake.capture_count(),
+        0,
+        "no settle between the chord and the dialog"
+    );
+}

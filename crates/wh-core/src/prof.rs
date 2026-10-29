@@ -14,6 +14,25 @@ use serde_json::{Map, Value, json};
 
 thread_local! {
     static PHASES: RefCell<BTreeMap<&'static str, (u32, Duration)>> = const { RefCell::new(BTreeMap::new()) };
+    static STEPS: RefCell<Vec<(String, Duration)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Record that one step of the call (its own settle included) took `took`.
+pub fn step_done(action: String, took: Duration) {
+    STEPS.with(|s| s.borrow_mut().push((action, took)));
+}
+
+/// `[{"action", "ms"}]` for the steps recorded on this thread, then clear them.
+pub fn take_steps() -> Value {
+    let steps = STEPS.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    Value::Array(
+        steps
+            .into_iter()
+            .map(|(action, took)| {
+                json!({"action": action, "ms": (took.as_secs_f64() * 10_000.0).round() / 10.0})
+            })
+            .collect(),
+    )
 }
 
 /// Times one phase until it is dropped.
@@ -46,6 +65,7 @@ pub fn span(name: &'static str) -> Span {
 /// Forget everything recorded on this thread.
 pub fn reset() {
     PHASES.with(|p| p.borrow_mut().clear());
+    STEPS.with(|s| s.borrow_mut().clear());
 }
 
 /// `{"phase": {"n": calls, "ms": total}}` for this thread, then clear it.

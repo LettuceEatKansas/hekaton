@@ -9,6 +9,7 @@
 
 mod clipboard;
 mod display;
+mod dxgi;
 mod hotkey;
 mod input;
 mod launch;
@@ -70,6 +71,7 @@ pub struct WindowsBackend {
     machine: launch::Machine,
     hotkey: Mutex<Option<String>>,
     ocr: ocr::Ocr,
+    dup: dxgi::Duplicator,
 }
 
 impl WindowsBackend {
@@ -82,7 +84,16 @@ impl WindowsBackend {
             machine: launch::Machine::default(),
             hotkey: Mutex::new(None),
             ocr: ocr::Ocr::default(),
+            dup: dxgi::Duplicator::default(),
         }
+    }
+}
+
+impl WindowsBackend {
+    /// The GDI capture alone, bypassing Desktop Duplication: for comparing the two paths.
+    #[doc(hidden)]
+    pub fn capture_gdi(&self, rect: Rect) -> BackendResult<Image> {
+        display::capture_rect(rect)
     }
 }
 
@@ -130,6 +141,14 @@ impl Backend for WindowsBackend {
         Ok(display::virtual_screen_rect())
     }
 
+    fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
+        let _p = wh_core::prof::span("capture_preview");
+        match self.dup.preview(region, width, height) {
+            Some(image) => Ok(image),
+            None => display::capture_rect(region),
+        }
+    }
+
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image> {
         let _p = wh_core::prof::span("capture");
         let rect = match target {
@@ -157,7 +176,10 @@ impl Backend for WindowsBackend {
                 info.rect
             }
         };
-        display::capture_rect(rect)
+        match self.dup.capture(rect) {
+            Some(image) => Ok(image),
+            None => display::capture_rect(rect),
+        }
     }
 
     // ------------------------------------------------------------------ windows

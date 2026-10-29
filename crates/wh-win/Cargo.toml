@@ -16,6 +16,11 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     # display.rs: monitors, BitBlt, DIB sections
     "Win32_Graphics_Gdi",
+    # dxgi.rs: Desktop Duplication capture
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
     # wnd.rs: DWM cloaked windows
     "Win32_Graphics_Dwm",
     # wnd.rs, input.rs, hotkey.rs: EnumWindows, SendInput, GetGUIThreadInfo, RegisterHotKey
