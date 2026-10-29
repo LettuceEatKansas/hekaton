@@ -2,3 +2,4 @@ target/
 *.exe
 *.pdb
 .DS_Store
+bench/runs/

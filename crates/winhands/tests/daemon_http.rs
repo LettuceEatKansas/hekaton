@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use wh_core::backend::fake::FakeBackend;
-use wh_core::backend::{Display, Image, Rect, WindowInfo};
+use wh_core::backend::{Backend, Display, Image, Rect, WindowInfo};
 use wh_core::clock::SystemClock;
 use wh_core::config::Config;
 use wh_core::daemon::Daemon;
@@ -202,6 +202,8 @@ fn health_needs_the_token_over_the_wire() {
             && data.get("version").is_some()
     );
     assert_eq!(data["impl"], "winhands-rs");
+    assert_eq!(data["build"]["protocol_version"], 1);
+    assert_eq!(data["build"]["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -340,6 +342,140 @@ fn two_callers_at_once_both_get_answers() {
     for h in handles {
         assert_eq!(h.join().unwrap(), 200);
     }
+}
+
+fn socket(live: &Live) -> TcpStream {
+    let stream = TcpStream::connect(("127.0.0.1", live.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(4)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(4)))
+        .unwrap();
+    stream
+}
+
+fn response_head(stream: &mut TcpStream) -> String {
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+        assert!(head.len() < 8192, "response header limit");
+    }
+    String::from_utf8(head).unwrap()
+}
+
+/// The 100 Continue acknowledgement proves a desktop worker reached its body reader. Keeping the
+/// body open occupies that worker without sleeping in or touching any native backend.
+fn hold_desktop_worker(live: &Live) -> TcpStream {
+    let mut stream = socket(live);
+    write!(stream,
+        "POST /computer HTTP/1.1\r\nHost: localhost\r\nX-Winhands-Token: {}\r\nContent-Length: 2048\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+        live.token).unwrap();
+    stream.flush().unwrap();
+    assert!(response_head(&mut stream).starts_with("HTTP/1.1 100"));
+    stream
+}
+
+fn queued_call(live: &Live, body: &Value, budget: Duration) -> TcpStream {
+    let mut stream = socket(live);
+    let bytes = serde_json::to_vec(body).unwrap();
+    let deadline = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .saturating_add(budget)
+        .as_millis();
+    write!(stream,
+        "POST /computer HTTP/1.1\r\nHost: localhost\r\nX-Winhands-Token: {}\r\nX-Hands-Deadline-Unix-Ms: {deadline}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        live.token, bytes.len()).unwrap();
+    stream.write_all(&bytes).unwrap();
+    stream.flush().unwrap();
+    stream
+}
+
+#[test]
+fn bounded_desktop_queue_keeps_controls_responsive_and_discards_expired_input() {
+    let live = Live::start();
+    live.window("Notepad", "notepad.exe");
+    let mut held: Vec<_> = (0..4).map(|_| hold_desktop_worker(&live)).collect();
+    let mut expired = queued_call(
+        &live,
+        &json!({"action": "type", "text": "must never type", "only_apps": ["notepad.exe"], "shot": false}),
+        Duration::from_millis(50),
+    );
+    let mut queued = Vec::new();
+    // Give the server's connection parser time to admit each complete request into the bounded
+    // queue. All four desktop workers remain blocked at the explicit Continue handshake above.
+    thread::sleep(Duration::from_millis(30));
+    for _ in 0..7 {
+        queued.push(queued_call(
+            &live,
+            &json!({"action": "list_windows", "shot": false}),
+            Duration::from_secs(4),
+        ));
+        thread::sleep(Duration::from_millis(30));
+    }
+    let overflow = live.post(
+        "/computer",
+        json!({"action": "list_windows", "shot": false}),
+    );
+    assert_eq!(overflow.status, 503);
+    assert!(
+        json_of(&overflow)["error"]
+            .as_str()
+            .unwrap()
+            .contains("not executed")
+    );
+    let started = Instant::now();
+    assert_eq!(live.get("/health").status, 200);
+    assert_eq!(live.post("/pause", json!({})).status, 200);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "control lane waited for desktop workers"
+    );
+    assert_eq!(live.post("/resume", json!({})).status, 200);
+    let mut body = serde_json::to_vec(&json!({"action": "list_windows", "shot": false})).unwrap();
+    body.resize(2048, b' ');
+    for stream in &mut held {
+        stream.write_all(&body).unwrap();
+        stream.flush().unwrap();
+    }
+    assert!(response_head(&mut expired).starts_with("HTTP/1.1 408"));
+    for stream in &mut held {
+        let head = response_head(stream);
+        assert!(
+            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.1 400"),
+            "{head}"
+        );
+    }
+    for stream in &mut queued {
+        let head = response_head(stream);
+        assert!(
+            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.1 400"),
+            "{head}"
+        );
+    }
+    assert_eq!(
+        live.fake.input_events(),
+        0,
+        "expired input must never reach backend"
+    );
+    assert_eq!(live.fake.typed_text(), "");
+}
+
+#[test]
+fn declared_body_over_two_mib_is_rejected_before_execution() {
+    let live = Live::start();
+    let mut stream = socket(&live);
+    write!(stream,
+        "POST /computer HTTP/1.1\r\nHost: localhost\r\nX-Winhands-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        live.token, 2 * 1024 * 1024 + 1).unwrap();
+    // End the writer explicitly: the legacy HTTP reader may drain an unread body during cleanup.
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(response_head(&mut stream).starts_with("HTTP/1.1 413"));
+    assert_eq!(live.get("/health").status, 200);
+    assert_eq!(live.fake.input_events(), 0);
 }
 
 // ---------------------------------------------------------------------------------- shutdown, idle

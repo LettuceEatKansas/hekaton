@@ -107,16 +107,36 @@ pub struct Shim {
     link: Arc<DaemonLink>,
     defaults: ShimDefaults,
     activity: Activity,
+    session_id: String,
+    calls: Arc<tokio::sync::Semaphore>,
 }
 
 impl Shim {
     /// A shim forwarding over `link`, adding `defaults` to every call.
     pub fn new(link: Arc<DaemonLink>, defaults: ShimDefaults, activity: Activity) -> Self {
+        let unique = wh_core::token::generate_token().unwrap_or_else(|_| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+                .to_string()
+        });
         Self {
             link,
             defaults,
             activity,
+            session_id: format!(
+                "hands-{}-{}",
+                std::process::id(),
+                &unique[..unique.len().min(32)]
+            ),
+            calls: Arc::new(tokio::sync::Semaphore::new(4)),
         }
+    }
+
+    fn session_args(&self, mut args: Map<String, Value>) -> Map<String, Value> {
+        args.entry("session_id")
+            .or_insert_with(|| Value::String(self.session_id.clone()));
+        args
     }
 }
 
@@ -147,11 +167,20 @@ impl ServerHandler for Shim {
         } else {
             let link = self.link.clone();
             let defaults = self.defaults.clone();
-            let args = request.arguments.unwrap_or_default();
+            let args = self.session_args(request.arguments.unwrap_or_default());
+            let permit = self.calls.clone().try_acquire_owned();
             // the daemon call blocks for as long as the action takes; keep the MCP loop free
-            tokio::task::spawn_blocking(move || guarded(|| forward(&link, &defaults, &args)))
+            match permit {
+                Ok(permit) => tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    guarded(|| forward(&link, &defaults, &args))
+                })
                 .await
-                .unwrap_or_else(|e| Reply::error(format!("winhands shim failed: {e}")))
+                .unwrap_or_else(|e| Reply::error(format!("winhands shim failed: {e}"))),
+                Err(_) => Reply::error(
+                    "Hands is busy: four calls are already running; request was not executed",
+                ),
+            }
         };
         self.activity.touch();
         Ok(to_result(reply).into())
@@ -298,6 +327,23 @@ mod tests {
     }
 
     #[test]
+    fn shim_sessions_are_stable_isolated_and_allow_explicit_override() {
+        let first = Shim::new(Arc::new(dead_link()), defaults(), Activity::new());
+        let second = Shim::new(Arc::new(dead_link()), defaults(), Activity::new());
+        let a = first.session_args(Map::new());
+        assert_eq!(a, first.session_args(Map::new()));
+        assert_ne!(
+            a["session_id"],
+            second.session_args(Map::new())["session_id"]
+        );
+        let explicit = json!({"session_id": "operator-session", "action": "screenshot"});
+        assert_eq!(
+            first.session_args(explicit.as_object().unwrap().clone()),
+            explicit.as_object().unwrap().clone()
+        );
+    }
+
+    #[test]
     fn the_tool_is_the_python_tool() {
         let t = tool_definition();
         assert_eq!(t.name, "computer");
@@ -311,11 +357,11 @@ mod tests {
     #[test]
     fn serialised_the_tool_matches_the_python_list_tools_entry() {
         let ours = serde_json::to_value(tool_definition()).unwrap();
-        let python: Value =
-            serde_json::from_str(include_str!("../../../tests/parity/python_list_tools.json"))
-                .unwrap();
+        // 2026-10-28: the definition left the Python one behind (Windows/macOS, sessions, budgets);
+        // tests/parity/python_list_tools.json stays as history.
         assert_eq!(
-            ours, python[0],
+            ours,
+            wh_core::tool_schema::tool_definition(),
             "name, description and inputSchema, and nothing else"
         );
     }

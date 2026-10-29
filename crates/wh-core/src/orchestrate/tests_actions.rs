@@ -137,6 +137,7 @@ fn a_zoom_box_may_arrive_as_coordinate_and_must_exist() {
 #[test]
 fn a_lone_symbol_key_is_typed_and_names_are_pressed() {
     let kit = Kit::new();
+    kit.front("Editor", "editor.exe", 30);
     let chords = record_chords(&kit);
     kit.step(json!({"action": "key", "text": "*"})).unwrap();
     kit.step(json!({"action": "key", "text": "ctrl+a"}))
@@ -229,6 +230,7 @@ fn hold_key_holds_then_releases_in_reverse() {
 #[test]
 fn typing_needs_text_and_reports_how_it_went_in() {
     let kit = Kit::new();
+    kit.front("Editor", "editor.exe", 30);
     assert_eq!(
         err_of(kit.step(json!({"action": "type"}))).message(),
         "type needs text"
@@ -464,21 +466,22 @@ fn mouse_buttons_and_moves_report_in_python_words() {
         "moved to [7, 8]"
     );
     let ev = kit.fake.events();
+    assert_eq!(ev[0], InputEvent::MouseMove(Point { x: 5, y: 6 }));
     assert_eq!(
-        ev[0],
+        ev[1],
         InputEvent::MouseButton {
             button: MouseButton::Left,
             down: true
         }
     );
     assert_eq!(
-        ev[1],
+        ev[2],
         InputEvent::MouseButton {
             button: MouseButton::Left,
             down: false
         }
     );
-    assert_eq!(ev[2], InputEvent::MouseMove(Point::new(7, 8)));
+    assert_eq!(ev[3], InputEvent::MouseMove(Point::new(7, 8)));
 }
 
 #[test]
@@ -1454,12 +1457,15 @@ fn expect_is_appended_to_the_steps_note() {
         note,
         "waited 0.1s (asked 0.1s, screen settled); expect: PASS"
     );
-    let (note, _) = kit
+    let error = kit
         .step(json!({"action": "left_click", "coordinate": [1, 1], "expect": {"text": "Nope"}}))
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(error, StepError::Expectation(_)));
     assert!(
-        note.ends_with("; expect: FAIL (text 'Nope' not found)"),
-        "{note}"
+        error
+            .message()
+            .ends_with("; expect: FAIL (text 'Nope' not found)"),
+        "{error}"
     );
 }
 

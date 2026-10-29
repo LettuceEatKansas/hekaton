@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wh_core::backend::{
     AppTarget, Backend, BackendError, BackendResult, Capabilities, CaptureTarget, Caret,
@@ -74,34 +74,44 @@ impl MacBackend {
 
     /// Paste long text through the clipboard (Cmd+V) and put the old text back. Only used when
     /// the clipboard holds text or nothing, so nothing the user copied is lost.
-    fn paste_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()> {
+    fn paste_text(
+        &self,
+        text: &str,
+        saved: ClipboardContent,
+        sequence: u64,
+        guard: InputGuard<'_>,
+    ) -> BackendResult<()> {
         guard()?;
         perm::require_post_events("paste text")?;
         perm::check_secure_typing()?;
-        let saved = clip::read()?;
+        if clip::sequence() != sequence {
+            return self.input.type_text(text, guard);
+        }
         clip::set_text(text)?;
+        let written_sequence = clip::sequence();
         sleep(Duration::from_millis(40));
-        let result = self.key_chord(&[Key::Meta, Key::Char('v')], 1, guard);
+        let paste_guard = || {
+            guard()?;
+            if clip::sequence() != written_sequence {
+                return Err(BackendError::Os(
+                    "clipboard changed before paste; inspect before retrying".into(),
+                ));
+            }
+            Ok(())
+        };
+        let result = self.key_chord(&[Key::Meta, Key::Char('v')], 1, &paste_guard);
         // Let the app read the pasteboard before the old contents go back.
         sleep(Duration::from_millis(250));
-        match saved {
-            ClipboardContent::Text(old) => {
-                let _ = clip::set_text(&old);
-            }
-            ClipboardContent::Empty => {
-                let _ = clip::set_text("");
-            }
-            _ => {}
-        }
+        clip::restore_plain(saved, written_sequence);
         result
     }
 
-    fn capture_region(&self, region: Rect) -> BackendResult<Image> {
+    fn capture_region(&self, region: Rect, deadline: Instant) -> BackendResult<Image> {
         let list = displays::list()?;
         let specs: Vec<_> = list.iter().map(displays::DisplayInfo::spec).collect();
         let plan = plan_capture(&specs, region)
             .ok_or_else(|| BackendError::Os("that region is outside every display".to_string()))?;
-        self.capturer.capture_plan(&plan, &list)
+        self.capturer.capture_plan(&plan, &list, deadline)
     }
 }
 
@@ -145,10 +155,11 @@ impl Backend for MacBackend {
     }
 
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image> {
+        let deadline = Instant::now() + crate::capture::CAPTURE_TIMEOUT;
         match target {
             CaptureTarget::VirtualDesktop => {
                 let region = displays::union(&displays::list()?);
-                self.capture_region(region)
+                self.capture_region(region, deadline)
             }
             CaptureTarget::Display(n) => {
                 let list = displays::list()?;
@@ -157,9 +168,9 @@ impl Backend for MacBackend {
                     .and_then(|n| n.checked_sub(1))
                     .and_then(|i| list.get(i))
                     .ok_or_else(|| BackendError::Os(format!("there is no display {n}")))?;
-                self.capture_region(d.rect)
+                self.capture_region(d.rect, deadline)
             }
-            CaptureTarget::Region(r) => self.capture_region(r),
+            CaptureTarget::Region(r) => self.capture_region(r, deadline),
             CaptureTarget::Window(w) => {
                 let info = winlist::info(w, &self.display_rects())?;
                 let list = displays::list()?;
@@ -167,11 +178,12 @@ impl Backend for MacBackend {
                 let scale =
                     display_for_point(&specs, info.rect.center()).map_or(1.0, |i| specs[i].scale);
                 let (_, id) = window_parts(w);
-                match self.capturer.capture_window(id, info.rect, scale) {
+                match self.capturer.capture_window(id, info.rect, scale, deadline) {
                     Ok(img) => Ok(img),
                     // A window ScreenCaptureKit will not isolate is captured from the screen.
                     Err(BackendError::Denied(e)) => Err(BackendError::Denied(e)),
-                    Err(_) => self.capture_region(info.rect),
+                    Err(BackendError::Timeout) => Err(BackendError::Timeout),
+                    Err(_) => self.capture_region(info.rect, deadline),
                 }
             }
         }
@@ -281,9 +293,17 @@ impl Backend for MacBackend {
         window: WindowRef,
         query: &str,
         max_hits: usize,
-        _budget: Duration,
+        budget: Duration,
     ) -> BackendResult<Vec<DocumentHit>> {
-        text::find_in_documents(window, query, max_hits, &self.display_rects())
+        let started = Instant::now();
+        let displays = self.display_rects();
+        text::find_in_documents(
+            window,
+            query,
+            max_hits,
+            &displays,
+            budget.saturating_sub(started.elapsed()),
+        )
     }
 
     fn document_line_at(&self, window: WindowRef, p: Point) -> BackendResult<Option<String>> {
@@ -355,11 +375,8 @@ impl Backend for MacBackend {
     fn type_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()> {
         if utf16_len(text) > PASTE_ABOVE_UNITS {
             // Pasting is only safe when nothing but text (or nothing) would be overwritten.
-            if matches!(
-                clip::read(),
-                Ok(ClipboardContent::Text(_) | ClipboardContent::Empty)
-            ) {
-                return self.paste_text(text, guard);
+            if let Some((saved, sequence)) = clip::plain_snapshot() {
+                return self.paste_text(text, saved, sequence, guard);
             }
         }
         self.input.type_text(text, guard)

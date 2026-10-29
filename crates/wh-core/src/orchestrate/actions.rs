@@ -14,7 +14,7 @@ use super::error::{StepError, StepResult};
 use super::snapshot::WAKE_HINT;
 use super::{Ctx, secs};
 use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_passive};
-use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection, no_guard};
+use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection};
 use crate::keys::{Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo};
 use crate::textutil::{fmt_g, py_repr, py_value_repr};
 
@@ -54,6 +54,51 @@ impl Ctx<'_> {
                 ACTIONS_SORTED.join(", ")
             )));
         }
+        // Releasing input is cleanup: never wait for a person or raise another window first.
+        if action == "left_mouse_up" {
+            let mut owned = self
+                .c
+                .owned_mouse
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.be().mouse_button(MouseButton::Left, false)?;
+            *owned = false;
+            return Ok(("left mouse up".into(), None));
+        }
+        if action != "mouse_move"
+            && !is_passive(&action)
+            && *self
+                .c
+                .owned_mouse
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+        {
+            return Err(StepError::permission(
+                "left mouse button is held by this tool; send left_mouse_up before another acting action",
+            ));
+        }
+        self.check_cancelled()?;
+        if self.o.read_only
+            && (!matches!(
+                action.as_str(),
+                "status"
+                    | "screenshot"
+                    | "zoom"
+                    | "read"
+                    | "find_text"
+                    | "list_windows"
+                    | "cursor_position"
+                    | "list_files"
+                    | "recipe_list"
+                    | "clipboard_get"
+            ) || is_truthy(step, "wake")
+                || is_truthy(step, "save_to")
+                || is_truthy(step, "scope"))
+        {
+            return Err(StepError::permission(
+                "read_only refuses this action or a focus-changing observation; no actions sent",
+            ));
+        }
         // 2026-10-08: the shortcuts (window, folder) wait for a person themselves, and the recipe
         // actions that are not expanded by the batch loop need no input wait at all.
         match action.as_str() {
@@ -89,6 +134,7 @@ impl Ctx<'_> {
         let mut prefix = String::new();
         if acts {
             self.wait_for_human()?;
+            self.check_cancelled()?;
             prefix = self.restore_target(matches!(
                 action.as_str(),
                 "key" | "type" | "hold_key" | "read_text"
@@ -96,6 +142,7 @@ impl Ctx<'_> {
         }
 
         let note: String = match action.as_str() {
+            "status" => return Ok((self.c.status().to_string(), None)),
             "screenshot" => {
                 if is_truthy(step, "save_to") {
                     // 2026-10-08: write the picture to a file as well
@@ -417,8 +464,12 @@ impl Ctx<'_> {
         let mut note = format!("{prefix}{note}");
         if let Some(expect) = step.get("expect").filter(|v| crate::config::truthy(v)) {
             self.settle(Some(0.6), 0.1, 2)?;
-            note.push_str("; ");
-            note.push_str(&self.check_expect(expect)?);
+            if let Some(reason) = self.check_expect_result(expect)? {
+                return Err(StepError::expectation(format!(
+                    "{note}; expect: FAIL ({reason})"
+                )));
+            }
+            note.push_str("; expect: PASS");
         }
         Ok((note, None))
     }
@@ -482,9 +533,14 @@ impl Ctx<'_> {
         };
         let double = is_truthy(step, "double");
         let button = click_button(&button_name)?;
+        if button == MouseButton::Left {
+            self.check_click(p, double, step)?;
+        }
         self.with_modifiers("", || {
             self.be()
-                .mouse_click(p, button, if double { 2 } else { 1 }, &no_guard)
+                .mouse_click(p, button, if double { 2 } else { 1 }, &|| {
+                    self.pointer_guard(p)
+                })
                 .map_err(StepError::from)
         })?;
         Ok(format!(
@@ -520,8 +576,11 @@ impl Ctx<'_> {
         let hit = self.be().window_at_point(p).ok().flatten();
         self.refuse_explorer_open(hit.map(|h| self.root_of(h)))?;
         let (x, y, _) = self.snap_to_word(p.x, p.y);
+        self.check_click(Point { x, y }, true, step)?;
         self.be()
-            .mouse_click(Point { x, y }, MouseButton::Left, 2, &no_guard)?;
+            .mouse_click(Point { x, y }, MouseButton::Left, 2, &|| {
+                self.pointer_guard(Point { x, y })
+            })?;
         self.sleep(0.05);
         let new_text = crate::textutil::py_str(new.unwrap_or(&Value::Null));
         let suffix = self.type_text(&new_text)?;
@@ -594,7 +653,7 @@ impl Ctx<'_> {
                     // the rest of its batch. A lone symbol (* / % = ( etc.) means that character:
                     // type it.
                     for _ in 0..reps {
-                        self.be().type_text(trimmed, &no_guard)?;
+                        self.be().type_text(trimmed, &|| self.keyboard_guard())?;
                         self.sleep(0.012);
                     }
                     return Ok(format!("typed {}", py_repr(trimmed)));
@@ -641,10 +700,7 @@ impl Ctx<'_> {
                 let combo = combo_now;
                 let keys = parse_key_combo(&combo, Platform::current())?;
                 let d = float_or(step, "duration", 0.5)?.clamp(0.0, 30.0);
-                self.holding(&keys, || {
-                    self.sleep(d);
-                    Ok(())
-                })?;
+                self.holding(&keys, || self.sleep_checked(d))?;
                 Ok(format!("held {combo} {}s", fmt_g(d)))
             }
         }
@@ -796,7 +852,10 @@ impl Ctx<'_> {
                     matches!((h1, h2), (Some(a), Some(b)) if self.root_of(a) != self.root_of(b));
                 self.with_modifiers(text, || {
                     self.be()
-                        .mouse_drag(Point { x: sx, y: sy }, Point { x, y }, &no_guard)
+                        .mouse_drag(Point { x: sx, y: sy }, Point { x, y }, &|| {
+                            self.pointer_guard(Point { x: sx, y: sy })?;
+                            self.pointer_guard(Point { x, y })
+                        })
                         .map_err(StepError::from)
                 })?;
                 Ok(format!(
@@ -805,13 +864,25 @@ impl Ctx<'_> {
                 ))
             }
             "mouse_move" => {
+                self.pointer_guard(Point { x, y })?;
                 self.be().mouse_move(Point { x, y })?;
                 Ok(format!("moved to {coord_repr}"))
             }
             "left_mouse_down" | "left_mouse_up" => {
-                self.host_at(Point { x, y })?;
-                self.be()
-                    .mouse_button(MouseButton::Left, action == "left_mouse_down")?;
+                let point = Point { x, y };
+                self.check_click(point, false, step)?;
+                // Pause cleanup shares this short lock. It cannot race a successful press
+                // between native injection and the ownership record.
+                let mut owned = self
+                    .c
+                    .owned_mouse
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                self.input_guard()?;
+                self.be().mouse_move(point)?;
+                self.pointer_guard(self.be().cursor_position()?)?;
+                self.be().mouse_button(MouseButton::Left, true)?;
+                *owned = true;
                 Ok(action.replace('_', " "))
             }
             "scroll" => {
@@ -836,7 +907,9 @@ impl Ctx<'_> {
                         )));
                     };
                     self.be()
-                        .mouse_scroll(Point { x, y }, dir, amount, &no_guard)
+                        .mouse_scroll(Point { x, y }, dir, amount, &|| {
+                            self.pointer_guard(Point { x, y })
+                        })
                         .map_err(StepError::from)
                 })?;
                 Ok(format!("scrolled {direction} {amount}"))
@@ -857,8 +930,8 @@ impl Ctx<'_> {
                     }
                 }
                 let p = Point { x, y };
-                if matches!(action, "left_click" | "double_click") {
-                    self.check_irreversible(p, step)?;
+                if matches!(action, "left_click" | "double_click" | "triple_click") {
+                    self.check_click(p, action != "left_click", step)?;
                 }
                 let button = match action {
                     "right_click" => MouseButton::Right,
@@ -874,7 +947,8 @@ impl Ctx<'_> {
                 if action == "triple_click" {
                     self.with_modifiers(text, || {
                         for _ in 0..3 {
-                            self.be().mouse_click(p, MouseButton::Left, 1, &no_guard)?;
+                            self.be()
+                                .mouse_click(p, MouseButton::Left, 1, &|| self.pointer_guard(p))?;
                         }
                         Ok(())
                     })?;
@@ -882,7 +956,7 @@ impl Ctx<'_> {
                     let count = if action == "double_click" { 2 } else { 1 };
                     self.with_modifiers(text, || {
                         self.be()
-                            .mouse_click(p, button, count, &no_guard)
+                            .mouse_click(p, button, count, &|| self.pointer_guard(p))
                             .map_err(StepError::from)
                     })?;
                 }

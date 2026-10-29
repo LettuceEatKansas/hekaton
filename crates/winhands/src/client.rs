@@ -8,7 +8,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// How long to wait for a TCP connection to a daemon on this machine. A listening loopback port
 /// accepts in well under a millisecond, and a CLOSED one takes about two seconds to say so on Windows
@@ -115,6 +115,11 @@ pub fn request(
     body: Option<&[u8]>,
     timeouts: Timeouts,
 ) -> Result<Reply, ClientError> {
+    let deadline = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| ClientError::Io(format!("system clock precedes Unix epoch: {e}")))?
+        .saturating_add(timeouts.io)
+        .as_millis();
     let mut stream = connect(host, port, timeouts.connect)?;
     let _ = stream.set_nodelay(true);
     stream
@@ -123,6 +128,7 @@ pub fn request(
         .map_err(io_error)?;
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nX-Winhands-Token: {token}\r\n\
+         X-Hands-Deadline-Unix-Ms: {deadline}\r\n\
          Content-Type: application/json\r\nConnection: close\r\n"
     );
     if let Some(b) = body {
@@ -382,6 +388,7 @@ mod tests {
         let seen = server.join().unwrap();
         assert!(seen.starts_with("POST /computer HTTP/1.1\r\n"), "{seen}");
         assert!(seen.contains("X-Winhands-Token: secret\r\n"));
+        assert!(seen.contains("X-Hands-Deadline-Unix-Ms: "));
         assert!(seen.contains("Content-Length: 7\r\n"));
         assert!(seen.contains("Connection: close\r\n"));
         assert!(seen.ends_with("{\"x\":1}"));

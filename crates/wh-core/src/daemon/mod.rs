@@ -229,6 +229,9 @@ impl Daemon {
         let computer = self.computer.clone();
         let on_press: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let paused = computer.pause_flag().toggle();
+            if paused && let Err(error) = computer.pause_and_release() {
+                eprintln!("winhands: paused, but owned input release failed: {error}");
+            }
             eprintln!("winhands: kill hotkey toggled, paused={paused}");
         });
         let name = self
@@ -251,6 +254,19 @@ impl Daemon {
             Ok(response) => response,
             Err(payload) => self.panicked(req, payload.as_ref()),
         }
+    }
+
+    /// Handle with a transport deadline, including time already spent in its bounded queue.
+    pub fn handle_until(&self, req: &Request<'_>, deadline: std::time::Instant) -> Response {
+        crate::request::within(deadline, || {
+            if crate::request::remaining().is_some_and(|d| d.is_zero()) {
+                return Response::json(
+                    408,
+                    &json!({"ok": false, "error": "request expired before execution; no input sent"}),
+                );
+            }
+            self.handle(req)
+        })
     }
 
     fn route(&self, req: &Request<'_>) -> Response {
@@ -325,7 +341,16 @@ impl Daemon {
             }
             "pause" | "resume" => {
                 let pause = path == "pause";
-                self.computer.pause_flag().set(pause);
+                if pause {
+                    if let Err(error) = self.computer.pause_and_release() {
+                        return Response::json(
+                            500,
+                            &json!({"ok": false, "error": format!("paused, but owned input release failed: {error}; inspect desktop before resuming")}),
+                        );
+                    }
+                } else {
+                    self.computer.pause_flag().set(false);
+                }
                 Response::json(
                     200,
                     &json!({"ok": true, "result": if pause { "paused" } else { "resumed" }}),
@@ -366,6 +391,7 @@ impl Daemon {
         json!({
             "elevated": elevated,
             "paused": self.computer.pause_flag().is_paused(),
+            "read_only": truthy(&cfg.get("read_only")),
             "version": VERSION,
             "hotkey": self.hotkey(),
             "idle_remaining_seconds": self.computer.idle_timer().remaining(clock),
@@ -498,6 +524,9 @@ impl Daemon {
 
     /// The routes other than `computer`: the read routes and the legacy input routes.
     fn run_route(&self, path: &str, args: &Value, who: &PeerCaller<'_>) -> Result<Tool, String> {
+        if crate::request::remaining().is_some_and(|d| d.is_zero()) {
+            return Err("request expired before execution; no input sent".into());
+        }
         let Value::Object(map) = args else {
             return Err("tool args must be an object".into());
         };
@@ -523,7 +552,7 @@ impl Daemon {
                 Ok(self.ok_text(path, args, text))
             }
             "snapshot" => {
-                let _one_at_a_time = c.tool_lock().lock().unwrap_or_else(|e| e.into_inner());
+                let _one_at_a_time = c.lock_tool(true).ok_or("desktop busy; no input sent")?;
                 let coords = map.get("coords").is_some_and(truthy);
                 let text = c
                     .read_snapshot(
@@ -531,7 +560,7 @@ impl Daemon {
                         int_arg("max_items", 40),
                         str_arg("filter").unwrap_or(""),
                         coords,
-                        true,
+                        !truthy(&c.config().get("read_only")),
                     )
                     .map_err(step_err)?;
                 let text = c.repeat_note().nudge(c.clock.as_ref(), path, args, &text);
@@ -552,7 +581,7 @@ impl Daemon {
                 Ok(self.ok_text(path, args, text))
             }
             "screenshot" => {
-                let _one_at_a_time = c.tool_lock().lock().unwrap_or_else(|e| e.into_inner());
+                let _one_at_a_time = c.lock_tool(true).ok_or("desktop busy; no input sent")?;
                 let png = c.display_png().map_err(step_err)?;
                 log_action(c.config().paths(), path, args, "screenshot", true);
                 Ok(Tool::Png(png))

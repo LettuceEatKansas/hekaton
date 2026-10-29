@@ -42,6 +42,53 @@ pub fn no_guard() -> BackendResult<()> {
     Ok(())
 }
 
+/// Keys injected by this operation. Cleanup never consults the input guard.
+/// Tracking starts before the first press so partial failures and unwinds release earlier keys.
+pub(crate) struct HeldKeys<'a, B: Backend + ?Sized> {
+    backend: &'a B,
+    pressed: Vec<Key>,
+}
+
+impl<'a, B: Backend + ?Sized> HeldKeys<'a, B> {
+    pub(crate) fn new(backend: &'a B) -> Self {
+        Self {
+            backend,
+            pressed: Vec::new(),
+        }
+    }
+
+    pub(crate) fn press(&mut self, key: Key) -> BackendResult<()> {
+        self.backend.key_down(key)?;
+        self.pressed.push(key);
+        Ok(())
+    }
+
+    pub(crate) fn release(&mut self) -> BackendResult<()> {
+        let mut first_error = None;
+        let mut failed = Vec::new();
+        for key in self.pressed.drain(..).rev() {
+            if let Err(error) = self.backend.key_up(key) {
+                failed.push(key);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        failed.reverse();
+        self.pressed = failed;
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<B: Backend + ?Sized> Drop for HeldKeys<'_, B> {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
 /// The platform boundary. See the [module docs](self).
 pub trait Backend: Send + Sync {
     // ------------------------------------------------------------------ identity and setup
@@ -334,12 +381,12 @@ pub trait Backend: Send + Sync {
     fn key_chord(&self, keys: &[Key], repeat: u32, guard: InputGuard<'_>) -> BackendResult<()> {
         for _ in 0..repeat.max(1) {
             guard()?;
+            let mut held = HeldKeys::new(self);
             for key in keys {
-                self.key_down(*key)?;
+                guard()?;
+                held.press(*key)?;
             }
-            for key in keys.iter().rev() {
-                self.key_up(*key)?;
-            }
+            held.release()?;
             thread::sleep(Duration::from_millis(10));
         }
         Ok(())
@@ -531,6 +578,17 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:_point_on_screen`.
     fn point_on_screen(&self, p: Point) -> BackendResult<bool> {
         Ok(self.virtual_screen()?.contains(p))
+    }
+
+    /// The live owner PID, without fetching titles, process names, or accessibility data.
+    /// Native backends should override this for inexpensive per-injection identity checks.
+    fn window_pid(&self, window: WindowRef) -> BackendResult<u32> {
+        let pid = self.window_info(window)?.pid;
+        if pid == 0 {
+            Err(BackendError::WindowGone)
+        } else {
+            Ok(pid)
+        }
     }
 
     /// Does the window still exist?

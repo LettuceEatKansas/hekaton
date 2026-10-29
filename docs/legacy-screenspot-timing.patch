@@ -1,0 +1,46 @@
+diff --git a/scripts/bench_screenspot.py b/scripts/bench_screenspot.py
+--- a/scripts/bench_screenspot.py
++++ b/scripts/bench_screenspot.py
+@@ -434,12 +434,12 @@ def run_sample(row: dict, cache: Path, arms: tuple, key: str, args) -> list:
+     b64 = encode_image(img, args.max_dim) if ("a" in arms or "b" in arms) else ""
+     rows = note = None
+     if "b" in arms or "c" in arms:
+-        t0 = time.time()
++        t0 = time.perf_counter()
+         rows = read_image(img, tiles=args.tiles, zoom=args.zoom)
+-        ocr_secs = time.time() - t0
++        ocr_secs = time.perf_counter() - t0
+         note = screen_note(rows, W, H, row["instruction"])
+     for arm in arms:
+-        t0 = time.time()
++        t0 = time.perf_counter()
+         point, reply, err = None, "", ""
+         try:
+             if arm == "c":
+@@ -453,6 +453,8 @@ def run_sample(row: dict, cache: Path, arms: tuple, key: str, args) -> list:
+                 point = parse_point(reply)
+         except Exception as exc:  # noqa: BLE001 - one bad sample must not end the run
+             err = f"{type(exc).__name__}: {exc}"[:300]
++        operation_secs = time.perf_counter() - t0
++        total_secs = operation_secs + (ocr_secs if arm in ("b", "c") else 0.0)
+         rec = {"id": row["id"], "split": row["split"], "arm": arm,
+                "ui_type": row.get("ui_type"), "group": row.get("group"),
+                "application": row.get("application"), "platform": row.get("platform"),
+@@ -459,7 +461,8 @@ def run_sample(row: dict, cache: Path, arms: tuple, key: str, args) -> list:
+                "instruction": row["instruction"], "bbox": row["bbox"], "img_size": row["img_size"],
+                "point": list(point) if point else None,
+                "correct": bool(hit(point, row["bbox"], row["img_size"])),
+-               "secs": round(time.time() - t0, 2), "reply": reply[:400], "error": err}
++               "secs": round(total_secs, 4), "operation_secs": round(operation_secs, 4),
++               "reply": reply[:400], "error": err}
+         if arm in ("b", "c"):
+             rec["ocr_rows"] = len(rows)
+             rec["ocr_secs"] = round(ocr_secs, 2)
+@@ -479,6 +482,7 @@ def report(results: list, args=None) -> str:
+     if args is not None:
+         lines.append(f"model {args.model} via {args.base_url}, image long edge {args.max_dim} px, "
+                      f"zoom tiles {args.tiles}x{args.tiles} at {args.zoom}x")
++    lines.append("s/sample includes OCR; dataset download and shared image preparation excluded.")
+     lines.append(f"{'arm':<26} {'overall':>16} {'text':>16} {'icon':>16} {'s/sample':>9}")
+     for arm in ARMS:
+         if arm not in acc:

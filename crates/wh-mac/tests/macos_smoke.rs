@@ -9,9 +9,26 @@ use wh_core::backend::{
 };
 use wh_mac::MacBackend;
 
+fn require_native() -> bool {
+    matches!(std::env::var("HANDS_REQUIRE_NATIVE").as_deref(), Ok("1"))
+}
+
 fn backend() -> MacBackend {
     let b = MacBackend::new();
     b.init().expect("init");
+    if require_native() {
+        let missing: Vec<_> = b
+            .permissions()
+            .expect("native permission report")
+            .into_iter()
+            .filter(|p| !p.granted)
+            .map(|p| p.name)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "HANDS_REQUIRE_NATIVE=1 requires all privacy grants; missing {missing:?}"
+        );
+    }
     b
 }
 
@@ -133,7 +150,13 @@ fn displays_are_ordered_and_scaled() {
             assert!(b.point_on_screen(list[0].rect.center()).unwrap());
         }
         // A runner without a display: the error must say so.
-        Err(e) => eprintln!("no displays here: {e}"),
+        Err(e) => {
+            assert!(
+                !require_native(),
+                "required native display enumeration failed: {e}"
+            );
+            eprintln!("no displays here: {e}");
+        }
     }
 }
 
@@ -157,13 +180,17 @@ fn capture_is_denied_cleanly_or_returns_pixels() {
             assert!(img.width() > 0 && img.height() > 0);
         }
         Err(BackendError::Denied(msg)) => {
+            assert!(!require_native(), "required native capture denied: {msg}");
             assert!(!granted);
             assert!(
                 msg.contains("Screen") && msg.contains("System Settings"),
                 "{msg}"
             );
         }
-        Err(e) => eprintln!("capture failed without a grant problem: {e}"),
+        Err(e) => {
+            assert!(!require_native(), "required native capture failed: {e}");
+            eprintln!("capture failed without a grant problem: {e}");
+        }
     }
 }
 
@@ -222,6 +249,7 @@ fn clipboard_round_trips_text() {
     let b = backend();
     let marker = format!("winhands smoke {}", std::process::id());
     if b.set_clipboard_text(&marker).is_err() {
+        assert!(!require_native(), "required native pasteboard write failed");
         eprintln!("the pasteboard is not writable here");
         return;
     }
@@ -332,6 +360,10 @@ fn vision_reads_drawn_text_and_reports_top_left_boxes() {
                 .all(|w| w.rect.left >= r.left - 2 && w.rect.right <= r.right + 2)
         );
     } else {
+        assert!(
+            !require_native(),
+            "required native OCR did not recognize HELLO: {all:?}"
+        );
         eprintln!("Vision did not read the blocky glyphs on this machine; skipping box checks");
     }
 }

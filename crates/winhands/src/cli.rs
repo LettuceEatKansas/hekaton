@@ -20,8 +20,7 @@ use crate::start::Starter;
 use crate::wh::{self, Exit};
 
 /// The short usage line.
-pub const USAGE: &str =
-    "usage: winhands <acknowledge|status|start|stop|pause|resume|doctor|daemon|mcp|wh>";
+pub const USAGE: &str = "usage: hands (or winhands) <acknowledge|status|start|stop|pause|resume|doctor|daemon|mcp|wh|--version|--build-info>";
 
 fn exe_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winhands"))
@@ -109,7 +108,18 @@ pub fn main(args: Vec<String>) -> i32 {
             0
         }
         "--version" | "version" => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "{} source={} dirty={} protocol={} target={}",
+                env!("CARGO_PKG_VERSION"),
+                env!("HANDS_SOURCE_COMMIT"),
+                env!("HANDS_SOURCE_DIRTY"),
+                crate::serve::PROTOCOL_VERSION,
+                env!("HANDS_BUILD_TARGET")
+            );
+            0
+        }
+        "--build-info" => {
+            println!("{}", crate::serve::build_info());
             0
         }
         "daemon" => cmd_daemon(rest),

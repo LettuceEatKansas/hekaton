@@ -19,15 +19,10 @@ impl Ctx<'_> {
             return Ok(String::new());
         };
         crate::recipes::check_when(when, "when").map_err(StepError::value)?;
-        let verdict = self.check_expect(when)?;
-        if verdict == "expect: PASS" {
-            return Ok(String::new());
+        match self.check_expect_result(when)? {
+            None => Ok(String::new()),
+            Some(reason) => Ok(format!("when not met ({reason})")),
         }
-        let why = match verdict.strip_prefix("expect: FAIL (") {
-            Some(rest) => rest.strip_suffix(')').unwrap_or(rest),
-            None => verdict.as_str(),
-        };
-        Ok(format!("when not met ({why})"))
     }
 
     /// Run one step under its recipe's allowlist (which only ever narrows the call's), or under the

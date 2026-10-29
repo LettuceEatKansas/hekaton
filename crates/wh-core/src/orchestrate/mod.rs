@@ -35,6 +35,7 @@ mod recipe;
 mod refs;
 mod repeat;
 mod scope;
+mod sessions;
 mod shortcuts;
 mod shots;
 mod snapshot;
@@ -48,6 +49,10 @@ mod tests_find;
 #[cfg(test)]
 mod tests_guard;
 #[cfg(test)]
+mod tests_improvements;
+#[cfg(test)]
+mod tests_input_safety;
+#[cfg(test)]
 mod tests_many;
 #[cfg(test)]
 mod tests_open;
@@ -55,6 +60,8 @@ mod tests_open;
 mod tests_recipes;
 #[cfg(test)]
 mod tests_scope;
+#[cfg(test)]
+mod tests_sessions;
 #[cfg(test)]
 mod tests_shortcuts;
 
@@ -78,14 +85,14 @@ pub(crate) use args::flag;
 pub use error::{StepError, StepResult};
 pub(crate) use files::fmt_size;
 pub(crate) use guard::normalize_only_app;
-pub use many::{ManyResult, ToolOutcome};
+pub use many::{ACTION_LIMIT, ManyResult, StepFailure, ToolOutcome};
 pub use refs::{ElementRefs, WindowRefs};
 pub use repeat::{FailureCounter, REPEAT_FAIL_LIMIT, REPEAT_WINDOW, RepeatNote};
 pub use snapshot::{WindowLine, format_windows};
 
 /// What a call remembers about the world between calls (the Python module globals that
 /// `run_many` deliberately does NOT reset).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Memory {
     /// Screen point of the last pointer action, drawn on the next screenshot (`_LAST_POINT`).
     pub last_point: Option<Point>,
@@ -113,10 +120,26 @@ pub struct Computer {
     pub(crate) repeats: RepeatNote,
     /// The bundled recipes and the owner's, for the `recipe` actions.
     pub(crate) recipes: RecipeStore,
+    sessions: Mutex<sessions::Sessions>,
+    observation_epoch: std::sync::atomic::AtomicU64,
+    /// Ownership of the raw left-button hold; never includes human-held input.
+    pub(crate) owned_mouse: Mutex<bool>,
     tool_lock: Mutex<()>,
 }
 
 impl Computer {
+    /// Cheap capabilities and limits without capturing or targeting the desktop.
+    pub fn status(&self) -> serde_json::Value {
+        serde_json::json!({
+            "backend": self.backend.name(), "version": env!("CARGO_PKG_VERSION"),
+            "paused": self.pause.is_paused(), "read_only": crate::config::truthy(&self.cfg.get("read_only")),
+            "max_actions": ACTION_LIMIT, "max_images": 8, "budget_ms": 60000,
+            "max_budget_ms": 120000, "compact": true, "sessions": true,
+            "snapshot_scope": "single unscoped screenshot; tokens consumed per attempted request",
+            "native_validation": "not established by this status call"
+        })
+    }
+
     /// A tool over `backend`, with its own pause flag, idle timer and rate cap.
     pub fn new(backend: Arc<dyn Backend>, clock: Arc<dyn Clock>, cfg: Arc<Config>) -> Self {
         let idle = Arc::new(IdleTimer::new(cfg.idle_timeout_seconds(), clock.as_ref()));
@@ -147,6 +170,9 @@ impl Computer {
             fails: FailureCounter::default(),
             repeats: RepeatNote::default(),
             recipes,
+            sessions: Mutex::new(sessions::Sessions::default()),
+            observation_epoch: std::sync::atomic::AtomicU64::new(0),
+            owned_mouse: Mutex::new(false),
             tool_lock: Mutex::new(()),
         }
     }
@@ -187,6 +213,28 @@ impl Computer {
         &self.tool_lock
     }
 
+    /// Take [`Self::tool_lock`]. A call that can send input never queues (it could fire after its
+    /// caller gave up, 2026-10-28), so `wait = false` answers `None` at once when busy. A read-only
+    /// call (`wait = true`) waits its turn, up to its request deadline or 30 s, on real time: the
+    /// other holder is a real thread, not the injected clock.
+    pub fn lock_tool(&self, wait: bool) -> Option<std::sync::MutexGuard<'_, ()>> {
+        let most = std::time::Duration::from_secs(30);
+        let give_up =
+            std::time::Instant::now() + crate::request::remaining().map_or(most, |d| d.min(most));
+        loop {
+            match self.tool_lock.try_lock() {
+                Ok(guard) => return Some(guard),
+                Err(std::sync::TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock)
+                    if wait && std::time::Instant::now() < give_up =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => return None,
+            }
+        }
+    }
+
     /// The backend this tool drives.
     pub fn backend(&self) -> &dyn Backend {
         self.backend.as_ref()
@@ -208,6 +256,14 @@ impl Computer {
 /// Built fresh by every `run_many`; nothing here survives into the next call.
 #[derive(Debug, Clone)]
 pub(crate) struct CallOpts {
+    /// Pause generation captured before running any steps. Resuming cannot revive cancelled work.
+    pub cancel_generation: u64,
+    /// Absolute deadline on the injected clock.
+    pub deadline: Option<Duration>,
+    /// Refuse any operation that can mutate desktop or clipboard state.
+    pub read_only: bool,
+    /// Whether optional OCR helper pictures may be generated.
+    pub helper_images: bool,
     /// Pixels of the screenshot or 0 to 1000.
     pub coords: Coords,
     /// The screenshot's long edge for this call.

@@ -169,6 +169,10 @@ impl Backend for WindowsBackend {
         wnd::window_info(window)
     }
 
+    fn window_pid(&self, window: WindowRef) -> BackendResult<u32> {
+        wnd::window_pid(window)
+    }
+
     fn foreground_window(&self) -> BackendResult<Option<WindowRef>> {
         Ok(wnd::foreground_window())
     }

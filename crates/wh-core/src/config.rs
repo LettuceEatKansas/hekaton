@@ -28,7 +28,7 @@ pub const ACK_COMMAND: &str = "winhands acknowledge";
 pub const LOOPBACK_ADDRESSES: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
 /// Every key this module knows, in the order of the Python `DEFAULTS` table.
-pub const KEYS: [&str; 25] = [
+pub const KEYS: [&str; 26] = [
     "port",
     "bind",
     "allow_remote_bind",
@@ -54,6 +54,7 @@ pub const KEYS: [&str; 25] = [
     "uia_ms",
     "paste_over",
     "protect_processes",
+    "read_only",
 ];
 
 /// The built-in default of `key`, or `None` for a key winhands does not know.
@@ -70,6 +71,7 @@ pub fn default_value(key: &str) -> Option<Value> {
         "remote_caller" => Value::from(false),
         // "0" stops waiting for a person who is using the mouse
         "human_pause" => Value::from(true),
+        "read_only" => Value::from(false),
         // daemon exits after this many idle minutes (0 = never); 2026-10-08: raised to 60
         "idle_min" => Value::from(60),
         // same in seconds; wins over idle_min when set

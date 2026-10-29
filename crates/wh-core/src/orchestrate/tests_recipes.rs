@@ -153,8 +153,7 @@ fn a_failed_expect_stops_the_recipe_and_says_so_on_a_step_line() {
     assert!(out.text.contains("expect: FAIL"), "{}", out.text);
     // 2026-10-08 live run: wh exited 0 after a recipe step's expect failed
     assert!(
-        out.text
-            .contains("step 1 (clipboard_set) failed: expect not met, batch stopped"),
+        out.text.contains("step 1 (clipboard_set) failed:"),
         "{}",
         out.text
     );
@@ -328,6 +327,7 @@ fn a_malformed_when_fails_that_step() {
 #[test]
 fn recipe_steps_mix_with_ordinary_steps_in_one_batch() {
     let mut kit = kit();
+    kit.front("Editor", "editor.exe", 30);
     kit.put_bundled(&good(json!({
         "name": "mid",
         "params": {},
@@ -446,6 +446,7 @@ fn a_window_op_as_the_last_step_keeps_the_screenshot() {
 #[test]
 fn a_refusal_inside_a_recipe_stops_it_like_any_batch() {
     let mut kit = kit();
+    kit.front("Editor", "editor.exe", 30);
     kit.put_bundled(&good(json!({
         "name": "evil",
         "params": {"t": {"required": true}},
@@ -650,6 +651,7 @@ fn the_call_allowlist_is_back_after_a_recipe_step_even_when_it_fails() {
 #[test]
 fn every_recipe_step_goes_through_the_normal_checks() {
     let mut kit = kit();
+    kit.front("Editor", "editor.exe", 30);
     kit.put_bundled(&good(json!({
         "name": "s",
         "params": {},

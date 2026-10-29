@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::backend::{
-    Backend, BackendError, BackendResult, CaptureTarget, ElementFilter, Rect, TreeLimits,
+    Backend, BackendError, BackendResult, CaptureTarget, ElementFilter, Image, Rect, TreeLimits,
     WakePolicy, WindowRef,
 };
 use crate::clock::Clock;
@@ -80,11 +80,6 @@ impl SettleParams {
     }
 }
 
-fn thumb(backend: &dyn Backend, region: Rect) -> BackendResult<imaging::Thumb> {
-    let image = backend.capture(CaptureTarget::Region(region))?;
-    imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))
-}
-
 /// Wait until the screen stops changing. Returns how long it watched. Python `settle()`.
 ///
 /// Compares small grayscale thumbnails of `region` (the display the model sees). "Calm" means fewer
@@ -96,14 +91,57 @@ pub fn settle(
     region: Rect,
     params: &SettleParams,
 ) -> BackendResult<Duration> {
+    settle_with_frame(backend, clock, region, params, &|| Ok(())).map(|s| s.elapsed)
+}
+
+/// Last frame used to establish readiness. Reusing it avoids a duplicate final capture.
+pub struct SettledFrame {
+    /// Time spent observing and waiting.
+    pub elapsed: Duration,
+    /// Most recent captured pixels.
+    pub image: Image,
+}
+
+fn checked_sleep(
+    clock: &dyn Clock,
+    duration: Duration,
+    guard: &dyn Fn() -> BackendResult<()>,
+) -> BackendResult<()> {
+    let end = clock.now().saturating_add(duration);
+    loop {
+        guard()?;
+        let left = end.saturating_sub(clock.now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        clock.sleep(left.min(Duration::from_millis(25)));
+    }
+}
+
+/// Cancellable readiness wait that retains its last image for the response.
+pub fn settle_with_frame(
+    backend: &dyn Backend,
+    clock: &dyn Clock,
+    region: Rect,
+    params: &SettleParams,
+    guard: &dyn Fn() -> BackendResult<()>,
+) -> BackendResult<SettledFrame> {
     let calm_needed = params.calm_needed.max(1);
     let start = clock.now();
-    clock.sleep(FIRST_LOOK_DELAY);
-    let mut prev = thumb(backend, region)?;
+    checked_sleep(clock, FIRST_LOOK_DELAY, guard)?;
+    let mut image = backend.capture(CaptureTarget::Region(region))?;
+    guard()?;
+    let mut prev = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;
     let mut calm = 0u32;
     while clock.now().saturating_sub(start) < params.max {
-        clock.sleep(LOOK_INTERVAL);
-        let cur = thumb(backend, region)?;
+        checked_sleep(
+            clock,
+            LOOK_INTERVAL.min(params.max.saturating_sub(clock.now().saturating_sub(start))),
+            guard,
+        )?;
+        image = backend.capture(CaptureTarget::Region(region))?;
+        guard()?;
+        let cur = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;
         // Two calm reads in a row: a slow fade changes little per frame and fooled a single check
         // into returning a half-dark screen (Slay the Spire's menu fade, 2026-09-20).
         calm = if imaging::is_calm(&prev, &cur) {
@@ -125,7 +163,10 @@ pub fn settle(
         }
         prev = cur;
     }
-    Ok(clock.now().saturating_sub(start))
+    Ok(SettledFrame {
+        elapsed: clock.now().saturating_sub(start),
+        image,
+    })
 }
 
 /// Does the window cover the whole of the monitor it is on (a fullscreen game or video)?

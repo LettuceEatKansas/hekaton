@@ -30,9 +30,10 @@ use crate::displays::DisplayInfo;
 use crate::geom::{CapturePlan, to_pixels};
 use crate::keymap::PANE_SCREEN_RECORDING;
 use crate::perm;
+use crate::textops::remaining_budget;
 
 /// How long one ScreenCaptureKit request may take.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
 /// How long the display list is reused.
 const DISPLAY_TTL: Duration = Duration::from_millis(1500);
 /// `kCVPixelFormatType_32BGRA`.
@@ -70,8 +71,10 @@ fn describe_error(err: *mut NSError) -> BackendError {
 /// Read the shareable content (displays and windows) and hand `pick` the result inside the
 /// handler's lifetime.
 fn shareable<T: Send + 'static>(
+    deadline: Instant,
     pick: impl Fn(&SCShareableContent) -> T + 'static,
 ) -> BackendResult<T> {
+    remaining(deadline)?;
     let (tx, rx) = mpsc::channel::<Result<T, BackendError>>();
     let block = RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
         // SAFETY: the pointer is the handler's argument: null or a live object for the call.
@@ -83,7 +86,7 @@ fn shareable<T: Send + 'static>(
     });
     // SAFETY: the block matches the (content, error) completion handler signature.
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
-    rx.recv_timeout(REQUEST_TIMEOUT)
+    rx.recv_timeout(remaining(deadline)?)
         .map_err(|_| BackendError::Timeout)?
 }
 
@@ -91,7 +94,9 @@ fn shareable<T: Send + 'static>(
 fn capture_image(
     filter: &SCContentFilter,
     config: &SCStreamConfiguration,
+    deadline: Instant,
 ) -> BackendResult<CFRetained<CGImage>> {
+    remaining(deadline)?;
     let (tx, rx) = mpsc::channel::<Result<CFRetained<CGImage>, BackendError>>();
     let block = RcBlock::new(move |image: *mut CGImage, err: *mut NSError| {
         let res = match NonNull::new(image) {
@@ -109,8 +114,12 @@ fn capture_image(
             Some(&block),
         );
     }
-    rx.recv_timeout(REQUEST_TIMEOUT)
+    rx.recv_timeout(remaining(deadline)?)
         .map_err(|_| BackendError::Timeout)?
+}
+
+fn remaining(deadline: Instant) -> BackendResult<Duration> {
+    remaining_budget(deadline, Instant::now()).ok_or(BackendError::Timeout)
 }
 
 fn new_config(width: u32, height: u32) -> Retained<SCStreamConfiguration> {
@@ -243,8 +252,9 @@ impl Capturer {
     fn display_objects(
         &self,
         force: bool,
+        deadline: Instant,
     ) -> BackendResult<Vec<(u32, Shared<Retained<SCDisplay>>)>> {
-        let mut cache = self.displays.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = self.displays.lock().unwrap_or_else(|e| e.into_inner());
         if !force
             && let Some((at, list)) = cache.as_ref()
             && at.elapsed() < DISPLAY_TTL
@@ -254,14 +264,17 @@ impl Capturer {
                 .map(|(id, d)| (*id, Shared(d.0.clone())))
                 .collect());
         }
+        // Never hold the cache lock across a potentially slow native request.
+        drop(cache);
         // SAFETY: SCDisplay objects are immutable snapshots the framework hands to any thread.
-        let fresh: Vec<(u32, Shared<Retained<SCDisplay>>)> = shareable(|c| {
+        let fresh: Vec<(u32, Shared<Retained<SCDisplay>>)> = shareable(deadline, |c| {
             // SAFETY: reading properties of live SCDisplay objects.
             unsafe { c.displays() }
                 .iter()
                 .map(|d| (unsafe { d.displayID() }, Shared(d)))
                 .collect::<Vec<_>>()
         })?;
+        let mut cache = self.displays.lock().unwrap_or_else(|e| e.into_inner());
         *cache = Some((
             Instant::now(),
             fresh
@@ -277,15 +290,19 @@ impl Capturer {
         &self,
         plan: &CapturePlan,
         displays: &[DisplayInfo],
+        deadline: Instant,
     ) -> BackendResult<Image> {
         perm::require_screen_capture("take screenshots")?;
         let mut canvas = Canvas::new(plan.width, plan.height);
         for part in &plan.parts {
+            remaining(deadline)?;
             let cg_id = displays[part.display].cg_id;
-            let img = self.capture_display_rect(cg_id, part.relative, part.width, part.height)?;
+            let img =
+                self.capture_display_rect(cg_id, part.relative, part.width, part.height, deadline)?;
             let (w, h, rgba) = cgimage_to_rgba(&img)?;
             canvas.blit(&rgba, w, h, part.dest_x, part.dest_y);
         }
+        remaining(deadline)?;
         Ok(Image::new(plan.width, plan.height, canvas.rgba)?
             .with_scale(plan.scale)
             .with_origin(plan.origin))
@@ -297,10 +314,11 @@ impl Capturer {
         relative: Rect,
         width: u32,
         height: u32,
+        deadline: Instant,
     ) -> BackendResult<CFRetained<CGImage>> {
         let mut retried = false;
         loop {
-            let list = self.display_objects(retried)?;
+            let list = self.display_objects(retried, deadline)?;
             let Some((_, display)) = list.iter().find(|(id, _)| *id == cg_id) else {
                 if retried {
                     return Err(os("ScreenCaptureKit does not list that display"));
@@ -329,7 +347,7 @@ impl Capturer {
             };
             // SAFETY: plain property setter.
             unsafe { cfg.setSourceRect(src) };
-            match capture_image(&filter, &cfg) {
+            match capture_image(&filter, &cfg, deadline) {
                 Ok(img) => return Ok(img),
                 // A stale display object after a hot-plug: refresh the list once and retry.
                 Err(BackendError::Os(_)) if !retried => retried = true,
@@ -344,11 +362,12 @@ impl Capturer {
         window_id: u32,
         rect: Rect,
         scale: f64,
+        deadline: Instant,
     ) -> BackendResult<Image> {
         perm::require_screen_capture("take screenshots")?;
         let width = to_pixels(rect.width(), scale).max(1);
         let height = to_pixels(rect.height(), scale).max(1);
-        let found = shareable(move |c| {
+        let found = shareable(deadline, move |c| {
             // SAFETY: reading properties of live SCWindow objects.
             unsafe { c.windows() }
                 .iter()
@@ -365,8 +384,9 @@ impl Capturer {
         let cfg = new_config(width, height);
         // SAFETY: plain property setter; drops the drop shadow so the image is the window frame.
         unsafe { cfg.setIgnoreShadowsSingleWindow(true) };
-        let img = capture_image(&filter, &cfg)?;
+        let img = capture_image(&filter, &cfg, deadline)?;
         let (w, h, rgba) = cgimage_to_rgba(&img)?;
+        remaining(deadline)?;
         Ok(Image::new(w, h, rgba)?
             .with_scale(scale)
             .with_origin(Point {

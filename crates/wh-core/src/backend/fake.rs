@@ -69,6 +69,7 @@ pub type ClickHook = Arc<dyn Fn(&FakeBackend, Point) + Send + Sync>;
 
 struct State {
     windows: Vec<WindowInfo>,
+    window_info_reads: u64,
     next_window: u64,
     foreground: Option<WindowRef>,
     point_override: Option<Option<WindowRef>>,
@@ -165,6 +166,7 @@ impl FakeBackend {
         Self {
             state: Mutex::new(State {
                 windows: Vec::new(),
+                window_info_reads: 0,
                 next_window: 100,
                 foreground: None,
                 point_override: None,
@@ -243,6 +245,11 @@ impl FakeBackend {
     }
 
     // ------------------------------------------------------------------ scripting: windows
+
+    /// Full metadata reads, excluding cheap owner-PID checks.
+    pub fn window_info_reads(&self) -> u64 {
+        self.st().window_info_reads
+    }
 
     /// Add a window on top of the z-order and return its handle. A `window` of 0 gets a fresh one.
     pub fn add_window(&self, mut info: WindowInfo) -> WindowRef {
@@ -841,7 +848,8 @@ impl Backend for FakeBackend {
     }
 
     fn window_info(&self, window: WindowRef) -> BackendResult<WindowInfo> {
-        let s = self.st();
+        let mut s = self.st();
+        s.window_info_reads += 1;
         s.windows
             .iter()
             .find(|w| w.window == window)
@@ -849,6 +857,16 @@ impl Backend for FakeBackend {
                 foreground: s.foreground == Some(window),
                 ..w.clone()
             })
+            .ok_or(BackendError::WindowGone)
+    }
+
+    fn window_pid(&self, window: WindowRef) -> BackendResult<u32> {
+        self.st()
+            .windows
+            .iter()
+            .find(|item| item.window == window)
+            .map(|item| item.pid)
+            .filter(|pid| *pid != 0)
             .ok_or(BackendError::WindowGone)
     }
 

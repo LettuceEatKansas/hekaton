@@ -881,6 +881,12 @@ pub fn expand(
     caller: &BTreeSet<String>,
 ) -> Result<Vec<StepItem>, String> {
     let mut out = Vec::new();
+    if steps.len() > crate::orchestrate::ACTION_LIMIT {
+        return Err(format!(
+            "at most {} actions per call; no actions sent",
+            crate::orchestrate::ACTION_LIMIT
+        ));
+    }
     for s in steps {
         match s {
             Value::Object(m) if is_recipe_step(s) => out.extend(expand_one(store, m, caller)?),
@@ -889,6 +895,12 @@ pub fn expand(
                 scope: None,
                 header: String::new(),
             }),
+        }
+        if out.len() > crate::orchestrate::ACTION_LIMIT {
+            return Err(format!(
+                "expanded recipes exceed {} actions; no actions sent",
+                crate::orchestrate::ACTION_LIMIT
+            ));
         }
     }
     Ok(out)

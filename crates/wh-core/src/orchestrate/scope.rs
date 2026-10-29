@@ -166,6 +166,12 @@ impl Ctx<'_> {
     /// if minimised and raised if anything covers it, both after the wait for a person at the mouse.
     /// Returns its label. Python `set_scope`.
     pub(crate) fn set_scope(&self, spec: &str) -> StepResult<String> {
+        self.check_cancelled()?;
+        if self.o.read_only || *self.c.owned_mouse.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Err(StepError::permission(
+                "scope cannot change focus in read_only mode or while tool mouse button is held; release it first",
+            ));
+        }
         let (targets, _note) = self.resolve_window(spec, false)?;
         let target = targets.into_iter().next().ok_or_else(|| {
             StepError::target(format!(
@@ -179,6 +185,7 @@ impl Ctx<'_> {
         let mut waited = false;
         if self.state_of(window)? == WindowState::Minimized {
             self.wait_for_human()?;
+            self.check_cancelled()?;
             waited = true;
             self.be().restore_window(window, Duration::from_secs(2))?;
             if self.state_of(window)? == WindowState::Minimized {
@@ -198,6 +205,7 @@ impl Ctx<'_> {
             if !waited {
                 self.wait_for_human()?;
             }
+            self.check_cancelled()?;
             if let Err(e) = self.be().bring_to_foreground(window) {
                 return Err(StepError::target(format!(
                     "scope {label} is covered by another window and could not be brought to the \
@@ -224,6 +232,11 @@ impl Ctx<'_> {
     /// The call's own `scope`, applied before its first step. A lone action that never looks at the
     /// screen skips it. Python `run_many` preamble.
     pub(crate) fn apply_call_scope(&self, args: &Args) -> StepResult<()> {
+        if args.get("action").and_then(Value::as_str) == Some("left_mouse_up")
+            && args.get("actions").is_none()
+        {
+            return Ok(());
+        }
         let Some(spec) = args.get("scope").filter(|v| truthy(v)) else {
             return Ok(());
         };
@@ -243,6 +256,9 @@ impl Ctx<'_> {
     /// the call's own comes back after. The call's top-level action (`call_args`) is its own step,
     /// already scoped by [`Ctx::apply_call_scope`]. Python `_step_scope`.
     pub(crate) fn run_step_scope(&self, step: &Args, call_args: bool) -> StepResult<StepOut> {
+        if step.get("action").and_then(Value::as_str) == Some("left_mouse_up") {
+            return self.run(step);
+        }
         let spec: Option<&Value> = if call_args {
             None
         } else {

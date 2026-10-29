@@ -18,7 +18,7 @@ use super::args::{Args, is_truthy};
 use super::ctx::{is_desktop_or_taskbar, is_file_manager, is_run_dialog};
 use super::error::{StepError, StepResult};
 use super::files::expand_vars;
-use crate::backend::{Point, WindowInfo, WindowRef};
+use crate::backend::{BackendError, BackendResult, Point, WindowInfo, WindowRef};
 use crate::caller::agent_host_refusal;
 use crate::textutil::py_repr;
 
@@ -49,6 +49,18 @@ const IRREVERSIBLE_WORDS: &[&str] = &[
     "publish",
     "uninstall",
 ];
+
+static IRREVERSIBLE_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    IRREVERSIBLE_WORDS
+        .iter()
+        .map(|word| {
+            (
+                *word,
+                Regex::new(&format!(r"\b{}\b", regex::escape(word))).expect("irreversible"),
+            )
+        })
+        .collect()
+});
 
 /// Friendly launch names and the program they start (`_FRIENDLY_EXE`).
 const FRIENDLY_EXE: [(&str, &str); 7] = [
@@ -213,6 +225,7 @@ impl Ctx<'_> {
     /// Refuse input that would land in an agent host window, a protected window, a UAC consent
     /// window, or (under an allowlist) a window the task may not touch. Python `_host_at`.
     pub(crate) fn host_at(&self, p: Point) -> StepResult<()> {
+        self.check_cancelled()?;
         let Some(hit) = self.be().window_at_point(p).ok().flatten() else {
             return Ok(());
         };
@@ -225,6 +238,73 @@ impl Ctx<'_> {
             .policy
             .check_consent_window(&proc, "the window under the pointer")?;
         self.check_allowed(root)
+    }
+
+    /// Recheck the window immediately before a keyboard injection group.
+    pub(crate) fn keyboard_guard(&self) -> BackendResult<()> {
+        self.input_guard()?;
+        if let Some(window) = self.be().foreground_window()? {
+            self.keyboard_window_guard(window)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn keyboard_window_guard(&self, window: WindowRef) -> BackendResult<()> {
+        self.input_guard()?;
+        let check = || -> StepResult<()> {
+            let root = self.root_of(window);
+            self.check_not_protected(root)?;
+            self.refuse_host(root)?;
+            self.check_allowed(root)
+        };
+        check().map_err(|error| BackendError::Denied(error.to_string()))
+    }
+
+    /// Bind one text operation to its permitted foreground window and live process owner.
+    pub(crate) fn typing_target(&self) -> BackendResult<(WindowRef, u32)> {
+        self.input_guard()?;
+        let window = self
+            .be()
+            .foreground_window()?
+            .ok_or_else(|| BackendError::Denied("no foreground window to type into".into()))?;
+        let pid = self.be().window_pid(window)?;
+        if pid == 0 {
+            return Err(BackendError::WindowGone);
+        }
+        self.keyboard_window_guard(window)?;
+        self.typing_target_guard((window, pid))?;
+        Ok((window, pid))
+    }
+
+    /// Every injected group checks identity, even between full policy validations.
+    pub(crate) fn typing_target_guard(&self, target: (WindowRef, u32)) -> BackendResult<()> {
+        self.input_guard()?;
+        if self.be().foreground_window()? != Some(target.0)
+            || self.be().window_pid(target.0)? != target.1
+        {
+            return Err(BackendError::Denied(
+                "typing target changed; remaining text was not sent".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Recheck the resolved point immediately before a pointer injection group.
+    pub(crate) fn pointer_guard(&self, point: Point) -> BackendResult<()> {
+        self.input_guard()?;
+        self.host_at(point)
+            .map_err(|error| BackendError::Denied(error.to_string()))
+    }
+
+    /// The same restrictions apply to coordinate and text-targeted clicks.
+    pub(crate) fn check_click(&self, point: Point, double: bool, args: &Args) -> StepResult<()> {
+        self.input_guard()?;
+        self.host_at(point)?;
+        if double {
+            let hit = self.be().window_at_point(point).ok().flatten();
+            self.refuse_explorer_open(hit.map(|window| self.root_of(window)))?;
+        }
+        self.check_irreversible(point, args)
     }
 
     // ------------------------------------------------------------------ only_apps
@@ -340,6 +420,7 @@ impl Ctx<'_> {
     /// `msedge.exe --new-window` without `--inprivate`, which would open the owner's own Edge profile).
     /// Python `_check_launch_allowed`.
     pub(crate) fn check_launch_allowed(&self, text: &str) -> StepResult<()> {
+        self.check_cancelled()?;
         if self.o.only_apps.is_empty() {
             return Ok(());
         }
@@ -460,11 +541,11 @@ impl Ctx<'_> {
                 .split_once('=')
                 .map(|(_, p)| p.trim_matches('"').replace('/', "\\"))
                 .unwrap_or_default();
-            if !tokens.contains(&"--inprivate")
-                || udd_path.is_empty()
-                || temp.is_empty()
-                || !udd_path.starts_with(&temp)
-            {
+            if !tokens.contains(&"--inprivate") || udd_path.is_empty() || temp.is_empty() || {
+                let parent = norm_abs(&temp);
+                let child = norm_abs(&udd_path);
+                !(child == parent || child.starts_with(&format!("{parent}/")))
+            } {
                 return Err(StepError::target(
                     "refused: this task may only open Edge as a private window with its own temp \
                      profile: pass --inprivate and --user-data-dir=<a path under %TEMP%>",
@@ -533,8 +614,7 @@ impl Ctx<'_> {
             return Ok(());
         }
         let low = name.to_lowercase();
-        for word in IRREVERSIBLE_WORDS {
-            let rx = Regex::new(&format!(r"\b{}\b", regex::escape(word))).expect("irreversible");
+        for (word, rx) in IRREVERSIBLE_MATCHERS.iter() {
             if rx.is_match(&low) {
                 return Err(StepError::target(format!(
                     "refused: {} looks like an irreversible action ({}); pass \

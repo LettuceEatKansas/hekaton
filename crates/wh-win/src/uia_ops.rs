@@ -28,12 +28,15 @@ use crate::uia::{
 use crate::util::{hwnd_of, os_err};
 use crate::wnd;
 
+/// Bound the caller's wait. Native UIA calls may still be running after this expires.
+const ELEMENT_TIMEOUT: Duration = Duration::from_millis(1500);
+
 // ------------------------------------------------------------------------------------ elements
 
 /// A fresh read of one element (`_fresh_element`): the same id, current properties.
 pub(crate) fn element(id: &ElementId) -> BackendResult<Element> {
     let id = id.clone();
-    uia::on_mta(move || {
+    uia::with_deadline(ELEMENT_TIMEOUT, move || {
         let u = uia()?;
         let (el, parts) = resolve(u, &id)?;
         let fresh = refresh(u, &el)?;
@@ -46,7 +49,7 @@ pub(crate) fn element(id: &ElementId) -> BackendResult<Element> {
 /// The top-level window an element lives in (`GetTopLevelControl().NativeWindowHandle`).
 pub(crate) fn element_window(id: &ElementId) -> BackendResult<WindowRef> {
     let id = id.clone();
-    uia::on_mta(move || {
+    uia::with_deadline(ELEMENT_TIMEOUT, move || {
         let u = uia()?;
         let (el, parts) = resolve(u, &id)?;
         let recorded = hwnd_of(WindowRef::from_raw(parts.hwnd));
@@ -130,20 +133,31 @@ fn action_failed(what: &str, e: &windows::core::Error) -> BackendError {
 /// Do the element's primary action: Invoke, else Toggle, else Select, else Expand
 /// (`_try_patterns`), and last the legacy default action when the element names one. `false` when it
 /// has none of them, so the caller can click it instead. A failure while acting is an error.
-fn press(el: &IUIAutomationElement) -> BackendResult<bool> {
+fn require_action_time(deadline: Instant) -> BackendResult<()> {
+    if Instant::now() >= deadline {
+        Err(BackendError::Timeout)
+    } else {
+        Ok(())
+    }
+}
+
+fn press(el: &IUIAutomationElement, deadline: Instant) -> BackendResult<bool> {
     if let Some(p) = pattern::<IUIAutomationInvokePattern>(el, UIA_InvokePatternId) {
+        require_action_time(deadline)?;
         // SAFETY: invoking the pattern just fetched.
         return unsafe { p.Invoke() }
             .map(|()| true)
             .map_err(|e| action_failed("Invoke", &e));
     }
     if let Some(p) = pattern::<IUIAutomationTogglePattern>(el, UIA_TogglePatternId) {
+        require_action_time(deadline)?;
         // SAFETY: toggling the pattern just fetched.
         return unsafe { p.Toggle() }
             .map(|()| true)
             .map_err(|e| action_failed("Toggle", &e));
     }
     if let Some(p) = pattern::<IUIAutomationSelectionItemPattern>(el, UIA_SelectionItemPatternId) {
+        require_action_time(deadline)?;
         // SAFETY: selecting through the pattern just fetched.
         return unsafe { p.Select() }
             .map(|()| true)
@@ -151,6 +165,7 @@ fn press(el: &IUIAutomationElement) -> BackendResult<bool> {
     }
     if let Some(p) = pattern::<IUIAutomationExpandCollapsePattern>(el, UIA_ExpandCollapsePatternId)
     {
+        require_action_time(deadline)?;
         // SAFETY: expanding through the pattern just fetched.
         return unsafe { p.Expand() }
             .map(|()| true)
@@ -162,6 +177,7 @@ fn press(el: &IUIAutomationElement) -> BackendResult<bool> {
         // SAFETY: reading the legacy pattern's default action name.
         let named = unsafe { p.CurrentDefaultAction() }.is_ok_and(|a| !a.is_empty());
         if named {
+            require_action_time(deadline)?;
             // SAFETY: running the default action the element itself named.
             return unsafe { p.DoDefaultAction() }
                 .map(|()| true)
@@ -174,11 +190,16 @@ fn press(el: &IUIAutomationElement) -> BackendResult<bool> {
 /// Act on an element (`_try_patterns`, `_file_dialog`'s `SetFocus`).
 pub(crate) fn perform(id: &ElementId, action: ElementAction) -> BackendResult<bool> {
     let id = id.clone();
-    uia::on_mta(move || {
+    let deadline = Instant::now() + ELEMENT_TIMEOUT;
+    let result = uia::with_deadline(ELEMENT_TIMEOUT, move || {
         let u = uia()?;
         let (el, _) = resolve(u, &id)?;
+        // A slow resolution must not begin a new mutation after the caller gave up.
+        if Instant::now() >= deadline {
+            return Err(BackendError::Timeout);
+        }
         match action {
-            ElementAction::Press => press(&el),
+            ElementAction::Press => press(&el, deadline),
             ElementAction::Focus => {
                 // SAFETY: gives keyboard focus to a live element.
                 unsafe { el.SetFocus() }
@@ -191,13 +212,21 @@ pub(crate) fn perform(id: &ElementId, action: ElementAction) -> BackendResult<bo
                         "the element has no settable value".into(),
                     ));
                 };
+                require_action_time(deadline)?;
                 // SAFETY: sets the value through the pattern just fetched.
                 unsafe { p.SetValue(&BSTR::from(text.as_str())) }
                     .map(|()| true)
                     .map_err(|e| action_failed("SetValue", &e))
             }
         }
-    })?
+    });
+    match result {
+        // UIA cannot cancel an action already sent to another process. A retry could repeat it.
+        Err(BackendError::Timeout) => Err(BackendError::Os(
+            "UI Automation action timed out; outcome uncertain, inspect before retrying".into(),
+        )),
+        other => other?,
+    }
 }
 
 // ------------------------------------------------------------------------------------ file dialog

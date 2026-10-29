@@ -185,6 +185,16 @@ fn pid_of(hwnd: HWND) -> u32 {
     pid
 }
 
+/// A cheap live ownership read, without title or process metadata queries.
+pub(crate) fn window_pid(window: WindowRef) -> BackendResult<u32> {
+    let pid = pid_of(hwnd_of(window));
+    if pid == 0 {
+        Err(BackendError::WindowGone)
+    } else {
+        Ok(pid)
+    }
+}
+
 fn thread_of(hwnd: HWND) -> u32 {
     // SAFETY: a null process-id pointer is allowed; a null or dead handle returns 0.
     unsafe { GetWindowThreadProcessId(hwnd, None) }

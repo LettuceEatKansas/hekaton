@@ -2,7 +2,7 @@
 //! finding in UTF-16 coordinates (what `AXValue` ranges count in), click chaining, scroll steps and
 //! drag paths. Tested on every OS.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wh_core::backend::{MouseButton, Point, ScrollDirection};
 
@@ -17,6 +17,19 @@ pub(crate) const PASTE_ABOVE_UNITS: usize = 400;
 pub(crate) const PIXELS_PER_NOTCH: i32 = 60;
 /// Longest line text a document hit carries.
 pub(crate) const MAX_HIT_LINE_CHARS: usize = 400;
+
+/// A cumulative deadline never grants a new budget to a later stage.
+pub(crate) fn remaining_budget(deadline: Instant, now: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(now)
+        .filter(|left| !left.is_zero())
+}
+
+/// The paste shortcut may replace only a single plain-text item (or an empty clipboard).
+/// A rich-text copy usually also offers plain text; treating that as plain loses its other data.
+pub(crate) fn pasteboard_is_plain(types: &[String], plain_type: &str, items: usize) -> bool {
+    items <= 1 && (types.is_empty() || (types.len() == 1 && types[0] == plain_type))
+}
 
 /// Drop the invisible direction marks some apps put in front of numbers and labels (Calculator
 /// prefixes its display with U+200E), which no caller wants in a name.
@@ -151,21 +164,48 @@ fn fold(c: char) -> char {
 
 /// Case-insensitive, non-overlapping matches of `query` in `text`, up to `max_hits`.
 pub(crate) fn find_matches(text: &str, query: &str, max_hits: usize) -> Vec<TextMatch> {
-    let q: Vec<char> = query.chars().map(fold).collect();
+    find_matches_checked(text, query, max_hits, &|| true).unwrap_or_default()
+}
+
+/// The caller can stop matching between bounded chunks, including before building text indexes.
+pub(crate) fn find_matches_checked(
+    text: &str,
+    query: &str,
+    max_hits: usize,
+    may_continue: &dyn Fn() -> bool,
+) -> Option<Vec<TextMatch>> {
+    if !may_continue() {
+        return None;
+    }
+    let mut q = Vec::new();
+    for (index, c) in query.chars().enumerate() {
+        if index % 256 == 0 && !may_continue() {
+            return None;
+        }
+        q.push(fold(c));
+    }
     if q.is_empty() || max_hits == 0 {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let mut chars: Vec<(char, usize)> = Vec::new();
+    let mut units = Vec::new();
     let mut at = 0usize;
-    for c in text.chars() {
+    for (index, c) in text.chars().enumerate() {
+        if index % 256 == 0 && !may_continue() {
+            return None;
+        }
         chars.push((fold(c), at));
+        let mut encoded = [0u16; 2];
+        units.extend_from_slice(c.encode_utf16(&mut encoded));
         at += c.len_utf16();
     }
     let total16 = at;
-    let units: Vec<u16> = text.encode_utf16().collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i + q.len() <= chars.len() && out.len() < max_hits {
+        if i % 256 == 0 && !may_continue() {
+            return None;
+        }
         if chars[i..i + q.len()]
             .iter()
             .map(|(c, _)| *c)
@@ -190,7 +230,7 @@ pub(crate) fn find_matches(text: &str, query: &str, max_hits: usize) -> Vec<Text
             i += 1;
         }
     }
-    out
+    may_continue().then_some(out)
 }
 
 // ------------------------------------------------------------------------------------ clicks
@@ -288,6 +328,58 @@ pub(crate) fn drag_path(from: Point, to: Point) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paste_shortcut_rejects_rich_text_files_and_multiple_items() {
+        let plain = "public.utf8-plain-text";
+        assert!(pasteboard_is_plain(&[], plain, 0));
+        assert!(pasteboard_is_plain(&[plain.into()], plain, 1));
+        assert!(!pasteboard_is_plain(
+            &[plain.into(), "public.html".into()],
+            plain,
+            1
+        ));
+        assert!(!pasteboard_is_plain(
+            &["public.file-url".into(), plain.into()],
+            plain,
+            1
+        ));
+        assert!(!pasteboard_is_plain(&[plain.into()], plain, 2));
+    }
+
+    #[test]
+    fn later_capture_stages_receive_only_the_original_budget_remainder() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(8);
+        assert_eq!(
+            remaining_budget(deadline, start + Duration::from_secs(6)),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            remaining_budget(deadline, start + Duration::from_secs(8)),
+            None
+        );
+        assert_eq!(
+            remaining_budget(deadline, start + Duration::from_secs(9)),
+            None
+        );
+    }
+
+    #[test]
+    fn document_search_stops_during_indexing_instead_of_returning_false_no_match() {
+        let checks = std::cell::Cell::new(0);
+        let result = find_matches_checked(&"abcdef".repeat(1000), "missing", 5, &|| {
+            checks.set(checks.get() + 1);
+            checks.get() < 4
+        });
+        assert!(result.is_none());
+        assert_eq!(checks.get(), 4);
+        assert_eq!(find_matches_checked("hello", "hello", 5, &|| false), None);
+        assert_eq!(
+            find_matches_checked("hello", "absent", 5, &|| true),
+            Some(Vec::new())
+        );
+    }
 
     fn units(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()

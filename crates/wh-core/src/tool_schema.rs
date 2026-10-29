@@ -25,20 +25,18 @@ use serde_json::{Value, json};
 pub const TOOL_NAME: &str = "computer";
 
 /// The tool description (Python `shim.TOOL_DESCRIPTION`).
-pub const TOOL_DESCRIPTION: &str = r##"Use the Windows desktop like a person. Acting calls settle, then return a screenshot; shot=false returns text only.
-Pointer: left_click | right_click (lists menu items) | double_click | triple_click | middle_click | mouse_move (hover) | left_click_drag (start_coordinate -> coordinate) | scroll (scroll_direction, scroll_amount) | left_mouse_down | left_mouse_up. coordinate = [x, y] in the screenshot; text on a click = modifier held ("shift"). If you pass shot_long (screenshot long edge, px), pass the same value on every call that uses coordinates from that screenshot.
-Keys: type (text) | key (text: "ctrl+s", "Return"; repeat) | hold_key (text, duration).
-Look: screenshot | zoom (region [x0,y0,x1,y1]; adds UIA/OCR text) | find_text (text; lines with click points) | read (text = window title or ref, blank = front window; UI elements; filter, limit; wake=true raises an empty browser window briefly to build its tree) | read_field (text = label) | read_text (document text, numbered; text = word keeps matching lines) | list_windows | cursor_position.
-Do: click_text (text; button, double, nth) | replace_word (old, new) | open_app (text = app name, path or folder) | file_dialog (text = full path) | clipboard_get | clipboard_set (text).
-Wait: wait (duration) | wait_for_text (text, timeout) | wait_for_file (text = path, timeout). Files: list_files (text = folder; filter glob; limit).
-Batch known sequences: actions=[{"action": ...}, ...] runs many steps in one call, one screenshot at the end. A step may carry expect {"text"|"gone_text"|"title": ...}; a batch stops at the first FAIL.
-Shortcuts, no clicks: window (op close|minimize|maximize|restore|focus|move; window = wN, title part or app.exe; move rect [x,y,w,h]). folder (path, view details|list|tiles|icons, sort "date_modified desc", list=n: opens Explorer set up, returns the top n entries as text).
-Recipes: recipe_list | recipe (name, params {k: v}) | recipe_save (name, text = description, params, steps using {k}, overwrite). Prefer recipe/window/folder to clicking; after a task likely to repeat, recipe_save it with params, not literals. A step may carry on_fail "skip", when {text|gone_text|title}.
-at=[fx, fy] (0..1 of window) replaces coordinate. screenshot save_to=file.png.
-display = monitor 1, 2, ... scope = a window: screenshots and coordinates cover only that window (sharper, fewer tokens). only_apps = process names input may reach, e.g. ["notepad.exe"]. allow_irreversible = true presses a Send/Buy/Delete-looking button under only_apps."##;
+pub const TOOL_DESCRIPTION: &str = r##"Use the Windows/macOS desktop. Acting calls settle, then return a screenshot; shot=false or compact=true returns short text only.
+Pointer: left_click right_click double_click triple_click middle_click mouse_move left_click_drag(start_coordinate) scroll(scroll_direction,scroll_amount) left_mouse_down left_mouse_up. coordinate=[x,y] in the last screenshot, or at=[fx, fy] (0..1 of window); keep shot_long the same. text on a click = held modifier.
+Keys: type(text) key(text "ctrl+s",repeat) hold_key(text,duration).
+Look: status screenshot(save_to) zoom(region) find_text read(text=window|ref,filter,limit; wake=true wakes an empty browser tree) read_field(text=label) read_text list_windows cursor_position.
+Do: click_text(text,nth,button,double) replace_word(old,new) open_app file_dialog(text=path) clipboard_get clipboard_set list_files(text=folder,filter,limit) window(op,window; move rect [x,y,w,h]) folder(path,view,sort,list=n).
+Wait: wait(duration) wait_for_text(text,timeout) wait_for_file.
+Batch: actions=[{action,...}] max 50, one screenshot at the end, stops at the first FAIL; a step may carry expect, on_fail "skip", when {text|gone_text|title}.
+recipe_list recipe(name,params) recipe_save(name,text,params,steps using {k}). Prefer recipe/window/folder to clicking; recipe_save it with params, not literals.
+scope = a window: screenshots and coordinates cover only that window (sharper, fewer tokens). display=monitor n. only_apps = processes input may reach; allow_irreversible presses Send/Buy/Delete-like buttons there. max_chars, max_images, budget_ms bound a call; profile=true adds timing. session_id isolates state; snapshot_id pins a screenshot; if_changed=true skips an unchanged read; read_only=true blocks input."##;
 
 /// The JSON input schema, compact (Python `list_tools()[0].inputSchema` through `json.dumps`).
-pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array"},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"},"scope":{"type":"string"}},"type":"object"}"##;
+pub const INPUT_SCHEMA_JSON: &str = r##"{"properties":{"action":{"type":"string"},"coordinate":{"items":{"type":"integer"},"type":"array"},"start_coordinate":{"items":{"type":"integer"},"type":"array"},"text":{"type":"string"},"scroll_direction":{"type":"string"},"scroll_amount":{"type":"integer"},"duration":{"type":"number"},"repeat":{"type":"integer"},"region":{"items":{"type":"integer"},"type":"array"},"actions":{"items":{"type":"object"},"type":"array","maxItems":50},"display":{"type":"integer"},"only_apps":{"items":{"type":"string"},"type":"array"},"allow_irreversible":{"type":"boolean"},"button":{"type":"string"},"double":{"type":"boolean"},"nth":{"type":"integer"},"old":{"type":"string"},"new":{"type":"string"},"timeout":{"type":"number"},"expect":{"type":"object"},"filter":{"type":"string"},"limit":{"type":"integer"},"allow_destructive":{"type":"boolean"},"shot":{"type":"boolean"},"shot_long":{"type":"integer"},"wake":{"type":"boolean"},"window":{"type":"string"},"op":{"type":"string"},"rect":{"items":{"type":"integer"},"type":"array"},"at":{"items":{"type":"number"},"type":"array"},"path":{"type":"string"},"view":{"type":"string"},"sort":{"type":"string"},"list":{"type":"integer"},"name":{"type":"string"},"params":{"type":"object"},"steps":{"items":{"type":"object"},"type":"array"},"save_to":{"type":"string"},"overwrite":{"type":"boolean"},"scope":{"type":"string"},"compact":{"type":"boolean"},"profile":{"type":"boolean"},"read_only":{"type":"boolean"},"if_changed":{"type":"boolean"},"session_id":{"type":"string"},"snapshot_id":{"type":"string"},"budget_ms":{"type":"integer"},"max_chars":{"type":"integer"},"max_images":{"type":"integer"}},"type":"object"}"##;
 
 static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     serde_json::from_str(INPUT_SCHEMA_JSON).expect("the tool schema is valid JSON")
@@ -102,7 +100,7 @@ mod tests {
     #[test]
     fn the_definition_stays_within_its_budget() {
         let size = definition_chars();
-        assert!(size <= 3900, "{size}");
+        assert!(size <= 4100, "{size}"); // 2026-10-28: room for the nine session/budget params
         assert!(size < 4176, "{size}"); // the size before the 2026-10-08 slimming
         assert!(size > 2732, "{size}"); // the slim size, before the shortcuts and recipes
     }
@@ -152,8 +150,8 @@ mod tests {
     fn the_parameters_come_in_the_pythons_order() {
         let names: Vec<String> = props().keys().cloned().collect();
         assert_eq!(names.first().map(String::as_str), Some("action"));
-        assert_eq!(names.last().map(String::as_str), Some("scope"));
-        assert_eq!(names.len(), 40);
+        assert_eq!(names.last().map(String::as_str), Some("max_images"));
+        assert_eq!(names.len(), 49);
         let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
         assert!(pos("allow_destructive") < pos("shot") && pos("wake") < pos("window"));
         assert_eq!(

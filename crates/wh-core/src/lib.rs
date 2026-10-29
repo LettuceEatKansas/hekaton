@@ -27,6 +27,7 @@ pub mod input;
 pub mod keys;
 pub mod paths;
 pub mod recipes;
+pub mod request;
 pub mod scale;
 pub mod settle;
 pub mod state;

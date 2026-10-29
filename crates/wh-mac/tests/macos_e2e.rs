@@ -2,8 +2,8 @@
 //! read the accessibility tree and screenshot them, so they are `#[ignore]`d: run them on purpose
 //! with `cargo test -p wh-mac --test macos_e2e -- --ignored --nocapture --test-threads=1`.
 //!
-//! They are informational. Each step prints an `E2E` line with what the machine did and keeps going
-//! when a step fails, so one CI run shows how far the whole chain works on a real Mac.
+//! Default runs are informational. HANDS_REQUIRE_NATIVE=1 makes errors, missing prerequisites,
+//! early returns and failed behavioral checks fail the test on a deliberately prepared native host.
 #![cfg(target_os = "macos")]
 
 use std::fmt::{Debug, Display};
@@ -18,6 +18,54 @@ use wh_core::backend::{
 use wh_core::keys::Key;
 use wh_mac::MacBackend;
 
+fn require_native() -> bool {
+    matches!(std::env::var("HANDS_REQUIRE_NATIVE").as_deref(), Ok("1"))
+}
+
+fn require(condition: bool, message: &str) {
+    assert!(
+        !require_native() || condition,
+        "required native check failed: {message}"
+    );
+}
+
+struct Completion {
+    name: &'static str,
+    passed: bool,
+}
+
+impl Completion {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            passed: false,
+        }
+    }
+    fn pass(&mut self) {
+        self.passed = true;
+        if require_native() {
+            eprintln!("E2E {} PASS", self.name);
+        } else {
+            eprintln!(
+                "E2E {} DIAGNOSTIC COMPLETED (strict native validation disabled)",
+                self.name
+            );
+        }
+    }
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        if require_native() && !std::thread::panicking() {
+            assert!(
+                self.passed,
+                "required native test {} exited before completion",
+                self.name
+            );
+        }
+    }
+}
+
 fn show<T: Debug, E: Display>(label: &str, r: Result<T, E>) -> Option<T> {
     match r {
         Ok(v) => {
@@ -28,6 +76,7 @@ fn show<T: Debug, E: Display>(label: &str, r: Result<T, E>) -> Option<T> {
         }
         Err(e) => {
             eprintln!("E2E {label:<26} FAIL {e}");
+            require(false, &format!("{label}: {e}"));
             None
         }
     }
@@ -35,6 +84,7 @@ fn show<T: Debug, E: Display>(label: &str, r: Result<T, E>) -> Option<T> {
 
 fn launch(b: &MacBackend, name: &str) -> bool {
     let Some(Some(target)) = show("resolve_app", b.resolve_app(name)) else {
+        require(false, &format!("{name} could not be resolved"));
         return false;
     };
     show(
@@ -59,6 +109,10 @@ fn wait_window(b: &MacBackend, app: &str, secs: u64) -> Option<WindowInfo> {
         sleep(Duration::from_millis(400));
     }
     eprintln!("E2E wait_window({app}) gave up after {secs}s");
+    require(
+        false,
+        &format!("{app} window did not appear within {secs}s"),
+    );
     None
 }
 
@@ -83,6 +137,16 @@ fn texts(root: &Element) -> Vec<String> {
     all
 }
 
+fn displays_number(root: &Element, expected: &str) -> bool {
+    texts(root).iter().any(|value| {
+        value
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>()
+            == expected
+    })
+}
+
 fn quit(name: &str) {
     let _ = Command::new("killall").arg(name).status();
     sleep(Duration::from_millis(500));
@@ -97,16 +161,17 @@ fn report_tree(b: &MacBackend, w: WindowRef, label: &str) -> Option<Element> {
         }),
     );
     let _ = snap;
-    let full = b
-        .element_tree(
+    let full = show(
+        "full tree",
+        b.element_tree(
             w,
             &TreeLimits {
                 filter: ElementFilter::All,
                 flatten: false,
                 ..TreeLimits::snapshot(2000)
             },
-        )
-        .ok()?;
+        ),
+    )?;
     eprintln!("E2E {label} full tree: {} elements", full.root.count());
     let mut flat = Vec::new();
     full.root.walk(&mut flat);
@@ -126,6 +191,7 @@ fn report_tree(b: &MacBackend, w: WindowRef, label: &str) -> Option<Element> {
 #[test]
 #[ignore = "launches Calculator and clicks in it"]
 fn calculator_end_to_end() {
+    let mut completion = Completion::new("calculator_end_to_end");
     let b = MacBackend::new();
     b.init().unwrap();
     eprintln!("E2E permissions: {:?}", b.permissions().unwrap());
@@ -154,6 +220,10 @@ fn calculator_end_to_end() {
         "E2E hit test lands on the Calculator window: {}",
         hit == Some(Some(win.window))
     );
+    require(
+        hit == Some(Some(win.window)),
+        "Calculator point hit test selected another window",
+    );
     show(
         "visible_fraction",
         b.visible_fraction(win.window, win.rect, 8),
@@ -177,16 +247,28 @@ fn calculator_end_to_end() {
             b.element(&seven.id).map(|e| (e.name, e.rect, e.enabled)),
         );
         show("element_window(7)", b.element_window(&seven.id));
-        show(
+        let performed = show(
             "perform(Press 7)",
             b.perform(&seven.id, ElementAction::Press),
         );
+        require(
+            performed == Some(true),
+            "Calculator button 7 was not invoked",
+        );
         sleep(Duration::from_millis(400));
-        if let Ok(snap) = b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))) {
+        if let Some(snap) = show(
+            "display after AX press",
+            b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))),
+        ) {
             eprintln!("E2E display after AX press of 7: {:?}", texts(&snap.root));
+            require(
+                displays_number(&snap.root, "7"),
+                "Calculator AX press did not display 7",
+            );
         }
     } else {
         eprintln!("E2E no button named 7 in the tree");
+        require(false, "Calculator accessibility tree has no button 7");
     }
 
     // Click 5 and 3 with real mouse events at their on-screen centres.
@@ -206,10 +288,21 @@ fn calculator_end_to_end() {
             );
         } else {
             eprintln!("E2E no clickable button {digit}");
+            require(
+                false,
+                &format!("Calculator has no clickable button {digit}"),
+            );
         }
     }
-    if let Ok(snap) = b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))) {
+    if let Some(snap) = show(
+        "display after clicks",
+        b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))),
+    ) {
         eprintln!("E2E display after clicks: {:?}", texts(&snap.root));
+        require(
+            displays_number(&snap.root, "753"),
+            "Calculator mouse clicks did not display 753",
+        );
     }
 
     // Typed keys.
@@ -219,8 +312,15 @@ fn calculator_end_to_end() {
     );
     show("type_text(8*9=)", b.type_text("8*9=", &no_guard));
     sleep(Duration::from_millis(400));
-    if let Ok(snap) = b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))) {
+    if let Some(snap) = show(
+        "display after typing",
+        b.element_tree(win.window, &TreeLimits::named(Duration::from_secs(2))),
+    ) {
         eprintln!("E2E display after typing: {:?}", texts(&snap.root));
+        require(
+            displays_number(&snap.root, "72"),
+            "Calculator typing 8*9= did not display 72",
+        );
     }
     show("key_chord(esc)", b.key_chord(&[Key::Escape], 1, &no_guard));
     show(
@@ -256,11 +356,13 @@ fn calculator_end_to_end() {
     show("popup_menus", b.popup_menus());
     show("clipboard", b.clipboard());
     quit("Calculator");
+    completion.pass();
 }
 
 #[test]
 #[ignore = "launches TextEdit and types into it"]
 fn textedit_end_to_end() {
+    let mut completion = Completion::new("textedit_end_to_end");
     let b = MacBackend::new();
     b.init().unwrap();
     quit("TextEdit");
@@ -280,7 +382,7 @@ fn textedit_end_to_end() {
         b.key_chord(&[Key::Meta, Key::Char('n')], 1, &no_guard),
     );
     sleep(Duration::from_millis(1500));
-    let wins = b.list_windows(false).unwrap_or_default();
+    let wins = show("list TextEdit windows", b.list_windows(false)).unwrap_or_default();
     eprintln!(
         "E2E TextEdit windows: {:?}",
         wins.iter()
@@ -302,6 +404,11 @@ fn textedit_end_to_end() {
         return;
     };
     let area = find(&root, &|e| e.native_role == "AXTextArea");
+    require(area.is_some(), "TextEdit has no accessible text area");
+    require(
+        area.and_then(|area| area.rect).is_some(),
+        "TextEdit text area has no screen rectangle",
+    );
     eprintln!(
         "E2E text area: {:?}",
         area.map(|a| (&a.id, a.rect, a.focused))
@@ -314,10 +421,23 @@ fn textedit_end_to_end() {
         b.type_text("\nsecond line é😀", &no_guard),
     );
     sleep(Duration::from_millis(500));
-    show("document_text", b.document_text(doc.window, 10_000));
-    show(
+    let document = show("document_text", b.document_text(doc.window, 10_000));
+    require(
+        document
+            .as_ref()
+            .and_then(|text| text.as_ref())
+            .is_some_and(|text| {
+                text.contains("hello winhands") && text.contains("second line é😀")
+            }),
+        "TextEdit typed text did not round trip",
+    );
+    let hits = show(
         "find_in_documents(second)",
         b.find_in_documents(doc.window, "SECOND", 5, Duration::from_secs(1)),
+    );
+    require(
+        hits.is_some_and(|hits| !hits.is_empty()),
+        "TextEdit document search found no SECOND",
     );
     show("caret", b.caret());
     if let Some(a) = area
@@ -341,9 +461,7 @@ fn textedit_end_to_end() {
     show("clipboard before", b.set_clipboard_text("owner clipboard"));
     show("type_text(long)", b.type_text(&long, &no_guard));
     sleep(Duration::from_millis(600));
-    let got = b
-        .document_text(doc.window, 100_000)
-        .ok()
+    let got = show("long document_text", b.document_text(doc.window, 100_000))
         .flatten()
         .unwrap_or_default();
     eprintln!(
@@ -351,6 +469,11 @@ fn textedit_end_to_end() {
         got.chars().count(),
         long.chars().count(),
         b.clipboard_text()
+    );
+    require(got == long, "TextEdit long text did not land exactly");
+    require(
+        b.clipboard_text().ok().as_deref() == Some("owner clipboard"),
+        "long paste did not preserve clipboard text",
     );
 
     // Set a value through Accessibility.
@@ -360,7 +483,11 @@ fn textedit_end_to_end() {
             b.perform(&a.id, ElementAction::SetValue("set by ax".into())),
         );
         sleep(Duration::from_millis(300));
-        show("document_text after set", b.document_text(doc.window, 100));
+        let document = show("document_text after set", b.document_text(doc.window, 100));
+        require(
+            document.flatten().as_deref() == Some("set by ax"),
+            "TextEdit accessibility value did not round trip",
+        );
     }
 
     // Selection and a drag, then pixels with the text visible.
@@ -441,8 +568,11 @@ fn textedit_end_to_end() {
             .map(|i| (i.minimized, i.hidden, i.foreground)),
     );
     show("bring_to_foreground", b.bring_to_foreground(doc.window));
-    if let Some(AppTarget::Shortcut(p)) = b.resolve_app("TextEdit").ok().flatten() {
+    if let Some(AppTarget::Shortcut(p)) =
+        show("resolve TextEdit bundle", b.resolve_app("TextEdit")).flatten()
+    {
         eprintln!("E2E TextEdit bundle: {p}");
     }
     quit("TextEdit");
+    completion.pass();
 }

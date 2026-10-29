@@ -12,7 +12,7 @@ use std::fmt;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{Backend, BackendError, no_guard};
+use crate::backend::{Backend, BackendError, InputGuard, no_guard};
 use crate::destructive::{DestructiveAction, Policy};
 use crate::keys::{Key, Platform};
 
@@ -94,30 +94,46 @@ pub fn type_text(
     text: &str,
     options: &TypeOptions,
 ) -> Result<TypeOutcome, TypeError> {
+    type_text_guarded(backend, policy, text, options, &no_guard)
+}
+
+/// Type with a caller guard before each injected group. Clipboard restoration is unconditional.
+pub fn type_text_guarded(
+    backend: &dyn Backend,
+    policy: Policy,
+    text: &str,
+    options: &TypeOptions,
+    guard: InputGuard<'_>,
+) -> Result<TypeOutcome, TypeError> {
+    guard()?;
     policy
         .check_text(text, "the text to type")
         .map_err(TypeError::Refused)?;
     if text.chars().count() <= options.paste_over {
         for ch in text.chars() {
             let mut buf = [0u8; 4];
-            backend.type_text(ch.encode_utf8(&mut buf), &no_guard)?;
+            backend.type_text(ch.encode_utf8(&mut buf), guard)?;
             thread::sleep(KEY_GAP);
         }
         return Ok(TypeOutcome::Typed);
     }
     let saved = backend.clipboard_text().ok();
+    guard()?;
     backend.set_clipboard_text(text)?;
     thread::sleep(BEFORE_PASTE);
     let paste_modifier = match options.platform {
         Platform::Windows => Key::Ctrl,
         Platform::Mac => Key::Meta,
     };
-    backend.key_chord(&[paste_modifier, Key::Char('v')], 1, &no_guard)?;
-    thread::sleep(AFTER_PASTE);
+    let pasted = backend.key_chord(&[paste_modifier, Key::Char('v')], 1, guard);
+    if pasted.is_ok() {
+        thread::sleep(AFTER_PASTE);
+    }
     if let Some(saved) = saved {
         // Putting the old text back is best effort, as in Python.
         let _ = backend.set_clipboard_text(&saved);
     }
+    pasted?;
     Ok(TypeOutcome::Pasted)
 }
 

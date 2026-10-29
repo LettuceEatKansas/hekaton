@@ -1,0 +1,82 @@
+name: Manual native desktop acceptance
+
+# Never run on push or pull_request. These jobs operate a real, disposable desktop.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Dedicated native runner to use
+        type: choice
+        options: [windows, macos, both]
+        default: both
+        required: true
+      disposable_desktop_confirmed:
+        description: I confirm these dedicated desktops are disposable, unlocked, and not in use
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hands-native-acceptance
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: ${{ inputs.disposable_desktop_confirmed && inputs.platform != 'macos' }}
+    runs-on: [self-hosted, Windows, hands-native]
+    environment: hands-native-windows
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native Windows capture and accessibility checks
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force native-results | Out-Null
+          cargo test --locked -p wh-win --test passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-passive.log
+          if ($LASTEXITCODE -ne 0) { Get-Content native-results/windows-passive.log; exit 1 }
+          cargo test --locked -p wh-win --test uia_passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-uia.log
+          if ($LASTEXITCODE -ne 0) { Get-Content native-results/windows-uia.log; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-windows-results
+          path: native-results/
+          if-no-files-found: error
+
+  macos:
+    if: ${{ inputs.disposable_desktop_confirmed && inputs.platform != 'windows' }}
+    runs-on: [self-hosted, macOS, hands-native]
+    environment: hands-native-macos
+    timeout-minutes: 20
+    env:
+      HANDS_REQUIRE_NATIVE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native macOS capture and app interaction checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native-results
+          cargo test --locked -p wh-mac --test macos_smoke -- --nocapture --test-threads=1 2>&1 | tee native-results/macos-smoke.log
+          cargo test --locked -p wh-mac --test macos_e2e -- --ignored --nocapture --test-threads=1 2>&1 | tee native-results/macos-e2e.log
+          # Historical exploratory tests can return successfully after logging a failed operation.
+          # Preserve an explicit guard even when the test harness itself exits zero.
+          if grep -E 'E2E .*FAIL|gave up after|E2E no Untitled document window' native-results/macos-e2e.log; then
+            echo 'Native operation failed despite exploratory test exit status.' >&2
+            exit 1
+          fi
+          grep -E 'E2E type_text\(short\)[[:space:]]+ok' native-results/macos-e2e.log
+          grep -E 'E2E restore_window[[:space:]]+ok' native-results/macos-e2e.log
+          grep -F 'E2E calculator_end_to_end PASS' native-results/macos-e2e.log
+          grep -F 'E2E textedit_end_to_end PASS' native-results/macos-e2e.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-macos-results
+          path: native-results/
+          if-no-files-found: error

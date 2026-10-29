@@ -184,10 +184,9 @@ impl Drop for Mcp {
     }
 }
 
+// 2026-10-28: the core definition, no longer the Python one (kept in tests/parity as history).
 fn python_tool() -> Value {
-    let all: Value =
-        serde_json::from_str(include_str!("../../../tests/parity/python_list_tools.json")).unwrap();
-    all[0].clone()
+    wh_core::tool_schema::tool_definition()
 }
 
 #[test]
@@ -289,7 +288,10 @@ fn the_command_line_answers_without_a_daemon() {
             String::from_utf8_lossy(&out.stdout).to_string(),
         )
     };
-    assert_eq!(run(&["--version"]).1.trim(), env!("CARGO_PKG_VERSION"));
+    let version = run(&["--version"]).1;
+    assert!(version.starts_with(env!("CARGO_PKG_VERSION")));
+    assert!(version.contains("source="));
+    assert!(version.contains("protocol=1"));
     let (code, text) = run(&["status"]);
     assert_eq!(code, Some(1));
     assert!(text.starts_with("winhands: stopped"), "{text}");

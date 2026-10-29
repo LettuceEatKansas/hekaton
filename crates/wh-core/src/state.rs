@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::clock::Clock;
@@ -22,7 +22,7 @@ pub const IDLE_POLL: Duration = Duration::from_secs(15);
 /// The pause flag the kill hotkey and the tray toggle. While set, everything except the read-only
 /// routes is refused ("paused by user hotkey").
 #[derive(Debug, Default)]
-pub struct PauseFlag(AtomicBool);
+pub struct PauseFlag(AtomicU64);
 
 impl PauseFlag {
     /// Not paused.
@@ -32,17 +32,51 @@ impl PauseFlag {
 
     /// Is the daemon paused?
     pub fn is_paused(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.load(Ordering::SeqCst) & 1 != 0
+    }
+
+    /// A stop generation persists across resume, so an interrupted request never resumes itself.
+    pub fn generation(&self) -> u64 {
+        self.0.load(Ordering::SeqCst) >> 1
     }
 
     /// Set the flag.
     pub fn set(&self, paused: bool) {
-        self.0.store(paused, Ordering::SeqCst);
+        let mut state = self.0.load(Ordering::SeqCst);
+        loop {
+            let next = if paused {
+                state.wrapping_add(2) | 1
+            } else {
+                state & !1
+            };
+            match self
+                .0
+                .compare_exchange(state, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return,
+                Err(current) => state = current,
+            }
+        }
     }
 
     /// Flip the flag (the hotkey) and return the new value.
     pub fn toggle(&self) -> bool {
-        !self.0.fetch_xor(true, Ordering::SeqCst)
+        let mut state = self.0.load(Ordering::SeqCst);
+        loop {
+            let paused = state & 1 == 0;
+            let next = if paused {
+                state.wrapping_add(2) | 1
+            } else {
+                state & !1
+            };
+            match self
+                .0
+                .compare_exchange(state, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return paused,
+                Err(current) => state = current,
+            }
+        }
     }
 }
 

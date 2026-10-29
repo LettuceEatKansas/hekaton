@@ -258,7 +258,7 @@ fn an_empty_body_is_an_empty_object_and_a_non_object_is_refused() {
         body: b"",
         peer: None,
     });
-    assert_eq!(res.status, 200, "{:?}", body(&res));
+    assert_eq!(res.status, 400, "{:?}", body(&res));
     let res = r.post("/computer", json!([1, 2]));
     assert_eq!(res.status, 400);
     assert_eq!(body(&res)["error"], "tool args must be an object");
@@ -286,7 +286,7 @@ fn a_screenshot_comes_back_with_text_and_an_image() {
 }
 
 #[test]
-fn a_failed_step_is_ok_200_with_the_failure_fields_beside_the_text() {
+fn a_failed_step_returns_400_with_structured_failure_fields() {
     let r = rig();
     r.window("Notepad", "notepad.exe");
     let res = r.post(
@@ -294,11 +294,11 @@ fn a_failed_step_is_ok_200_with_the_failure_fields_beside_the_text() {
         json!({"actions": [{"action": "key", "text": "definitely not a key name"}]}),
     );
     assert_eq!(
-        res.status, 200,
-        "unchanged: still 200/ok at the transport level"
+        res.status, 400,
+        "a failed action must not masquerade as success"
     );
     let data = body(&res);
-    assert_eq!(data["ok"], true);
+    assert_eq!(data["ok"], false);
     assert_eq!(data["failed_step"], 1);
     assert!(
         data["result"]

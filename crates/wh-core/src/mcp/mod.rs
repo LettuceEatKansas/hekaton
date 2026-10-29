@@ -344,6 +344,27 @@ pub fn build_payload(
         "only_apps".into(),
         Value::Array(only_apps.into_iter().map(Value::from).collect()),
     );
+    for key in ["compact", "profile", "read_only", "if_changed"] {
+        if let Some(value) = opt_bool(args, key)? {
+            payload.insert(key.into(), Value::Bool(value));
+        }
+    }
+    for key in ["session_id", "snapshot_id"] {
+        if let Some(value) = opt_str(args, key)? {
+            payload.insert(key.into(), Value::String(value));
+        }
+    }
+    for key in ["budget_ms", "max_chars", "max_images"] {
+        if let Some(value) = opt_int(args, key)? {
+            payload.insert(key.into(), Value::from(value));
+        }
+    }
+    // Preserve an explicit image opt-in even when compact mode defaults to text only.
+    if opt_bool(args, "compact")?.unwrap_or(false)
+        && let Some(shot) = opt_bool(args, "shot")?
+    {
+        payload.insert("shot".into(), Value::Bool(shot));
+    }
     Ok(Value::Object(payload))
 }
 

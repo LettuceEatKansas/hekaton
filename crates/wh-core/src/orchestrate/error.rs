@@ -24,6 +24,8 @@ pub enum StepError {
     Permission(String),
     /// Anything else (`RuntimeError`, `OSError`): the OS failed or the outcome is uncertain.
     Runtime(String),
+    /// The action ran but its requested postcondition did not hold.
+    Expectation(String),
 }
 
 impl StepError {
@@ -47,20 +49,26 @@ impl StepError {
         StepError::Runtime(msg.into())
     }
 
+    /// An action completed, but the requested state was not observed afterwards.
+    pub fn expectation(msg: impl Into<String>) -> Self {
+        StepError::Expectation(msg.into())
+    }
+
     /// The message, as `str(exc)`.
     pub fn message(&self) -> &str {
         match self {
             StepError::Value(m)
             | StepError::Target(m)
             | StepError::Permission(m)
-            | StepError::Runtime(m) => m,
+            | StepError::Runtime(m)
+            | StepError::Expectation(m) => m,
         }
     }
 
     /// Is this a `ValueError` (incl. `TargetError`) or a `PermissionError`? Those raised before any
     /// input went out leave the screen as the caller last saw it.
     pub fn is_validation(&self) -> bool {
-        !matches!(self, StepError::Runtime(_))
+        !matches!(self, StepError::Runtime(_) | StepError::Expectation(_))
     }
 }
 
@@ -142,6 +150,7 @@ mod tests {
         assert!(StepError::target("x").is_validation());
         assert!(StepError::permission("x").is_validation());
         assert!(!StepError::runtime("x").is_validation());
+        assert!(!StepError::expectation("x").is_validation());
     }
 
     #[test]

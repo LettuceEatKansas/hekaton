@@ -710,8 +710,8 @@ fn a_failing_step_adds_machine_readable_fields_without_touching_the_text() {
     let j = out.to_json();
     assert_eq!(
         j["ok"],
-        json!(true),
-        "a failed step is still a completed call"
+        json!(false),
+        "transport completion does not imply action success"
     );
     assert_eq!(j["failed_step"], json!(2));
     assert!(

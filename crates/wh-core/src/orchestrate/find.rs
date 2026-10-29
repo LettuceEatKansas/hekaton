@@ -267,6 +267,9 @@ impl Ctx<'_> {
     pub(crate) fn menu_items(&self, wait_s: f64, max_s: f64) -> Vec<MenuItem> {
         let end = self.now() + wait_s.max(0.0);
         loop {
+            if self.check_cancelled().is_err() {
+                return Vec::new();
+            }
             let items = self.menu_items_once(max_s);
             if !items.is_empty() || self.now() >= end {
                 return items;
@@ -284,6 +287,9 @@ impl Ctx<'_> {
     pub(crate) fn wait_popup(&self, wait_s: f64, step_s: f64) -> bool {
         let end = self.now() + wait_s;
         loop {
+            if self.check_cancelled().is_err() {
+                return false;
+            }
             if !self.popup_menus().is_empty() {
                 return true;
             }
@@ -435,9 +441,24 @@ impl Ctx<'_> {
     /// Verify an action's effect: `expect={"text":.., "gone_text":.., "title":..}`. Any mismatch is a
     /// FAIL, so a batch can stop there instead of building on a wrong screen state. Python
     /// `_check_expect`.
+    #[cfg(test)]
     pub(crate) fn check_expect(&self, expect: &serde_json::Value) -> StepResult<String> {
+        Ok(match self.check_expect_result(expect)? {
+            None => "expect: PASS".into(),
+            Some(reason) => format!("expect: FAIL ({reason})"),
+        })
+    }
+
+    /// The verdict is data: None means pass, Some carries the mismatch reason.
+    /// Callers must not recover success or failure by parsing the rendered explanation.
+    pub(crate) fn check_expect_result(
+        &self,
+        expect: &serde_json::Value,
+    ) -> StepResult<Option<String>> {
         let Some(map) = expect.as_object() else {
-            return Ok("expect: FAIL (expect must be an object with text/gone_text/title)".into());
+            return Ok(Some(
+                "expect must be an object with text/gone_text/title".into(),
+            ));
         };
         let pick = |key: &str| -> Option<String> {
             map.get(key)
@@ -463,12 +484,14 @@ impl Ctx<'_> {
             fails.push(format!("text {} is still there", py_repr(t)));
         }
         if title.is_none() && text.is_none() && gone.is_none() {
-            return Ok("expect: FAIL (expect needs at least one of text, gone_text, title)".into());
+            return Ok(Some(
+                "expect needs at least one of text, gone_text, title".into(),
+            ));
         }
         if fails.is_empty() {
-            Ok("expect: PASS".into())
+            Ok(None)
         } else {
-            Ok(format!("expect: FAIL ({})", fails.join("; ")))
+            Ok(Some(fails.join("; ")))
         }
     }
 
@@ -708,14 +731,17 @@ impl Ctx<'_> {
             (top + d.height() - 1).min((*y1 as i32) + (0.04 * h) as i32),
         );
         // the text below is the answer; never lose it to a bad picture box
-        let img = self
-            .screenshot_b64(Some([
+        let img = if self.o.helper_images {
+            self.screenshot_b64(Some([
                 f64::from(a[0]),
                 f64::from(a[1]),
                 f64::from(b[0]),
                 f64::from(b[1]),
             ]))
-            .ok();
+            .ok()
+        } else {
+            None
+        };
         let mut note = format!(
             "found {} line(s) with {} ({source}); each row reads left to right with click points in \
              full-screenshot coordinates:\n{}",

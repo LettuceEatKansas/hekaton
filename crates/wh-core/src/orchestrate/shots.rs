@@ -6,7 +6,7 @@ use super::error::{StepError, StepResult};
 use super::{Ctx, secs};
 use crate::backend::{Image, OcrResult, Rect};
 use crate::imaging::{self, ImageFormat};
-use crate::settle::{SettleParams, settle, settle_floor};
+use crate::settle::{SettleParams, settle_floor, settle_with_frame};
 
 /// One recognised run of text in the pixels of the image that was OCR'd.
 #[derive(Debug, Clone, PartialEq)]
@@ -135,8 +135,23 @@ impl Ctx<'_> {
             Some(r) => scale.zoom_box(r)?,
         };
         let img = self.grab(rect)?;
-        let mut img = imaging::resize(&img, out_w, out_h)?;
-        if region.is_none()
+        self.encode_frame(&img, out_w, out_h, region.is_none())
+    }
+
+    /// Encode the final settled pixels instead of capturing the same screen a second time.
+    pub(crate) fn encode_full_frame(&self, img: &Image) -> StepResult<String> {
+        let (w, h) = self.scale().shot_size();
+        self.encode_frame(img, w.max(1) as u32, h.max(1) as u32, true)
+    }
+
+    fn encode_frame(&self, img: &Image, out_w: u32, out_h: u32, whole: bool) -> StepResult<String> {
+        self.check_cancelled()?;
+        if !self.cfg().mark() && img.width() == out_w && img.height() == out_h {
+            return Ok(imaging::base64(&imaging::encode(img, self.image_format())?));
+        }
+        let display = self.scale().display;
+        let mut img = imaging::resize(img, out_w, out_h)?;
+        if whole
             && self.cfg().mark()
             && let Some(p) = self.c.mem().last_point
         {
@@ -163,15 +178,35 @@ impl Ctx<'_> {
         min_s: f64,
         calm_needed: u32,
     ) -> StepResult<f64> {
+        self.settle_frame(max_s, min_s, calm_needed)
+            .map(|(elapsed, _)| elapsed)
+    }
+
+    pub(crate) fn settle_frame(
+        &self,
+        max_s: Option<f64>,
+        min_s: f64,
+        calm_needed: u32,
+    ) -> StepResult<(f64, Image)> {
+        self.check_cancelled()?;
         let mut params = SettleParams::from_config(self.cfg())
             .with_min(secs(min_s))
             .with_calm_needed(calm_needed);
         if let Some(m) = max_s {
             params = params.with_max(secs(m));
         }
-        settle(self.be(), self.clock(), self.display_rect(), &params)
-            .map(|d| d.as_secs_f64())
-            .map_err(StepError::from)
+        settle_with_frame(
+            self.be(),
+            self.clock(),
+            self.display_rect(),
+            &params,
+            &|| {
+                self.check_cancelled()
+                    .map_err(|e| crate::backend::BackendError::Denied(e.message().to_string()))
+            },
+        )
+        .map(|s| (s.elapsed.as_secs_f64(), s.image))
+        .map_err(StepError::from)
     }
 
     /// Minimum watch time of the trailing settle after an acting call: `settle_floor_ms` (130 by

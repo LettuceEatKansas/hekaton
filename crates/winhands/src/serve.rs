@@ -1,18 +1,16 @@
 //! `winhands daemon`: the HTTP server round [`wh_core::daemon::Daemon`] and the process start-up
 //! (Python `daemon.main`).
 //!
-//! The server is synchronous: one accept loop, one thread per request, like the Python
-//! `ThreadingHTTPServer`, so a slow call (a long OCR, a long wait) never blocks `/health` or
-//! `/shutdown`. Anything that can move focus or send input takes the core's tool lock, so two agents
-//! never interleave mouse and keyboard input.
+//! A bounded desktop pool and a separate bounded control pool keep slow desktop work from using
+//! every worker. Queues have deadlines: work that has expired never starts sending input.
 
 use std::io::{self, Read};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tiny_http::{Header, Response, Server};
 use wh_core::backend::Backend;
@@ -24,7 +22,146 @@ use wh_core::state::IDLE_POLL;
 use wh_core::token;
 
 /// A request body larger than this is cut off (a screenshot-sized JSON call is a few KB).
-const MAX_BODY: u64 = 64 * 1024 * 1024;
+const MAX_BODY: u64 = 2 * 1024 * 1024;
+
+const REQUEST_WORKERS: usize = 4;
+const CONTROL_WORKERS: usize = 2;
+const QUEUE_CAPACITY: usize = 8;
+const LEGACY_REQUEST_BUDGET: Duration = Duration::from_secs(120);
+const MAX_REQUEST_BUDGET: Duration = Duration::from_secs(600);
+
+/// Version of the backwards-compatible Hands HTTP request contract.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Build provenance, shared by the CLI and authenticated health response.
+pub fn build_info() -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "source_commit": env!("HANDS_SOURCE_COMMIT"),
+        "source_dirty": env!("HANDS_SOURCE_DIRTY"),
+        "protocol_version": PROTOCOL_VERSION,
+        "target": env!("HANDS_BUILD_TARGET"),
+    })
+}
+
+struct QueuedRequest {
+    request: tiny_http::Request,
+    deadline: Instant,
+}
+
+struct Rejection {
+    request: tiny_http::Request,
+    status: u16,
+    message: &'static str,
+}
+
+fn rejection_pool() -> io::Result<mpsc::SyncSender<Rejection>> {
+    let (sender, receiver) = mpsc::sync_channel::<Rejection>(QUEUE_CAPACITY);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for n in 0..2 {
+        let receiver = receiver.clone();
+        thread::Builder::new()
+            .name(format!("hands-reject-{n}"))
+            .spawn(move || {
+                loop {
+                    let item = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    let Ok(item) = item else { break };
+                    reject(item.request, item.status, item.message);
+                }
+            })?;
+    }
+    Ok(sender)
+}
+
+fn reject_later(
+    sender: &mpsc::SyncSender<Rejection>,
+    request: tiny_http::Request,
+    status: u16,
+    message: &'static str,
+) {
+    if let Err(error) = sender.try_send(Rejection {
+        request,
+        status,
+        message,
+    }) {
+        let item = match error {
+            mpsc::TrySendError::Full(item) | mpsc::TrySendError::Disconnected(item) => item,
+        };
+        // Explicitly abort the socket, without writing or draining an attacker-controlled body.
+        item.request.abort();
+    }
+}
+
+fn control_route(method: &str, path: &str) -> bool {
+    (method == "GET" && path == "/health")
+        || (method == "POST" && matches!(path.trim_matches('/'), "pause" | "resume" | "shutdown"))
+}
+
+fn request_deadline(value: Option<&str>, now: Instant, wall: SystemTime) -> Result<Instant, ()> {
+    let budget = match value {
+        Some(raw) => {
+            let until = raw.parse::<u64>().map_err(|_| ())?;
+            let elapsed = wall.duration_since(UNIX_EPOCH).map_err(|_| ())?;
+            Duration::from_millis(until).saturating_sub(elapsed)
+        }
+        None => LEGACY_REQUEST_BUDGET,
+    };
+    Ok(now + budget.min(MAX_REQUEST_BUDGET))
+}
+
+fn reject(request: tiny_http::Request, status: u16, message: &str) {
+    let body = if status == 401 {
+        serde_json::json!({"error": message})
+    } else {
+        serde_json::json!({"ok": false, "error": message})
+    };
+    let response = Response::from_string(body.to_string()).with_status_code(status);
+    let response = match header("Content-Type", "application/json") {
+        Some(h) => response.with_header(h),
+        None => response,
+    };
+    let _ = request.respond_and_close(response);
+}
+
+fn request_pool(
+    name: &str,
+    workers: usize,
+    daemon: &Arc<Daemon>,
+    server: &Arc<Server>,
+    stop: &Arc<AtomicBool>,
+) -> io::Result<mpsc::SyncSender<QueuedRequest>> {
+    let (sender, receiver) = mpsc::sync_channel::<QueuedRequest>(QUEUE_CAPACITY);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for n in 0..workers {
+        let (receiver, daemon, server, stop) = (
+            receiver.clone(),
+            daemon.clone(),
+            server.clone(),
+            stop.clone(),
+        );
+        thread::Builder::new()
+            .name(format!("hands-{name}-{n}"))
+            .spawn(move || {
+                loop {
+                    let item = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    let Ok(item) = item else { break };
+                    if stop.load(Ordering::SeqCst) {
+                        reject(
+                            item.request,
+                            503,
+                            "daemon is stopping; request was not executed",
+                        );
+                        continue;
+                    }
+                    if answer(&daemon, item) {
+                        stop.store(true, Ordering::SeqCst);
+                        server.unblock();
+                    }
+                }
+            })?;
+    }
+    Ok(sender)
+}
 
 /// Exit code: the config asked for a non-loopback bind without both opt-ins.
 pub const EXIT_REMOTE_BIND_REFUSED: i32 = 4;
@@ -100,7 +237,15 @@ fn header(name: &str, value: &str) -> Option<Header> {
 }
 
 /// Answer one request on the connection it arrived on. Returns true when the daemon should stop.
-fn answer(daemon: &Daemon, mut request: tiny_http::Request) -> bool {
+fn answer(daemon: &Daemon, item: QueuedRequest) -> bool {
+    let QueuedRequest {
+        mut request,
+        deadline,
+    } = item;
+    if Instant::now() >= deadline {
+        reject(request, 408, "request deadline expired before execution");
+        return false;
+    }
     let method = request.method().as_str().to_string();
     let path = request.url().to_string();
     let token = request
@@ -114,27 +259,54 @@ fn answer(daemon: &Daemon, mut request: tiny_http::Request) -> bool {
     if daemon.is_authorised(token.as_deref())
         && request
             .as_reader()
-            .take(MAX_BODY)
+            .take(MAX_BODY + 1)
             .read_to_end(&mut body)
             .is_err()
     {
         // a client that hangs up mid-request is not worth a stack trace
+        request.abort();
         return false;
     }
-    let reply = daemon.handle(&Request {
-        method: &method,
-        path: &path,
-        token: token.as_deref(),
-        body: &body,
-        peer,
-    });
+    if body.len() as u64 > MAX_BODY {
+        reject(request, 413, "request body exceeds 2 MiB");
+        return false;
+    }
+    if Instant::now() >= deadline {
+        reject(
+            request,
+            408,
+            "request deadline expired while reading its body",
+        );
+        return false;
+    }
+    let mut reply = daemon.handle_until(
+        &Request {
+            method: &method,
+            path: &path,
+            token: token.as_deref(),
+            body: &body,
+            peer,
+        },
+        deadline,
+    );
+    if method == "GET"
+        && path == "/health"
+        && reply.status == 200
+        && let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&reply.body)
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("build".into(), build_info());
+        if let Ok(body) = serde_json::to_vec(&value) {
+            reply.body = body;
+        }
+    }
     let shutdown = reply.shutdown;
     let mut response = Response::from_data(reply.body).with_status_code(reply.status);
     if let Some(h) = header("Content-Type", reply.content_type) {
         response = response.with_header(h);
     }
     // the client may be gone already (a killed shim, a timed-out call)
-    let _ = request.respond(response);
+    let _ = request.respond_and_close(response);
     shutdown
 }
 
@@ -147,6 +319,9 @@ pub fn serve(
     idle_poll: Duration,
 ) -> io::Result<()> {
     let server = Arc::new(Server::from_listener(listener, None).map_err(io::Error::other)?);
+    let requests = request_pool("request", REQUEST_WORKERS, &daemon, &server, &stop)?;
+    let controls = request_pool("control", CONTROL_WORKERS, &daemon, &server, &stop)?;
+    let rejections = rejection_pool()?;
     {
         // Exit when no request has arrived for the idle timeout. winhands starts on demand and goes
         // away again, because it is not meant to be resident; the shim starts it on the next call.
@@ -171,18 +346,59 @@ pub fn serve(
     }
     for request in server.incoming_requests() {
         if stop.load(Ordering::SeqCst) {
+            request.abort();
             break;
         }
-        let (daemon, server, stop) = (daemon.clone(), server.clone(), stop.clone());
-        thread::Builder::new()
-            .name("winhands-request".into())
-            .spawn(move || {
-                if answer(&daemon, request) {
-                    stop.store(true, Ordering::SeqCst);
-                    server.unblock();
-                }
-            })?;
+        let token = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Winhands-Token"))
+            .map(|h| h.value.as_str());
+        let auth_required = request.method().as_str() == "POST"
+            || (request.method().as_str() == "GET" && request.url() == "/health");
+        if auth_required && !daemon.is_authorised(token) {
+            reject_later(&rejections, request, 401, "unauthorized");
+            continue;
+        }
+        if request.body_length().is_some_and(|n| n as u64 > MAX_BODY) {
+            reject_later(&rejections, request, 413, "request body exceeds 2 MiB");
+            continue;
+        }
+        let raw_deadline = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Hands-Deadline-Unix-Ms"))
+            .map(|h| h.value.as_str());
+        let deadline = match request_deadline(raw_deadline, Instant::now(), SystemTime::now()) {
+            Ok(deadline) => deadline,
+            Err(()) => {
+                reject_later(
+                    &rejections,
+                    request,
+                    400,
+                    "invalid X-Hands-Deadline-Unix-Ms header",
+                );
+                continue;
+            }
+        };
+        let pool = if control_route(request.method().as_str(), request.url()) {
+            &controls
+        } else {
+            &requests
+        };
+        if let Err(error) = pool.try_send(QueuedRequest { request, deadline }) {
+            let item = match error {
+                mpsc::TrySendError::Full(item) | mpsc::TrySendError::Disconnected(item) => item,
+            };
+            reject_later(
+                &rejections,
+                item.request,
+                503,
+                "request capacity exhausted; request was not executed",
+            );
+        }
     }
+    stop.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -320,4 +536,50 @@ fn write_pid(path: &Path) {
         let _ = std::fs::create_dir_all(dir);
     }
     let _ = std::fs::write(path, std::process::id().to_string());
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn control_lane_contains_only_health_and_control_commands() {
+        assert!(control_route("GET", "/health"));
+        for path in ["/pause", "/resume", "/shutdown", "/pause/"] {
+            assert!(control_route("POST", path));
+        }
+        assert!(!control_route("POST", "/computer"));
+        assert!(!control_route("POST", "/batch"));
+        assert!(!control_route("GET", "/pause"));
+        assert!(!control_route("POST", "/health"));
+    }
+
+    #[test]
+    fn deadlines_are_monotonic_bounded_and_legacy_compatible() {
+        let now = Instant::now();
+        let wall = UNIX_EPOCH + Duration::from_millis(1_000);
+        assert_eq!(
+            request_deadline(None, now, wall).unwrap(),
+            now + LEGACY_REQUEST_BUDGET
+        );
+        assert_eq!(
+            request_deadline(Some("1100"), now, wall).unwrap(),
+            now + Duration::from_millis(100)
+        );
+        assert_eq!(request_deadline(Some("999"), now, wall).unwrap(), now);
+        assert_eq!(
+            request_deadline(Some("9999999999"), now, wall).unwrap(),
+            now + MAX_REQUEST_BUDGET
+        );
+        assert!(request_deadline(Some("-1"), now, wall).is_err());
+        assert!(request_deadline(Some("tomorrow"), now, wall).is_err());
+    }
+
+    #[test]
+    fn build_identity_reports_protocol_and_source_explicitly() {
+        let info = build_info();
+        assert_eq!(info["protocol_version"], 1);
+        assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
+        assert!(!info["source_commit"].as_str().unwrap().is_empty());
+    }
 }

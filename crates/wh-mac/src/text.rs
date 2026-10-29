@@ -2,9 +2,9 @@
 //! under a point, the caret. `AXValue` strings and `AXBoundsForRange` both count UTF-16 units, the
 //! same unit the pure helpers in `textops` use.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use wh_core::backend::{BackendResult, Caret, DocumentHit, Point, Rect, WindowRef};
+use wh_core::backend::{BackendError, BackendResult, Caret, DocumentHit, Point, Rect, WindowRef};
 
 use crate::apps;
 use crate::ax::Ax;
@@ -12,7 +12,7 @@ use crate::cf;
 use crate::geom::rect_from_f64;
 use crate::perm;
 use crate::roles::{is_secure_field, is_text_input};
-use crate::textops::{find_matches, line_range, slice16};
+use crate::textops::{find_matches_checked, line_range, remaining_budget, slice16};
 use crate::tree::{ax_window, find_first, focused_ax, window_of};
 use crate::wininfo::window_parts;
 use crate::winlist;
@@ -21,7 +21,13 @@ use crate::winlist;
 const MAX_DOC_CHARS: usize = 2_000_000;
 
 /// The element holding the window's document text, with the text.
-fn text_element(window: WindowRef, displays: &[Rect]) -> BackendResult<Option<(Ax, String)>> {
+fn text_element(
+    window: WindowRef,
+    displays: &[Rect],
+    deadline: Instant,
+) -> BackendResult<Option<(Ax, String)>> {
+    let remaining = || remaining_budget(deadline, Instant::now()).ok_or(BackendError::Timeout);
+    remaining()?;
     let (pid, _) = window_parts(window);
     let in_window = |ax: &Ax| window_of(ax) == Some(window);
     // The focused text control of this window is the best guess for "the document".
@@ -33,12 +39,18 @@ fn text_element(window: WindowRef, displays: &[Rect]) -> BackendResult<Option<(A
         && let Some(text) = p.value_text()
         && !text.is_empty()
     {
+        remaining()?;
         return Ok(Some((focus, text)));
     }
+    remaining()?;
     let win = ax_window(window, displays)?;
-    let found = find_first(&win, 12, Duration::from_millis(700), &|p| {
-        p.role == "AXTextArea" && p.value_text().is_some_and(|t| !t.is_empty())
-    });
+    let found = find_first(
+        &win,
+        12,
+        remaining()?.min(Duration::from_millis(700)),
+        &|p| p.role == "AXTextArea" && p.value_text().is_some_and(|t| !t.is_empty()),
+    );
+    remaining()?;
     Ok(found.and_then(|(ax, p)| p.value_text().map(|t| (ax, t))))
 }
 
@@ -49,8 +61,12 @@ pub(crate) fn document_text(
     displays: &[Rect],
 ) -> BackendResult<Option<String>> {
     perm::require_accessibility("read document text")?;
-    Ok(text_element(window, displays)?
-        .map(|(_, t)| t.chars().take(max_chars.min(MAX_DOC_CHARS)).collect()))
+    Ok(text_element(
+        window,
+        displays,
+        Instant::now() + Duration::from_millis(1500),
+    )?
+    .map(|(_, t)| t.chars().take(max_chars.min(MAX_DOC_CHARS)).collect()))
 }
 
 fn visible_rect(ax: &Ax, location: usize, length: usize, win: Rect) -> Option<Rect> {
@@ -65,20 +81,33 @@ pub(crate) fn find_in_documents(
     query: &str,
     max_hits: usize,
     displays: &[Rect],
+    budget: Duration,
 ) -> BackendResult<Vec<DocumentHit>> {
+    let deadline = Instant::now() + budget;
+    let remaining = || remaining_budget(deadline, Instant::now()).ok_or(BackendError::Timeout);
+    remaining()?;
     perm::require_accessibility("search document text")?;
-    let Some((ax, text)) = text_element(window, displays)? else {
+    let Some((ax, text)) = text_element(window, displays, deadline)? else {
         return Ok(Vec::new());
     };
+    remaining()?;
     let win_rect = winlist::info(window, displays)?.rect;
-    Ok(find_matches(&text, query, max_hits)
-        .into_iter()
-        .map(|m| DocumentHit {
-            match_rect: visible_rect(&ax, m.start, m.len, win_rect),
-            line_rect: visible_rect(&ax, m.line_start, m.line_end - m.line_start, win_rect),
+    let matches = find_matches_checked(&text, query, max_hits, &|| remaining().is_ok())
+        .ok_or(BackendError::Timeout)?;
+    let mut hits = Vec::with_capacity(matches.len());
+    for m in matches {
+        remaining()?;
+        let match_rect = visible_rect(&ax, m.start, m.len, win_rect);
+        remaining()?;
+        let line_rect = visible_rect(&ax, m.line_start, m.line_end - m.line_start, win_rect);
+        remaining()?;
+        hits.push(DocumentHit {
+            match_rect,
+            line_rect,
             line: m.line,
-        })
-        .collect())
+        });
+    }
+    Ok(hits)
 }
 
 /// The document's own text of the line at a screen point.

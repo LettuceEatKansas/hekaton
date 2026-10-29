@@ -32,21 +32,27 @@ fn payload(v: Value) -> Map<String, Value> {
 // ---------------------------------------------------------------------------------- definition
 
 #[test]
-fn the_description_is_the_python_description_byte_for_byte() {
+fn the_description_is_cross_platform_and_smaller_than_the_legacy_description() {
     let tool = python_tool();
-    assert_eq!(TOOL_DESCRIPTION, tool["description"].as_str().unwrap());
+    assert!(TOOL_DESCRIPTION.contains("Windows/macOS"));
+    assert!(
+        TOOL_DESCRIPTION.chars().count() < tool["description"].as_str().unwrap().chars().count()
+    );
 }
 
 #[test]
-fn the_schema_is_the_python_schema_with_the_same_key_order() {
+fn the_schema_preserves_legacy_property_types_and_adds_bounded_options() {
     let tool = python_tool();
     let ours = Value::Object(input_schema());
-    assert_eq!(ours, tool["inputSchema"]);
-    // serde_json keeps insertion order here, so equal text means equal order too
-    assert_eq!(
-        serde_json::to_string(&ours).unwrap(),
-        serde_json::to_string(&tool["inputSchema"]).unwrap()
-    );
+    let old = tool["inputSchema"]["properties"].as_object().unwrap();
+    for (key, property) in old {
+        assert_eq!(ours["properties"][key]["type"], property["type"], "{key}");
+        if let Some(items) = property.get("items") {
+            assert_eq!(&ours["properties"][key]["items"], items);
+        }
+    }
+    assert_eq!(ours["properties"]["actions"]["maxItems"], 50);
+    assert_eq!(ours["properties"]["compact"]["type"], "boolean");
 }
 
 #[test]

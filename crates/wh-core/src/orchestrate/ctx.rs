@@ -3,15 +3,19 @@
 //! Python: `display_rect`, `_fg_monitor`, `_fg_root`, `_class`, `_title`, `_wait_for_human`,
 //! `_mark_ours`, `_remember_target`, `_restore_target`, `_holding`, `_with_modifiers`, `_poll`.
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use super::error::StepResult;
-use super::{Ctx, secs};
-use crate::backend::{Backend, Display, Rect, WindowInfo, WindowKind, WindowRef, no_guard};
+use super::{Computer, Ctx, secs};
+use crate::backend::{
+    Backend, BackendError, BackendResult, Display, HeldKeys, Rect, WindowInfo, WindowKind,
+    WindowRef,
+};
 use crate::clock::Clock;
 use crate::config::Config;
 use crate::human::{DEFAULT_MAX_WAIT, DEFAULT_QUIET};
-use crate::input::{TypeOptions, type_text};
+use crate::input::{TypeOptions, type_text_guarded};
 use crate::keys::{Key, Platform, parse_key_combo, parse_modifiers};
 use crate::scale::{parse_display_spec, sort_displays};
 
@@ -38,6 +42,25 @@ pub(crate) fn is_run_dialog(info: &WindowInfo) -> bool {
     info.class == "#32770" && info.title.trim().eq_ignore_ascii_case("run")
 }
 
+impl Computer {
+    /// Stop accepting input and release only the split mouse press this tool owns.
+    /// The primitive lock never spans a held-key wait, drag, or whole tool request.
+    /// A failed release keeps ownership so the next stop can retry cleanup.
+    pub fn pause_and_release(&self) -> BackendResult<()> {
+        self.pause.set(true);
+        let mut owned = self
+            .owned_mouse
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *owned {
+            self.backend
+                .mouse_button(crate::backend::MouseButton::Left, false)?;
+            *owned = false;
+        }
+        Ok(())
+    }
+}
+
 impl<'a> Ctx<'a> {
     pub(crate) fn be(&self) -> &'a dyn Backend {
         self.c.backend.as_ref()
@@ -53,7 +76,48 @@ impl<'a> Ctx<'a> {
 
     /// Wait `s` seconds on the call's clock.
     pub(crate) fn sleep(&self, s: f64) {
-        self.clock().sleep(secs(s));
+        let _ = self.sleep_checked(s);
+    }
+
+    /// Refuse an interrupted request even after the user resumes newer work.
+    pub(crate) fn check_cancelled(&self) -> StepResult<()> {
+        if self.c.pause.is_paused() || self.c.pause.generation() != self.o.cancel_generation {
+            return Err(super::error::StepError::permission("paused by user hotkey"));
+        }
+        if self
+            .o
+            .deadline
+            .is_some_and(|deadline| self.clock().now() >= deadline)
+        {
+            return Err(super::error::StepError::permission(
+                "request deadline exceeded; inspect current state before retrying",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn input_guard(&self) -> BackendResult<()> {
+        if self.o.read_only {
+            return Err(BackendError::Denied(
+                "read-only mode refuses desktop input".into(),
+            ));
+        }
+        self.check_cancelled()
+            .map_err(|error| BackendError::Denied(error.to_string()))
+    }
+
+    /// Wait cooperatively. Held-input cleanup runs when this returns an interruption.
+    pub(crate) fn sleep_checked(&self, s: f64) -> StepResult<()> {
+        let until = self.clock().now().saturating_add(secs(s));
+        loop {
+            self.check_cancelled()?;
+            let now = self.clock().now();
+            if now >= until {
+                return Ok(());
+            }
+            self.clock()
+                .sleep((until - now).min(Duration::from_millis(25)));
+        }
     }
 
     /// Seconds on the call's clock (`time.monotonic()`).
@@ -71,6 +135,9 @@ impl<'a> Ctx<'a> {
     ) -> (Option<T>, f64) {
         let start = self.now();
         loop {
+            if self.check_cancelled().is_err() {
+                return (None, self.now() - start);
+            }
             let found = check();
             let took = self.now() - start;
             if found.is_some() || took >= timeout {
@@ -273,7 +340,9 @@ impl<'a> Ctx<'a> {
         });
         if target_info.minimized || intruder {
             let go = || -> StepResult<()> {
+                self.check_cancelled()?;
                 self.be().restore_window(target, Duration::from_secs(2))?;
+                self.check_cancelled()?;
                 self.be().bring_to_foreground(target)?;
                 Ok(())
             };
@@ -290,7 +359,15 @@ impl<'a> Ctx<'a> {
     /// Press a combo such as `ctrl+a` (Python `core.send_key_combo`).
     pub(crate) fn send_combo(&self, combo: &str, repeat: u32) -> StepResult<()> {
         let keys = parse_key_combo(combo, Platform::current())?;
-        self.be().key_chord(&keys, repeat.max(1), &no_guard)?;
+        let shell_combo =
+            Platform::current() == Platform::Windows && matches!(keys.first(), Some(Key::Meta));
+        self.be().key_chord(&keys, repeat.max(1), &|| {
+            if shell_combo {
+                self.input_guard()
+            } else {
+                self.keyboard_guard()
+            }
+        })?;
         Ok(())
     }
 
@@ -316,18 +393,13 @@ impl<'a> Ctx<'a> {
         keys: &[Key],
         f: impl FnOnce() -> StepResult<T>,
     ) -> StepResult<T> {
+        let mut held = HeldKeys::new(self.be());
         for k in keys {
-            self.be().key_down(*k)?;
+            self.check_cancelled()?;
+            held.press(*k)?;
         }
         let out = f();
-        let mut release: StepResult<()> = Ok(());
-        for k in keys.iter().rev() {
-            if let Err(e) = self.be().key_up(*k)
-                && release.is_ok()
-            {
-                release = Err(e.into());
-            }
-        }
+        let release = held.release().map_err(super::error::StepError::from);
         match (out, release) {
             (Ok(v), Ok(())) => Ok(v),
             (Ok(_), Err(e)) => Err(e),
@@ -351,11 +423,28 @@ impl<'a> Ctx<'a> {
     /// owner's clipboard put back. Returns " (pasted)" or "" (Python `_type_text`).
     pub(crate) fn type_text(&self, text: &str) -> StepResult<&'static str> {
         let paste_over = usize::try_from(self.cfg().paste_over()).unwrap_or(0);
-        let outcome = type_text(
+        let target = self.typing_target()?;
+        let last_full = Cell::new(self.clock().now());
+        let guard = || {
+            self.typing_target_guard(target)?;
+            let now = self.clock().now();
+            // Restricted requests retain full per-event checks. Unrestricted typing only
+            // amortizes policy reads inside this operation, with identity checked every time.
+            if !self.o.only_apps.is_empty()
+                || now.saturating_sub(last_full.get()) >= Duration::from_millis(100)
+            {
+                self.keyboard_window_guard(target.0)?;
+                self.typing_target_guard(target)?;
+                last_full.set(now);
+            }
+            Ok(())
+        };
+        let outcome = type_text_guarded(
             self.be(),
             self.o.policy,
             text,
             &TypeOptions::new(paste_over),
+            &guard,
         )?;
         Ok(outcome.note_suffix())
     }

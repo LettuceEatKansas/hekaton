@@ -103,7 +103,7 @@ pub struct CachedElement {
     pub state: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct RefTables {
     next_window: u32,
     windows: HashMap<WindowRef, u32>,

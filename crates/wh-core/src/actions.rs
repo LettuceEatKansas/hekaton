@@ -18,7 +18,7 @@ pub const POINTER_ACTIONS: [&str; 12] = [
 ];
 
 /// The rest of computer.py `ACTIONS` (everything that is not a pointer action).
-pub const OTHER_ACTIONS: [&str; 24] = [
+pub const OTHER_ACTIONS: [&str; 25] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -43,11 +43,12 @@ pub const OTHER_ACTIONS: [&str; 24] = [
     "recipe",
     "recipe_list",
     "recipe_save",
+    "status",
 ];
 
 /// Actions that only read state or touch the OS clipboard, never a window. They skip the
 /// human-input wait and target restore (computer.py `_PASSIVE_ACTIONS`).
-pub const PASSIVE_ACTIONS: [&str; 14] = [
+pub const PASSIVE_ACTIONS: [&str; 15] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -62,11 +63,12 @@ pub const PASSIVE_ACTIONS: [&str; 14] = [
     "read",
     "list_files",
     "recipe_list",
+    "status",
 ];
 
 /// Actions a client may use BEFORE the owner has acknowledged winhands: reads only. `clipboard_set`
 /// is excluded because it changes state the user owns (computer.py `ACK_EXEMPT_ACTIONS`).
-pub const ACK_EXEMPT_ACTIONS: [&str; 13] = [
+pub const ACK_EXEMPT_ACTIONS: [&str; 14] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -80,11 +82,12 @@ pub const ACK_EXEMPT_ACTIONS: [&str; 13] = [
     "read",
     "list_files",
     "recipe_list",
+    "status",
 ];
 
 /// Text-only answers: a batch ending in one of these skips the trailing screenshot
 /// (computer.py `_NO_TRAILING_SHOT`).
-pub const NO_TRAILING_SHOT: [&str; 13] = [
+pub const NO_TRAILING_SHOT: [&str; 14] = [
     "screenshot",
     "zoom",
     "cursor_position",
@@ -98,6 +101,7 @@ pub const NO_TRAILING_SHOT: [&str; 13] = [
     "folder",
     "recipe_list",
     "recipe_save",
+    "status",
 ];
 
 /// Routes the daemon answers before acknowledgement (daemon.py `READ_ONLY_ACTIONS` plus `files`).
@@ -108,7 +112,7 @@ pub const REPORTABLE_ACTIONS: [&str; 6] = ["click", "type", "key", "scroll", "dr
 
 /// Every action name in the order Python's `sorted(ACTIONS)` lists them (the "unknown action"
 /// message prints this).
-pub const ACTIONS_SORTED: [&str; 36] = [
+pub const ACTIONS_SORTED: [&str; 37] = [
     "click_text",
     "clipboard_get",
     "clipboard_set",
@@ -138,6 +142,7 @@ pub const ACTIONS_SORTED: [&str; 36] = [
     "right_click",
     "screenshot",
     "scroll",
+    "status",
     "triple_click",
     "type",
     "wait",
@@ -186,7 +191,7 @@ mod tests {
 
     #[test]
     fn the_action_set_has_the_documented_size() {
-        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 36);
+        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 37);
         assert!(PASSIVE_ACTIONS.iter().all(|a| is_action(a)));
         assert!(NO_TRAILING_SHOT.iter().all(|a| is_action(a)));
         assert!(!is_action("nope"));

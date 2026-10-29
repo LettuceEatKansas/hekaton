@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/wh-core", "crates/wh-win", "crates/wh-mac", "crates/winhands"]
+exclude = ["vendor/tiny_http"]
+
+[patch.crates-io]
+tiny_http = { path = "vendor/tiny_http" }
 
 [workspace.package]
 version = "0.2.0"
