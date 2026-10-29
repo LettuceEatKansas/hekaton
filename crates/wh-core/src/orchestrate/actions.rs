@@ -344,7 +344,8 @@ impl Ctx<'_> {
             "read_text" => {
                 // Sends select-all / copy only when the app exposes no text to UIA, so it is an
                 // acting step.
-                self.read_text(&text, &text_arg(step, "window"))?
+                let limit = int_or(step, "limit", 30)?.clamp(1, 400) as usize;
+                self.read_text_lines(&text, &text_arg(step, "window"), limit)?
             }
             "file_dialog" => {
                 if text.is_empty() {

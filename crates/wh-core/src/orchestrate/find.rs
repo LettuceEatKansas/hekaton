@@ -1203,6 +1203,18 @@ impl Ctx<'_> {
     /// the browser in front and was refused for the browser's app; now the named window is read
     /// (its UIA text needs no focus; the copy fallback brings it to the front first).
     pub(crate) fn read_text(&self, query: &str, window: &str) -> StepResult<String> {
+        self.read_text_lines(query, window, 30)
+    }
+
+    /// [`Self::read_text`] showing up to `limit` matching lines. 2026-10-29 leads rerun: 30 was
+    /// fixed, `limit` was ignored, and the AI asked again with other words (or ".") to see the
+    /// rest of a YouTube page; 48 commands where machands, looking at pictures, took 23.
+    pub(crate) fn read_text_lines(
+        &self,
+        query: &str,
+        window: &str,
+        limit: usize,
+    ) -> StepResult<String> {
         const MAX_CHARS: usize = 6000;
         let fg = self.fg_root();
         let root = if window.trim().is_empty() {
@@ -1296,8 +1308,21 @@ impl Ctx<'_> {
                     py_repr(query.trim())
                 ));
             }
-            let more = if found.len() > 30 {
-                format!("\n({} more matching lines)", found.len() - 30)
+            // whole lines up to `limit`, and never past the whole-text budget
+            let mut shown = 0;
+            let mut used = 0;
+            for row in found.iter().take(limit) {
+                if shown > 0 && used + row.chars().count() > MAX_CHARS {
+                    break;
+                }
+                used += row.chars().count() + 1;
+                shown += 1;
+            }
+            let more = if found.len() > shown {
+                format!(
+                    "\n({} more matching lines; pass limit= up to 400 to see more)",
+                    found.len() - shown
+                )
             } else {
                 String::new()
             };
@@ -1307,26 +1332,57 @@ impl Ctx<'_> {
                 py_repr(query.trim()),
                 found
                     .iter()
-                    .take(30)
+                    .take(shown)
                     .cloned()
                     .collect::<Vec<_>>()
                     .join("\n")
             ));
         }
         // blank lines keep their numbers but are not printed: a web page copy is a third blank
-        let mut out = lines
+        let rows: Vec<String> = lines
             .iter()
             .enumerate()
             .filter(|(_, ln)| !ln.trim().is_empty())
             .map(|(i, ln)| format!("{}: {}", i + 1, ln.trim_end()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if out.chars().count() > MAX_CHARS {
-            out = format!(
-                "{}\n(cut here; pass text = a word to get only the lines that contain it)",
-                out.chars().take(MAX_CHARS).collect::<String>()
-            );
+            .collect();
+        let total: usize = rows.iter().map(|r| r.chars().count() + 1).sum();
+        if total <= MAX_CHARS {
+            return Ok(format!("{head}:\n{}", rows.join("\n")));
         }
-        Ok(format!("{head}:\n{out}"))
+        // 2026-10-29 leads rerun: a web page's pop-up (YouTube's About box) comes last in its copied
+        // text, past the cut. Keep the start and the end; the middle is what gets cut.
+        let (head_budget, tail_budget) = (MAX_CHARS * 2 / 3, MAX_CHARS / 3);
+        let mut first = 0;
+        let mut used = 0;
+        for r in &rows {
+            if used + r.chars().count() > head_budget {
+                break;
+            }
+            used += r.chars().count() + 1;
+            first += 1;
+        }
+        let mut last = rows.len();
+        used = 0;
+        while last > first {
+            let n = rows[last - 1].chars().count();
+            if used + n > tail_budget {
+                break;
+            }
+            used += n + 1;
+            last -= 1;
+        }
+        let first = first.max(1);
+        let mut out: Vec<String> = rows[..first]
+            .iter()
+            .map(|r| r.chars().take(head_budget).collect())
+            .collect();
+        if last > first {
+            out.push(format!(
+                "({} lines cut from the middle; pass text = a word to get only the lines that contain it)",
+                last - first
+            ));
+        }
+        out.extend(rows[last.max(first)..].iter().cloned());
+        Ok(format!("{head}:\n{}", out.join("\n")))
     }
 }

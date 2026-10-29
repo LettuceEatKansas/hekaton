@@ -641,10 +641,18 @@ fn a_long_document_is_cut_with_a_pointer_to_the_search() {
         .collect();
     kit.fake.set_document(w, &long);
     let out = kit.ctx(json!({})).read_text("", "").unwrap();
+    // the start and the end stay (a page's pop-up text comes last); the middle is cut
     assert!(
-        out.ends_with("\n(cut here; pass text = a word to get only the lines that contain it)"),
+        out.contains(
+            " lines cut from the middle; pass text = a word to get only the lines that contain it)"
+        ),
         "{out}"
     );
+    assert!(
+        out.ends_with(&format!("400: 400 {}", "x".repeat(40))),
+        "{out}"
+    );
+    assert!(out.chars().count() < 6400, "{}", out.chars().count());
     assert!(
         out.starts_with("read_text (uia, exact characters, 401 lines):\n1: 001 xxx"),
         "{}",
@@ -658,7 +666,10 @@ fn read_text_counts_extra_matches() {
     kit.fake.set_document(w, &log_text());
     let out = kit.ctx(json!({})).read_text("routine", "").unwrap();
     assert!(out.contains("179 contain 'routine':"), "{out}");
-    assert!(out.ends_with("(149 more matching lines)"), "{out}");
+    assert!(
+        out.ends_with("(149 more matching lines; pass limit= up to 400 to see more)"),
+        "{out}"
+    );
     assert_eq!(
         out.lines()
             .filter(|l| l.contains("routine log entry"))
@@ -857,4 +868,27 @@ fn read_text_query_brings_the_value_under_a_short_label_and_cuts_long_paragraphs
     assert!(out.len() < 600, "{out}");
     // a label followed by another match does not repeat it as a value
     assert!(out.contains("6: • Total\n7: • Total"), "{out}");
+}
+
+// 2026-10-29 leads rerun: read_text showed 30 matching lines whatever `limit` said.
+#[test]
+fn read_text_shows_as_many_matching_lines_as_limit_asks() {
+    let (kit, w) = tk_kit();
+    kit.fake.set_document(w, &log_text());
+    let out = kit
+        .run(json!({"action": "read_text", "text": "routine", "limit": 99, "shot": false}))
+        .unwrap()
+        .text;
+    assert!(out.contains("100: 100 routine log entry"), "{out}");
+    assert!(!out.contains("101: 101 routine"), "{out}");
+    assert!(
+        out.contains("more matching lines; pass limit= up to 400 to see more)"),
+        "{out}"
+    );
+    let all = kit
+        .run(json!({"action": "read_text", "text": "routine", "limit": 400, "shot": false}))
+        .unwrap()
+        .text;
+    assert!(all.contains("180: 180 routine log entry"), "{all}");
+    assert!(!all.contains("more matching lines"), "{all}");
 }

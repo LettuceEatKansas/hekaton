@@ -50,8 +50,21 @@ pub fn input_schema() -> Value {
 
 /// Top-level parameters only the Windows Excel channel reads.
 const EXCEL_PARAMS: [&str; 15] = [
-    "workbook", "sheet", "range", "values", "formulas", "kind", "rule", "value", "value2", "color",
-    "title", "rows", "columns", "sum_field", "anchor",
+    "workbook",
+    "sheet",
+    "range",
+    "values",
+    "formulas",
+    "kind",
+    "rule",
+    "value",
+    "value2",
+    "color",
+    "title",
+    "rows",
+    "columns",
+    "sum_field",
+    "anchor",
 ];
 
 /// The description this platform serves. Off Windows there is no Excel channel, so its line goes:
@@ -66,8 +79,14 @@ pub fn served_description() -> &'static str {
             // a Mac shortcut is Command; "ctrl+s" there presses Control and does nothing
             .replace("key(text \"ctrl+s\"", "key(text \"cmd+s\"")
             // 2026-10-29 leads run: two zooms missed because the region's space was not said
-            .replace("zoom(region)", "zoom(region=[x0,y0,x1,y1] in the last screenshot)")
-            .replace(" read_text ", " read_text(text=word,window) ")
+            .replace(
+                "zoom(region)",
+                "zoom(region=[x0,y0,x1,y1] in the last screenshot)",
+            )
+            .replace(
+                " read_text ",
+                " read_text(text=word|empty=all,window,limit) ",
+            )
     });
     if cfg!(windows) {
         TOOL_DESCRIPTION
@@ -265,7 +284,10 @@ mod tests {
             assert!(TOOL_DESCRIPTION.chars().count() - d.chars().count() > 250);
         }
         for p in EXCEL_PARAMS {
-            assert!(input_schema()["properties"].get(p).is_some(), "{p} is not a schema parameter");
+            assert!(
+                input_schema()["properties"].get(p).is_some(),
+                "{p} is not a schema parameter"
+            );
         }
     }
 }
