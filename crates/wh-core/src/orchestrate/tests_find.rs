@@ -798,3 +798,18 @@ fn locate_text_finds_a_phrase_in_the_document() {
     assert_eq!(cands.len(), 1);
     assert_eq!((cands[0].x, cands[0].y), (400, 515));
 }
+
+#[test]
+fn a_link_and_its_own_text_at_one_spot_are_one_match() {
+    let kit = plain_kit();
+    front_with(
+        &kit,
+        &[
+            ("Learn more", Rect::new(100, 100, 180, 120)),
+            ("Learn more", Rect::new(101, 101, 179, 119)),
+            ("Learn more", Rect::new(100, 300, 180, 320)),
+        ],
+    );
+    let cands = kit.ctx(json!({})).locate_text("learn more").unwrap();
+    assert_eq!(cands.len(), 2, "{cands:?}");
+}

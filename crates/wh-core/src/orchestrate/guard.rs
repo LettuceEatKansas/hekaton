@@ -97,6 +97,23 @@ pub(crate) fn normalize_only_app(entry: &str) -> String {
     }
 }
 
+/// A Mac app name or bundle id the allowlist names: listed as is, or the name is the last part of a
+/// listed bundle id ("safari", "textedit", "google chrome" for com.google.Chrome).
+fn mac_app_listed(app: &str, names: &BTreeSet<String>) -> bool {
+    if app.is_empty() || !app.chars().all(|c| c.is_alphanumeric() || " -_.".contains(c)) {
+        return false;
+    }
+    let squashed: String = app.chars().filter(|c| *c != ' ').collect();
+    let last_word = app.rsplit(' ').next().unwrap_or(app);
+    names.contains(app)
+        || names.iter().any(|n| {
+            n.contains('.')
+                && n.rsplit('.').next().is_some_and(|last| {
+                    last == app || last == squashed || last == last_word
+                })
+        })
+}
+
 /// The last `\` or `/` separated piece of a path.
 pub(crate) fn basename(path: &str) -> String {
     path.replace('/', "\\")
@@ -250,6 +267,7 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn keyboard_window_guard(&self, window: WindowRef) -> BackendResult<()> {
+        let _p = crate::prof::span("guard_full");
         self.input_guard()?;
         let check = || -> StepResult<()> {
             let root = self.root_of(window);
@@ -278,6 +296,7 @@ impl Ctx<'_> {
 
     /// Every injected group checks identity, even between full policy validations.
     pub(crate) fn typing_target_guard(&self, target: (WindowRef, u32)) -> BackendResult<()> {
+        let _p = crate::prof::span("guard_identity");
         self.input_guard()?;
         if self.be().foreground_window()? != Some(target.0)
             || self.be().window_pid(target.0)? != target.1
@@ -329,6 +348,18 @@ impl Ctx<'_> {
         self.check_allowed_at(w, 0)
     }
 
+    /// macOS: a process is a bundle id (com.apple.textedit), and owners and models write the app's
+    /// name ("TextEdit"). An allowlist entry without dots allows the bundle whose last part it is
+    /// (2026-10-28 bench: only_apps ["TextEdit"] refused TextEdit itself).
+    fn allows_bundle_name(&self, name: &str) -> bool {
+        !cfg!(windows)
+            && name.contains('.')
+            && name
+                .rsplit('.')
+                .next()
+                .is_some_and(|last| self.o.only_apps.iter().any(|a| !a.contains('.') && a == last))
+    }
+
     fn check_allowed_at(&self, w: WindowRef, depth: u32) -> StepResult<()> {
         if self.o.only_apps.is_empty() {
             return Ok(());
@@ -356,7 +387,7 @@ impl Ctx<'_> {
                 name = hosted;
             }
         }
-        if name.is_empty() || self.o.only_apps.contains(&name) {
+        if name.is_empty() || self.o.only_apps.contains(&name) || self.allows_bundle_name(&name) {
             return Ok(());
         }
         let file_manager = info.as_ref().is_some_and(is_file_manager);
@@ -365,8 +396,9 @@ impl Ctx<'_> {
             // allowing
             return Ok(());
         }
-        // "msedge.exe:InPrivate" allows that app only when its window title contains the part after
-        // ':' (so an eval can use a private Edge window but never the owner's own Edge profile).
+        // "msedge.exe:inprivate" allows that app only when its lowercased window title contains the
+        // part after ':' (so an eval can use a private Edge window but never the owner's own Edge
+        // profile). The part is not lowercased: write it in lower case, or use re: for any case.
         let parts: Vec<&str> = self
             .o
             .only_apps
@@ -444,6 +476,12 @@ impl Ctx<'_> {
             exe = format!("{low}.exe");
         }
         let names_list = names.iter().cloned().collect::<Vec<_>>().join(", ");
+        // Mac: open_app takes an app name ("Safari") or a bundle id, and the allowlist holds either.
+        // 2026-10-28 Mac stress test: open_app "Safari" was refused under only_apps
+        // ["com.apple.Safari"]. The windows it opens still pass check_allowed one by one.
+        if !cfg!(windows) && mac_app_listed(&low, &names) {
+            return Ok(());
+        }
         if exe.is_empty() {
             // A name like "EvalPad" may only focus a window that is already open and allowed. A URI or
             // Store id ("ms-paint:", "...!App") would launch anything (2026-09-21: Paint got

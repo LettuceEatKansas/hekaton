@@ -425,17 +425,24 @@ impl<'a> Ctx<'a> {
     /// Type text the way that survives every app: short text key by key, longer text pasted with the
     /// owner's clipboard put back. Returns " (pasted)" or "" (Python `_type_text`).
     pub(crate) fn type_text(&self, text: &str) -> StepResult<&'static str> {
-        let paste_over = usize::try_from(self.cfg().paste_over()).unwrap_or(0);
+        let paste_over = if crate::keys::is_arithmetic(text) {
+            usize::MAX
+        } else {
+            usize::try_from(self.cfg().paste_over()).unwrap_or(0)
+        };
         let target = self.typing_target()?;
         let last_full = Cell::new(self.clock().now());
+        let title_scoped = self.o.only_apps.iter().any(|a| a.contains(':'));
         let guard = || {
             self.typing_target_guard(target)?;
             let now = self.clock().now();
-            // Restricted requests retain full per-event checks. Unrestricted typing only
-            // amortizes policy reads inside this operation, with identity checked every time.
-            if !self.o.only_apps.is_empty()
-                || now.saturating_sub(last_full.get()) >= Duration::from_millis(100)
-            {
+            // Identity (same foreground window, same live process) is checked before every event,
+            // so the window cannot change app mid-text and a plain app allowlist cannot flip; the
+            // full policy read only needs refreshing every 100 ms. A title-scoped entry
+            // ("msedge.exe:InPrivate") can flip when a tab changes the title, so it keeps per-event
+            // checks. 2026-10-28 Mac stress test: per-event checks under a plain only_apps cost
+            // ~110 ms per batch step of short text.
+            if title_scoped || now.saturating_sub(last_full.get()) >= Duration::from_millis(100) {
                 self.keyboard_window_guard(target.0)?;
                 self.typing_target_guard(target)?;
                 last_full.set(now);

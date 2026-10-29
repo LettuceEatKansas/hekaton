@@ -36,6 +36,22 @@ pub(crate) struct Cand {
     pub label: String,
 }
 
+/// Drop a candidate with the same label at the same spot as an earlier one. 2026-10-28 Mac stress
+/// test: Safari's one "Learn more" link came back twice at [512, 458] (the link and its own text), and
+/// click_text refused it as ambiguous.
+pub(crate) fn one_per_spot(cands: Vec<Cand>) -> Vec<Cand> {
+    let mut kept: Vec<Cand> = Vec::with_capacity(cands.len());
+    for c in cands {
+        let dup = kept.iter().any(|k| {
+            (k.x - c.x).abs() <= 4 && (k.y - c.y).abs() <= 4 && k.label.eq_ignore_ascii_case(&c.label)
+        });
+        if !dup {
+            kept.push(c);
+        }
+    }
+    kept
+}
+
 /// One line of a zoom's text: `(cy, cx, height, label)`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RowItem {
@@ -407,6 +423,7 @@ impl Ctx<'_> {
                 }
             })
             .collect();
+        let cands = one_per_spot(cands);
         if !cands.is_empty() {
             return Ok(cands);
         }

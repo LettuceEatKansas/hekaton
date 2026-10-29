@@ -122,6 +122,11 @@ pub(crate) fn op(window: WindowRef, op: WindowOp) -> BackendResult<()> {
             ) else {
                 return Err(BackendError::Os("could not describe the new bounds".into()));
             };
+            // A fixed-size window (Calculator, many dialogs) refuses AXSize: move it and keep its
+            // size rather than fail the whole op (2026-10-28 Mac stress test).
+            if !w.el.is_settable("AXSize") {
+                return check(w.el.set_value("AXPosition", &pos), "move the window");
+            }
             // size first, then position, then size again: a window that was against a screen edge
             // clamps the first size to where it was
             check(w.el.set_value("AXSize", &size), "resize the window")?;

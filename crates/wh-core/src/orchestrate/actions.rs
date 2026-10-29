@@ -255,7 +255,9 @@ impl Ctx<'_> {
             "read" => {
                 // UIA first: the window's elements as `N Type "name" [state]`, no picture needed.
                 let refs = self.c.window_refs();
-                let hwnd = refs.resolve((!text.is_empty()).then_some(text.as_str()))?;
+                // 2026-10-28: a model wrote read(window="Safari") and silently got the front window.
+                let target = if text.is_empty() { text_arg(step, "window") } else { text.clone() };
+                let hwnd = refs.resolve((!target.is_empty()).then_some(target.as_str()))?;
                 self.check_allowed(self.root_of(hwnd))?;
                 // 2026-10-08 (W10): read is passive, so it no longer raises an occluded Chromium
                 // window to wake its accessibility tree unless the caller asked (wake=true);

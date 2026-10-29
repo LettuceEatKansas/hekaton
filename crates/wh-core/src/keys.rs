@@ -492,9 +492,25 @@ pub fn is_calc_like(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|c| "0123456789 .*/+-=()%".contains(c))
 }
 
+/// Short arithmetic with at least one operator, the kind a calculator must get as key presses.
+/// 2026-10-28 Mac stress test: macOS Calculator took a pasted "12345678" but ignored a pasted
+/// "12345*6789=", and the step still said "typed 11 chars (pasted)".
+pub fn is_arithmetic(text: &str) -> bool {
+    text.chars().count() <= 64 && is_calc_like(text) && text.contains(['*', '/', '+', '-', '=', '%'])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arithmetic_needs_an_operator_and_stays_short() {
+        assert!(is_arithmetic("12345*6789="));
+        assert!(is_arithmetic("(3+4)/2"));
+        assert!(!is_arithmetic("12345678"), "plain digits paste fine");
+        assert!(!is_arithmetic("12*3 apples"));
+        assert!(!is_arithmetic(&"1+".repeat(40)));
+    }
 
     const WIN: Platform = Platform::Windows;
 

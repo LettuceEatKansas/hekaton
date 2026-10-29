@@ -147,16 +147,11 @@ fn a_lone_symbol_key_is_typed_and_names_are_pressed() {
     let (note, _) = kit
         .step(json!({"action": "key", "text": "4309*82="}))
         .unwrap();
-    assert_eq!(kit.fake.typed_text(), "*");
-    assert_eq!(
-        note,
-        "typed '4309*82=' (not a key name, so typed as text) (pasted)"
-    );
+    // arithmetic goes key by key: a calculator ignores a pasted "4309*82="
+    assert_eq!(kit.fake.typed_text(), "*4309*82=");
+    assert_eq!(note, "typed '4309*82=' (not a key name, so typed as text)");
     let seen = chords.lock().unwrap().clone();
-    assert_eq!(
-        seen,
-        vec![ctrl('a'), vec![Key::Enter], vec![cmd_key(), Key::Char('v')]]
-    );
+    assert_eq!(seen, vec![ctrl('a'), vec![Key::Enter]]);
 }
 
 // Ported from test_key_text_fallback_only_for_calculator_like_text (R1).
@@ -1650,4 +1645,23 @@ fn a_trailing_newline_is_a_real_enter_press() {
         .filter(|e| matches!(e, InputEvent::KeyDown(Key::Enter)))
         .count();
     assert_eq!(enters, 1);
+}
+
+// 2026-10-28 (macOS bench): read(window="Safari") silently read the front window, and "Safari" never
+// matched because the window title is the page and the process is com.apple.Safari.
+#[test]
+fn read_finds_a_window_by_its_app_and_takes_window_as_well_as_text() {
+    let kit = Kit::new();
+    let front = kit.front("Untitled", "TextEdit.exe", 5);
+    kit.fake.set_tree(front, Element::new("r", Role::Window, "Untitled"));
+    let mail = kit.window("Compose Mail - Gmail", "com.apple.Safari", 6, Rect::from_xywh(100, 0, 100, 100));
+    kit.fake.set_tree(mail, Element::new("r", Role::Window, "Compose Mail - Gmail"));
+    let (out, _) = kit.step(json!({"action": "read", "window": "Safari"})).unwrap();
+    assert!(out.starts_with("window \"Compose Mail - Gmail\""), "{out}");
+    let (out, _) = kit.step(json!({"action": "read", "text": "textedit"})).unwrap();
+    assert!(out.starts_with("window \"Untitled\""), "{out}");
+    // two windows of one app stay ambiguous: never guess which one
+    kit.window("Inbox - Gmail", "com.apple.Safari", 6, Rect::from_xywh(300, 0, 100, 100));
+    let err = err_of(kit.step(json!({"action": "read", "text": "Safari"})));
+    assert!(err.message().contains("ambiguous window"), "{}", err.message());
 }

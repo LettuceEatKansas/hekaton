@@ -240,6 +240,15 @@ impl<'a> WindowRefs<'a> {
                 .filter(|w| w.title.to_lowercase().contains(&lower))
                 .collect();
         }
+        if matches.is_empty() {
+            // 2026-10-28 (macOS): models name the app ("Safari"), not a window title, and a Mac
+            // process is a bundle id (com.apple.Safari). Match the program: its name without .exe,
+            // or a bundle id's last part. Several windows of it stay ambiguous below.
+            matches = wins
+                .iter()
+                .filter(|w| app_is(&w.process, &lower))
+                .collect();
+        }
         // Defect 3 (2026-09-17): only genuinely usable windows count towards ambiguity. A cloaked
         // window duplicates the title but cannot be foregrounded, so it never makes a name ambiguous.
         let real: Vec<&WindowLine> = matches.iter().copied().filter(|w| !w.cloaked).collect();
@@ -269,6 +278,13 @@ impl<'a> WindowRefs<'a> {
             ))),
         }
     }
+}
+
+/// Is `process` the program `name` (lowercase)? `notepad` is notepad.exe, `safari` is com.apple.Safari.
+fn app_is(process: &str, name: &str) -> bool {
+    let p = process.to_lowercase();
+    let stem = p.strip_suffix(".exe").unwrap_or(&p);
+    stem == name || p == name || (!cfg!(windows) && stem.rsplit('.').next() == Some(name))
 }
 
 fn line_of(reference: u32, info: &WindowInfo) -> WindowLine {

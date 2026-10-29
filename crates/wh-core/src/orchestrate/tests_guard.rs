@@ -500,3 +500,36 @@ fn a_bare_app_name_may_launch_its_allowlisted_exe() {
         assert!(err.to_string().starts_with("refused: "), "{bad}: {err}");
     }
 }
+
+// 2026-10-28 (macOS bench): only_apps ["TextEdit"] refused TextEdit, whose process is the bundle id
+// com.apple.textedit. A dotless entry allows the bundle whose last part it is, nothing else.
+#[cfg(not(windows))]
+#[test]
+fn a_mac_app_name_in_the_allowlist_allows_its_bundle() {
+    let kit = Kit::new();
+    kit.front("Untitled", "com.apple.TextEdit", 5);
+    kit.step_only(&["TextEdit"], json!({"action": "key", "text": "cmd+a", "shot": false}))
+        .unwrap();
+    let err = kit
+        .step_only(&["Calculator"], json!({"action": "key", "text": "cmd+a", "shot": false}))
+        .unwrap_err();
+    assert!(err.to_string().contains("may not touch"), "{err}");
+    // a dotted entry is a bundle id and must match all of it
+    assert!(
+        kit.step_only(&["apple.textedit"], json!({"action": "key", "text": "cmd+a", "shot": false}))
+            .is_err()
+    );
+}
+
+
+#[cfg(not(windows))]
+#[test]
+fn a_mac_app_name_may_open_when_its_bundle_id_is_allowed() {
+    let kit = Kit::new();
+    let ctx = kit.ctx(json!({"only_apps": ["com.apple.Safari", "com.google.Chrome"]}));
+    ctx.check_launch_allowed("Safari").unwrap();
+    ctx.check_launch_allowed("com.apple.Safari").unwrap();
+    ctx.check_launch_allowed("Google Chrome").unwrap();
+    refused(ctx.check_launch_allowed("Terminal"));
+    refused(ctx.check_launch_allowed("safari; rm -rf ~"));
+}

@@ -30,6 +30,19 @@ const START_POLL: Duration = Duration::from_millis(25);
 /// How long each of those polls waits for a connection.
 const START_POLL_CONNECT: Duration = Duration::from_millis(100);
 
+/// Waits before re-sending a request the daemon turned away unexecuted because its queue was full.
+const BUSY_RETRIES: [Duration; 4] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+];
+
+/// The daemon's 503 for a full queue. It never ran the request, so re-sending cannot repeat an action.
+fn turned_away_unexecuted(reply: &Reply) -> bool {
+    reply.status == 503 && String::from_utf8_lossy(&reply.body).contains("request was not executed")
+}
+
 /// Why a call produced no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
@@ -235,6 +248,22 @@ impl DaemonLink {
     /// retry cannot repeat an action. A timeout means the outcome is unknown: nothing is started and
     /// nothing is retried.
     pub fn call(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<Reply, Failure> {
+        // 2026-10-28 Mac stress test: 16 parallel screenshots got four 503s straight back to the
+        // model. A full queue clears in milliseconds, so wait a little and send again.
+        let mut reply = self.call_once(method, path, body);
+        for wait in BUSY_RETRIES {
+            match &reply {
+                Ok(r) if turned_away_unexecuted(r) => {
+                    std::thread::sleep(wait);
+                    reply = self.call_once(method, path, body);
+                }
+                _ => break,
+            }
+        }
+        reply
+    }
+
+    fn call_once(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<Reply, Failure> {
         match self.send(method, path, body) {
             Ok(reply) => return Ok(reply),
             Err(ClientError::Timeout) => return Err(Failure::Timeout),
@@ -270,5 +299,28 @@ impl DaemonLink {
             Some(s) => s.describe(),
             None => format!("check WINHANDS_CONNECT_HOST ({})", self.base()),
         }
+    }
+}
+
+#[cfg(test)]
+mod busy_tests {
+    use super::*;
+
+    fn reply(status: u16, body: &str) -> Reply {
+        Reply {
+            status,
+            content_type: "application/json".into(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn only_an_unexecuted_full_queue_reply_is_retried() {
+        assert!(turned_away_unexecuted(&reply(
+            503,
+            r#"{"ok":false,"error":"request capacity exhausted; request was not executed"}"#
+        )));
+        assert!(!turned_away_unexecuted(&reply(503, r#"{"ok":false,"error":"shutting down"}"#)));
+        assert!(!turned_away_unexecuted(&reply(400, "request was not executed")));
     }
 }

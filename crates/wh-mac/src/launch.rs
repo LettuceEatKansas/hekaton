@@ -203,6 +203,14 @@ pub(crate) fn launch(spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
             })
         }
         AppTarget::Other(what) => {
+            // A bare name that resolved to nothing reached `open` as a file relative to the daemon's
+            // working folder: "The file /Users/x/NoSuchApp does not exist" (2026-10-28 stress test).
+            if !looks_like_url(what) && !what.contains('/') && !Path::new(what).exists() {
+                return Err(BackendError::Os(format!(
+                    "no app named {what:?} (looked in Applications folders, Spotlight and PATH); \
+                     list_windows shows what is running"
+                )));
+            }
             run_open(std::slice::from_ref(what))?;
             Ok(LaunchOutcome { pid: None })
         }

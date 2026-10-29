@@ -370,13 +370,22 @@ fn unrestricted_typing_reduces_full_metadata_reads_without_caching_across_calls(
     kit.ctx(json!({})).type_text("abcdef").unwrap();
     let optimized = kit.fake.window_info_reads() - before;
     let before = kit.fake.window_info_reads();
-    kit.ctx(json!({"only_apps": ["editor.exe"]}))
+    kit.ctx(json!({"only_apps": ["editor.exe:editor"]}))
         .type_text("abcdef")
         .unwrap();
     let restricted = kit.fake.window_info_reads() - before;
     assert!(
         optimized < restricted,
-        "full reads: optimized={optimized}, restricted={restricted}"
+        "a title-scoped allowlist checks every event: optimized={optimized}, restricted={restricted}"
+    );
+    let before = kit.fake.window_info_reads();
+    kit.ctx(json!({"only_apps": ["editor.exe"]}))
+        .type_text("abcdef")
+        .unwrap();
+    let plain = kit.fake.window_info_reads() - before;
+    assert!(
+        plain < restricted,
+        "a plain app allowlist rides on the per-event identity check: plain={plain}, restricted={restricted}"
     );
     let before = kit.fake.window_info_reads();
     kit.ctx(json!({})).type_text("a").unwrap();
