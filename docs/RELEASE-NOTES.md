@@ -1,10 +1,41 @@
-# Hands development changes
+# Hekaton development changes
 
-This is an uninstalled development change set. Runtime desktop behavior, macOS permissions, release packaging, and comparative speed remain unverified until their corresponding checks run. Existing installed executables, service registrations, client configurations, and permission identities are unchanged.
+This is an uninstalled development change set. macOS permissions, release packaging, and the head-to-head comparison with other computer-use tools remain unverified until their corresponding checks run. Existing installed executables, service registrations, client configurations, and permission identities are unchanged.
 
 ## One product, native packages
 
-The new `hands` executable accepts the same commands as `winhands`. For example, `hands mcp` starts the agent interface, `hands status` reads daemon status, and `hands --build-info` prints build provenance as JSON. Existing `winhands`, `winhandsd`, and `wh` entry points remain supported. Windows and macOS still require separate native executables and operating-system adapters.
+The new `hekaton` executable accepts the same commands as `winhands`. For example, `hekaton mcp` starts the agent interface, `hekaton status` reads daemon status, and `hekaton --build-info` prints build provenance as JSON. Existing `winhands`, `winhandsd`, and `wh` entry points remain supported, and so do the MCP tool name `computer`, the ports, the `%LOCALAPPDATA%\winhands` data directory, the `winhands daemon` scheduled task, the `WINHANDS_*` environment variables and the Mac bundle identifier. An earlier development build called this executable `hands`; that name is gone. Windows and macOS still require separate native executables and operating-system adapters.
+
+## Round 2: capture, settling, reading and office work (2026-10-28 evening)
+
+Measured the same way as the round below: the installed build on port 47811, this build on port 47911, one Windows 11 machine with a 2560 by 1440 primary screen, medians of repeated runs.
+
+| What | Installed | Round 1 | This build |
+| --- | --- | --- | --- |
+| screenshot, full screen | 66.4 ms | 48.1 ms | 24.9 ms |
+| screenshot, one window | 64.0 ms | 49.6 ms | 19.2 ms |
+| read, Explorer window | 347.4 ms | 321.9 ms | 93 ms |
+| find_text | not measured | 553 ms | 352 ms |
+| Notepad gauntlet, one call | refused its own check | 2.7 s | 1.9 s |
+| Excel gauntlet, one call | refused to open Excel | not run | 4.6 s, 5 of 5 |
+
+Screenshots now come from DXGI Desktop Duplication, the compositor's own frame, instead of a GDI copy of the screen. The screenshot the model receives keeps its full size; only the settle loop's private "has the screen stopped moving" checks use small 320 by 180 previews. `WINHANDS_CAPTURE_GDI=1` restores the old capture.
+
+A call that ends with input and returns no picture now finishes its trailing settle in the background. The next call waits for it before doing anything, so no step ever runs against a screen that is still moving. `WINHANDS_SETTLE_SYNC=1` restores the old behavior.
+
+UI Automation reads ask the application for on-screen elements only. Explorer's read went from 325 ms to 93 ms and now lists the visible files instead of navigation-pane items scrolled out of view. `WINHANDS_UIA_OFFSCREEN=1` restores the old query.
+
+Typed text that ends in a newline now presses a real Enter after pasting the rest. Explorer's rename box ignored a pasted newline and kept "New folder".
+
+Under an app allowlist, `open_app` now accepts a bare app name whose `.exe` is on the allowlist, so `open_app "excel"` works with `only_apps: ["excel.exe"]`. A `wait` that is followed by keys or clicks now always waits its full time, because Excel's start screen looks still before it accepts input.
+
+New gauntlet checks, each verified against real state rather than the tool's own message: Calculator (12345 times 6789 read back from the display), Explorer (new folder and F2 rename, checked on disk), window move, minimize, restore, maximize and close (checked through the window list), and Excel (a table with SUM and SUMPRODUCT built through the GUI, saved, and every cell and formula read back from the .xlsx file).
+
+## Safety profiles and the gaming lock
+
+`safety_profile` in `config.json` or `WINHANDS_SAFETY_PROFILE` picks `strict`, `normal` (the default) or `hackathon`. A profile changes limits, never protections: an explicit setting still wins, and the allowlists, the irreversible-button guard, the human-activity pause, the acknowledgement gate, protected processes, `read_only`, stop and cancel all stay on in every profile. `hackathon` shortens the settle and loading waits and raises the clipboard cap. `strict` lengthens them, keeps the human-activity pause on even if it was turned off, refuses acting calls that carry no `only_apps`, and ignores a call's own `allow_destructive` and `allow_irreversible`, because a flag the model wrote is not the owner's approval. A profile name the tool does not know is treated as `strict`. A call cannot choose its profile.
+
+`hekaton lock [reason]` turns on the gaming lock: every input is refused until `hekaton unlock`, while screenshots and reads keep working. Unlocking only works for a person at a real terminal who types `unlock`; run from a non-interactive shell, as an agent would, it refuses and changes nothing. With `game_lock: "auto"` the lock also holds whenever a program from a Steam library (`steamapps\common`) or one named in `game_processes` is running. Status and `/health` report the profile and the lock.
 
 `--version` now prints the package version followed by source commit, dirty-source status, protocol version, and target. Scripts requiring only a version should read the `version` property of `--build-info`. The authenticated HTTP `/health` response also includes this information under `build`.
 
