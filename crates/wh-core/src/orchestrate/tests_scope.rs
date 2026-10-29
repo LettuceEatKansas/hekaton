@@ -967,3 +967,16 @@ fn a_remembered_pin_is_dropped_when_the_window_changes_title() {
         .update_window(w.game, |i| i.title = "Main menu".into());
     assert!(!run(&w, pin).text.contains("window \""));
 }
+
+#[test]
+fn a_title_scoped_entry_may_name_a_mac_app_by_its_short_name() {
+    use super::guard::entry_names_app;
+    assert!(entry_names_app("com.apple.textedit", "com.apple.textedit"));
+    assert!(entry_names_app("slaythespire2.exe", "slaythespire2.exe"));
+    assert!(!entry_names_app("apple", "com.apple.textedit"));
+    assert!(!entry_names_app("edit", "com.apple.textedit"));
+    assert_eq!(
+        entry_names_app("textedit", "com.apple.textedit"),
+        !cfg!(windows)
+    );
+}

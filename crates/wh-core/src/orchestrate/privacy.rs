@@ -121,7 +121,7 @@ impl Ctx<'_> {
             .only_apps
             .iter()
             .filter_map(|a| a.split_once(':'))
-            .filter(|(proc_part, _)| *proc_part == name)
+            .filter(|(proc_part, _)| super::guard::entry_names_app(proc_part, &name))
             .any(|(_, part)| {
                 if part.starts_with("re:") {
                     regex::Regex::new(&format!("(?i){}", &part[3..]))

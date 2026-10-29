@@ -132,6 +132,19 @@ fn mac_app_listed(app: &str, names: &BTreeSet<String>) -> bool {
         })
 }
 
+/// Whether the process part of an `only_apps` entry names the app `name` (lowercased). On macOS
+/// `name` is a bundle id and owners write the app's name, so "textedit" names com.apple.textedit.
+/// 2026-10-29: "TextEdit:pin-test" matched nothing, because only an entry with no title part got
+/// that leeway (`allows_bundle_name`); the window was refused and greyed out of its own pictures.
+pub(crate) fn entry_names_app(proc_part: &str, name: &str) -> bool {
+    proc_part == name
+        || (!cfg!(windows)
+            && !proc_part.contains('.')
+            && name
+                .rsplit_once('.')
+                .is_some_and(|(_, last)| last == proc_part))
+}
+
 /// The last `\` or `/` separated piece of a path.
 pub(crate) fn basename(path: &str) -> String {
     path.replace('/', "\\")
@@ -425,7 +438,7 @@ impl Ctx<'_> {
             .only_apps
             .iter()
             .filter_map(|a| a.split_once(':'))
-            .filter(|(proc_part, _)| *proc_part == name)
+            .filter(|(proc_part, _)| entry_names_app(proc_part, &name))
             .map(|(_, rest)| rest)
             .collect();
         if !parts.is_empty() {
