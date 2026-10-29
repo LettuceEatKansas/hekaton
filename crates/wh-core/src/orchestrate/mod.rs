@@ -47,6 +47,8 @@ mod testkit;
 #[cfg(test)]
 mod tests_actions;
 #[cfg(test)]
+mod tests_approval;
+#[cfg(test)]
 mod tests_excel;
 #[cfg(test)]
 mod tests_find;
@@ -145,6 +147,8 @@ pub struct Computer {
     pub(crate) pending_settle: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// The last `game_lock: "auto"` process scan: when it ran and the game it found.
     game_scan: Mutex<Option<(std::time::Duration, Option<String>)>>,
+    /// Approvals issued (card tokens and chat codes) and not used yet (see [`crate::approval`]).
+    pub(crate) approvals: Mutex<crate::approval::Store>,
 }
 
 impl Computer {
@@ -222,6 +226,7 @@ impl Computer {
             tool_lock: Mutex::new(()),
             pending_settle: Mutex::new(None),
             game_scan: Mutex::new(None),
+            approvals: Mutex::new(crate::approval::Store::default()),
         }
     }
 
@@ -398,6 +403,8 @@ pub(crate) struct CallOpts {
     /// The window this call is scoped to, if any (`scope`). Shared by every context made from these
     /// options, so a recipe step's narrowed context sees the same one.
     pub scope: scope::ScopeCell,
+    /// How this call can ask the person about a refused step, and the approval it resumes on.
+    pub approval: crate::approval::CallApproval,
 }
 
 /// A call in flight: the long-lived tool, this call's options and who is calling.

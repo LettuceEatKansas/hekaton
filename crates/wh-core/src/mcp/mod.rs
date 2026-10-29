@@ -350,6 +350,11 @@ pub fn build_payload(
         // Per call, never sticky: the daemon reads it off this one request.
         payload.insert("allow_destructive".into(), Value::Bool(true));
     }
+    // 2026-10-29: the chat code the person approved rides top level too, so it covers a batch.
+    // (`approvable` and `approval_token` are the MCP server's own and never come from the model.)
+    if let Some(code) = opt_str(args, "approval_code")?.filter(|s| !s.trim().is_empty()) {
+        payload.insert("approval_code".into(), Value::from(code));
+    }
     payload.insert("coords".into(), Value::from(defaults.coords.clone()));
     let display = opt_int(args, "display")?.unwrap_or(0);
     if display != 0 {
@@ -473,12 +478,19 @@ fn parse_blocks(items: &Value) -> Option<Vec<Block>> {
 /// already mention is appended as `error: ...`. The call is an error when the status is not 200, the
 /// daemon said `ok: false`, an `error` is present, or a text block has a line starting with `error:`.
 pub fn reply_from_daemon(path: &str, code: u16, body: &[u8]) -> Reply {
+    reply_and_approval(path, code, body).0
+}
+
+/// [`reply_from_daemon`], plus the `approval` object of the answer when the daemon offered a card
+/// (see [`crate::approval::Offer`]). The body is parsed once.
+pub fn reply_and_approval(path: &str, code: u16, body: &[u8]) -> (Reply, Option<Value>) {
     let invalid = || {
         let text = String::from_utf8_lossy(body);
         let head: String = text.chars().take(1000).collect();
-        Reply::error(format!(
+        let reply = Reply::error(format!(
             "winhands {path} returned invalid response (HTTP {code}): {head}"
-        ))
+        ));
+        (reply, None)
     };
     let data = if body.is_empty() {
         Map::new()
@@ -532,10 +544,14 @@ pub fn reply_from_daemon(path: &str, code: u16, body: &[u8]) -> Reply {
             "ok".to_string()
         })];
     }
-    Reply {
+    let reply = Reply {
         blocks,
         is_error: failed,
-    }
+    };
+    (
+        reply,
+        data.get("approval").filter(|a| a.is_object()).cloned(),
+    )
 }
 
 /// The message when the daemon does not answer in time. The call may still be running, so nothing

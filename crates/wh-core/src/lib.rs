@@ -13,6 +13,7 @@
 
 pub mod ack;
 pub mod actions;
+pub mod approval;
 pub mod audit;
 pub mod backend;
 pub mod caller;

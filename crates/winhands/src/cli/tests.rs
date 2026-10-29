@@ -332,3 +332,79 @@ fn only_a_person_at_a_terminal_can_release_the_gaming_lock() {
     );
     assert!(wh_core::safety::locked(dir).is_none());
 }
+
+#[test]
+fn only_a_person_at_a_terminal_can_approve_a_chat_code() {
+    let code = |c: &str| vec![c.to_string()];
+    let mut sent: Vec<(String, String)> = Vec::new();
+    let mut out = Vec::new();
+    // a model running `approve` through a non-interactive shell: nothing reaches the daemon
+    let mut send = |route: &str, body: &[u8]| {
+        sent.push((
+            route.to_string(),
+            String::from_utf8_lossy(body).into_owned(),
+        ));
+        Ok((
+            200,
+            br#"{"ok":true,"result":"approved K7QM: Click Send"}"#.to_vec(),
+        ))
+    };
+    assert_eq!(
+        run_answer(&code("k7qm"), true, false, &mut send, &mut out),
+        1
+    );
+    assert!(String::from_utf8_lossy(&out).contains("real terminal"));
+    // a person at a terminal
+    assert_eq!(
+        run_answer(&code("k7qm"), true, true, &mut send, &mut out),
+        0
+    );
+    // deny is fine from anywhere
+    assert_eq!(
+        run_answer(&code("K7QM"), false, false, &mut send, &mut out),
+        0
+    );
+    assert_eq!(
+        sent,
+        [
+            ("/approve".to_string(), r#"{"code":"K7QM"}"#.to_string()),
+            ("/deny".to_string(), r#"{"code":"K7QM"}"#.to_string()),
+        ]
+    );
+}
+
+#[test]
+fn an_approval_code_must_look_like_one_and_a_refusal_is_reported() {
+    let mut never = |_: &str, _: &[u8]| -> Result<(u16, Vec<u8>), String> { panic!("not sent") };
+    let mut out = Vec::new();
+    for bad in [
+        vec![],
+        vec!["ABCD".to_string()],
+        vec!["K7Q".to_string()],
+        vec!["K7QM".into(), "X".into()],
+    ] {
+        assert_eq!(
+            run_answer(&bad, true, true, &mut never, &mut out),
+            2,
+            "{bad:?}"
+        );
+    }
+    assert_eq!(code_arg(&[" k7qm ".into()]), Ok("K7QM".into()));
+    let mut refused = |_: &str, _: &[u8]| {
+        Ok((
+            400,
+            br#"{"ok":false,"error":"no waiting approval K7QM"}"#.to_vec(),
+        ))
+    };
+    let mut out = Vec::new();
+    assert_eq!(
+        run_answer(&["K7QM".into()], true, true, &mut refused, &mut out),
+        1
+    );
+    assert!(String::from_utf8_lossy(&out).contains("no waiting approval K7QM"));
+    let mut down = |_: &str, _: &[u8]| Err("connection refused".to_string());
+    assert_eq!(
+        run_answer(&["K7QM".into()], false, true, &mut down, &mut out),
+        1
+    );
+}

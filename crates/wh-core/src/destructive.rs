@@ -67,6 +67,9 @@ pub enum Category {
     CredentialTheft,
     /// Approves an elevation prompt the person never saw.
     UacConsent,
+    /// Approves a Hekaton step on the person's behalf (2026-10-29). Never lifted by a flag or an
+    /// approval: only the person answers an approval.
+    SelfApproval,
 }
 
 impl Category {
@@ -78,6 +81,7 @@ impl Category {
             Category::TurningOffProtection => "turning off protection",
             Category::CredentialTheft => "credential theft",
             Category::UacConsent => "UAC consent",
+            Category::SelfApproval => "self-approval",
         }
     }
 
@@ -89,6 +93,7 @@ impl Category {
             Category::TurningOffProtection => "leave this machine defenceless",
             Category::CredentialTheft => "hand somebody else the owner's credentials",
             Category::UacConsent => "approve an elevation prompt the person never saw",
+            Category::SelfApproval => "approve a step that only the owner may approve",
         }
     }
 }
@@ -121,6 +126,32 @@ fn refuse(what: &str, category: Category, where_: &str) -> DestructiveAction {
             category.consequence()
         ),
     }
+}
+
+const ALL_CATEGORIES: [Category; 5] = [
+    Category::OsDestruction,
+    Category::KillingRecovery,
+    Category::TurningOffProtection,
+    Category::CredentialTheft,
+    Category::UacConsent,
+];
+
+/// A refusal this module wrote, read back: its category, what was refused and where it was seen.
+/// `None` for any other text. The text is the one place the refusal survives once it became a
+/// step error, so the approval path ([`crate::approval`]) reads it here, next to [`refuse`].
+pub fn parse_refusal(message: &str) -> Option<(Category, &str, &str)> {
+    let rest = message.strip_prefix("refused: ")?;
+    let (category, what, after) = ALL_CATEGORIES.iter().find_map(|c| {
+        let mark = format!(" ({}). winhands refuses this", c.label());
+        rest.find(&mark)
+            .map(|at| (*c, &rest[..at], &rest[at + mark.len()..]))
+    })?;
+    let seen = after.find(". Seen in ")? + ". Seen in ".len();
+    let tail = format!(
+        ". If that is genuinely what you want, send the same call again with {OPT_IN}=true"
+    );
+    let end = after[seen..].find(&tail)? + seen;
+    Some((category, what, &after[seen..end]))
 }
 
 // ---------------------------------------------------------------- paths
@@ -373,20 +404,96 @@ static VERB_AT_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
 });
 static ARGUMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""[^"]+"|\S+"#).expect("arg"));
 
+/// Typed or launched text that would answer a Hekaton approval: the `approve` command, or an HTTP
+/// call to the daemon's `/approve` route (2026-10-29). A model that typed it into a terminal would be
+/// approving its own step, so no flag and no approval lifts this.
+static SELF_APPROVAL: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r#"(?i)\b(?:winhands|hekaton)(?:\.exe)?["']?\s+approve\b"#,
+        r"(?i)\b(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm|xh|httpie)\b[^\n]*/approve\b",
+        r"(?i)(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(?::\d+)?/approve\b",
+    ]
+    .iter()
+    .map(|p| Regex::new(p).expect("self-approval rule"))
+    .collect()
+});
+
+/// `approve CODE` through any path or variable (`"$BIN" approve K7QM`): the word and a live-looking
+/// code (see [`crate::approval::is_code`]), so "approve 2026 budget" is left alone.
+static APPROVE_CODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\bapprove["']?\s+["']?([a-z0-9]{4})\b"#).expect("approve code")
+});
+
+fn answers_an_approval(text: &str) -> bool {
+    SELF_APPROVAL.iter().any(|rx| rx.is_match(text))
+        || APPROVE_CODE
+            .captures_iter(text)
+            .any(|c| crate::approval::is_code(&crate::approval::normalize_code(&c[1])))
+}
+
+/// The refusal for [`answers_an_approval`]. It does not offer [`OPT_IN`], since that does not lift it.
+fn refuse_self_approval(where_: &str) -> DestructiveAction {
+    DestructiveAction {
+        category: Category::SelfApproval,
+        message: format!(
+            "refused: a command that answers a Hekaton approval ({}). Only the owner approves a step, \
+             by answering its card or running the approve command himself; nothing lifts this. \
+             Seen in {where_}.",
+            Category::SelfApproval.label()
+        ),
+    }
+}
+
+/// A short fingerprint of a refusal's text, so [`Policy::only`] stays `Copy`.
+fn fingerprint(message: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    message.hash(&mut h);
+    h.finish()
+}
+
 /// The per-call switch. `Policy::default()` refuses everything on the list; the only way to turn it
-/// off is the call's own `allow_destructive: true`, for that call alone.
+/// off is the call's own `allow_destructive: true`, for that call alone, or the person's approval of
+/// one refusal ([`Policy::only`]), for that step alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Policy {
     allowed: bool,
+    /// The fingerprint of the one refusal the person approved; every other rule stays on.
+    granted: Option<u64>,
 }
 
 impl Policy {
     /// Every rule on. The state every call starts from.
-    pub const REFUSE: Policy = Policy { allowed: false };
+    pub const REFUSE: Policy = Policy {
+        allowed: false,
+        granted: None,
+    };
 
     /// Rules off, for the one call this value is built for.
     pub const fn allow() -> Self {
-        Policy { allowed: true }
+        Policy {
+            allowed: true,
+            granted: None,
+        }
+    }
+
+    /// Every rule on except the one that wrote `refusal` (the exact text, so the same rule seen in
+    /// another place, or another rule, is still refused). For the rerun of a step the person
+    /// approved (see [`crate::approval`]).
+    pub fn only(refusal: &str) -> Self {
+        Policy {
+            allowed: false,
+            granted: Some(fingerprint(refusal)),
+        }
+    }
+
+    /// Refuse, unless this is the one refusal the person approved.
+    fn deny(self, what: &str, category: Category, where_: &str) -> Result<(), DestructiveAction> {
+        let refusal = refuse(what, category, where_);
+        if self.granted == Some(fingerprint(&refusal.message)) {
+            return Ok(());
+        }
+        Err(refusal)
     }
 
     /// Pop `allow_destructive` off a call's arguments (so it is never forwarded) and build the
@@ -395,7 +502,10 @@ impl Policy {
         let allowed = args
             .remove(OPT_IN)
             .is_some_and(|v| crate::config::truthy(&v));
-        Policy { allowed }
+        Policy {
+            allowed,
+            granted: None,
+        }
     }
 
     /// Is the opt-in set for this call?
@@ -407,12 +517,18 @@ impl Policy {
     /// `where_` names the surface for the message ("the launch string", "the text to type", ...).
     /// Python `check_command`.
     pub fn check_command(self, text: &str, where_: &str) -> Result<(), DestructiveAction> {
-        if self.allowed || text.is_empty() {
+        if text.is_empty() {
+            return Ok(());
+        }
+        if answers_an_approval(text) {
+            return Err(refuse_self_approval(where_));
+        }
+        if self.allowed {
             return Ok(());
         }
         for r in COMMAND_RULES.iter() {
             if r.rx.is_match(text) {
-                return Err(refuse(r.what, r.category, where_));
+                self.deny(r.what, r.category, where_)?;
             }
         }
         // A destructive verb aimed at a system path, e.g. `del C:\Windows\System32\*` or
@@ -427,18 +543,18 @@ impl Policy {
                     continue;
                 }
                 if is_system_path(arg) {
-                    return Err(refuse(
+                    self.deny(
                         "a write to a Windows system path",
                         Category::OsDestruction,
                         where_,
-                    ));
+                    )?;
                 }
                 if is_credential_path(arg) {
-                    return Err(refuse(
+                    self.deny(
                         "a copy of a credential store",
                         Category::CredentialTheft,
                         where_,
-                    ));
+                    )?;
                 }
             }
         }
@@ -448,11 +564,7 @@ impl Policy {
             return Err(refuse(what, category, where_));
         }
         if is_credential_path(text) {
-            return Err(refuse(
-                "a credential store path",
-                Category::CredentialTheft,
-                where_,
-            ));
+            self.deny("a credential store path", Category::CredentialTheft, where_)?;
         }
         Ok(())
     }
@@ -464,21 +576,17 @@ impl Policy {
             return Ok(());
         }
         if is_system_path(path) {
-            return Err(refuse(
+            self.deny(
                 "a file path inside a Windows system location",
                 Category::OsDestruction,
                 where_,
-            ));
+            )?;
         }
         if let Some((what, category)) = mac::check_path(path) {
             return Err(refuse(what, category, where_));
         }
         if is_credential_path(path) {
-            return Err(refuse(
-                "a credential store path",
-                Category::CredentialTheft,
-                where_,
-            ));
+            self.deny("a credential store path", Category::CredentialTheft, where_)?;
         }
         Ok(())
     }
@@ -501,11 +609,11 @@ impl Policy {
             return Ok(());
         }
         if CONSENT_PROCESSES.contains(&process_name.to_lowercase().as_str()) {
-            return Err(refuse(
+            self.deny(
                 &format!("a click on the Windows elevation or credential prompt ({process_name})"),
                 Category::UacConsent,
                 where_,
-            ));
+            )?;
         }
         Ok(())
     }
@@ -918,5 +1026,81 @@ mod tests {
     fn a_consent_process_name_is_matched_case_insensitively() {
         assert!(OFF.check_consent_window("CONSENT.EXE", "x").is_err());
         assert!(OFF.check_consent_window("lsaiso.exe", "x").is_err());
+    }
+
+    #[test]
+    fn every_refusal_reads_back_as_its_category_what_and_where() {
+        for c in ALL_CATEGORIES {
+            let r = refuse("a click on the prompt (consent.exe)", c, "the text to type");
+            assert_eq!(
+                parse_refusal(&r.message),
+                Some((c, "a click on the prompt (consent.exe)", "the text to type"))
+            );
+        }
+        let real = OFF
+            .check_text("format c: /q", "the text to type")
+            .unwrap_err();
+        let (c, _, at) = parse_refusal(&real.message).unwrap();
+        assert_eq!((c, at), (real.category, "the text to type"));
+        assert_eq!(parse_refusal("refused: something else"), None);
+        assert_eq!(parse_refusal("paused by user hotkey"), None);
+    }
+
+    #[test]
+    fn typing_an_approval_is_refused_whatever_the_flags_say_and_cannot_be_approved() {
+        for text in [
+            "hekaton approve K7QM",
+            "winhands approve k7qm\n",
+            "~/Applications/winhands.app/Contents/MacOS/winhands approve K7QM",
+            "\"$WINHANDS_BIN\" approve K7QM",
+            "winhands.exe approve",
+            "curl -X POST -H 'Authorization: x' http://127.0.0.1:47811/approve -d '{}'",
+            "Invoke-RestMethod -Method Post -Uri http://localhost:47811/approve",
+            "wget --post-data='code=K7QM' 127.0.0.1:47811/approve",
+        ] {
+            for policy in [OFF, Policy::allow(), Policy::only("anything")] {
+                let err = policy.check_text(text, "the text to type").expect_err(text);
+                assert_eq!(err.category, Category::SelfApproval, "{text}");
+                assert!(!err.message.contains(OPT_IN), "{}", err.message);
+                // not a refusal the approval path can turn into a question
+                assert_eq!(parse_refusal(&err.message), None);
+            }
+        }
+        for text in [
+            "I approve 2026 budget",
+            "please approve this",
+            "approve the merge",
+            "https://github.com/x/y/pull/1/approve",
+            "hekaton deny K7QM",
+        ] {
+            assert!(OFF.check_text(text, "the text to type").is_ok(), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_approved_refusal_lifts_only_that_rule_in_that_place() {
+        let first = OFF
+            .check_text("format c: /q", "the text to type")
+            .unwrap_err();
+        let only = Policy::only(&first.message);
+        assert!(!only.is_allowed());
+        assert!(only.check_text("format c: /q", "the text to type").is_ok());
+        // the same rule seen somewhere else, and another rule, are still refused
+        assert!(
+            only.check_command("format c: /q", "the launch string")
+                .is_err()
+        );
+        let other = only
+            .check_text("format c: /q && diskpart", "the text to type")
+            .unwrap_err();
+        assert!(other.message.contains("diskpart"), "{}", other.message);
+        assert!(
+            only.check_text("vssadmin delete shadows /all", "the text to type")
+                .is_err()
+        );
+        assert!(
+            only.check_path(r"C:\Windows\System32\x.dll", "the save path")
+                .is_err()
+        );
     }
 }

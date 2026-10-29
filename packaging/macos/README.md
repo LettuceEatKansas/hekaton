@@ -54,6 +54,19 @@ What `crates/winhands` does to match (`src/start.rs`, `src/cli.rs`, `src/platfor
   Settings lists without a manual `+`; `install.sh` runs `doctor --prompt` once, before it opens the panes.
 - `winhands --version` (or `--help`) exits 0; CI and `verify-app.sh` run it on both CPU slices.
 
+## Approvals
+
+A step the irreversible-button guard or the destructive hard line would refuse is put to Jon instead, per
+step and never sticky (`wh_core::approval`). A client that shows MCP elicitation gets an Allow/Deny card; any
+other client gets "Needs Jon's OK" with a four-character code. Jon answers a code in his own terminal:
+
+    ~/Applications/winhands.app/Contents/MacOS/winhands approve K7QM   # or: deny K7QM
+
+`approve` refuses unless stdin is a terminal, so an agent's non-interactive shell cannot approve its own step,
+and the hard line refuses typing the command or an HTTP call to `/approve`. There is no chat hook for codes:
+a hook runs without a terminal, so it would pass for an agent too. Deny, no answer or an expired code (10 min;
+a card token lasts 5) leaves the refusal as it was.
+
 ## CI
 
 `.github/workflows/mac-app.yml`: shellcheck, ad hoc build, `verify-app.sh`, upload `winhands.app.zip`, then

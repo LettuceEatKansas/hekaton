@@ -360,6 +360,14 @@ impl Daemon {
                     &json!({"ok": true, "result": if pause { "paused" } else { "resumed" }}),
                 )
             }
+            // The person's answer to a chat approval code, sent by `hekaton approve|deny CODE`
+            "approve" | "deny" => {
+                let code = args.get("code").and_then(Value::as_str).unwrap_or("");
+                match self.computer.answer_approval_code(code, path == "approve") {
+                    Ok(line) => Response::json(200, &json!({"ok": true, "result": line})),
+                    Err(why) => Response::json(400, &json!({"ok": false, "error": why})),
+                }
+            }
             "batch" => self.handle_batch(&args, &who),
             _ => {
                 let tool = self.execute_tool(path, &args, &who);

@@ -17,6 +17,7 @@ use super::error::{StepError, StepResult};
 use super::guard::normalize_only_app;
 use super::{CallOpts, Computer, Ctx};
 use crate::actions::{POINTER_ACTIONS, is_action, is_excel_read, is_passive};
+use crate::approval::{self, CallApproval, Entry, Kind, Mode, Need, Offer, Pending};
 use crate::audit::log_action;
 use crate::backend::Rect;
 use crate::caller::Caller;
@@ -59,6 +60,9 @@ pub struct ManyResult {
     pub elapsed_ms: u64,
     /// A step returned cells of the owner's spreadsheet, so the audit log must not keep the text.
     pub private_output: bool,
+    /// A step stopped for a refusal the person could approve, and the call can ask (see
+    /// [`crate::approval`]).
+    pub approval: Option<Pending>,
 }
 
 /// What the daemon sends back for a `computer` call (Python `_execute_tool`'s dict).
@@ -82,6 +86,9 @@ pub struct ToolOutcome {
     pub snapshot_id: Option<String>,
     /// Additional counters only when requested with profile=true.
     pub metrics: Option<Value>,
+    /// The failed step could go ahead if the person agrees on a card: a single-use token and the
+    /// card sentence. Only for a call marked `approvable: "card"`.
+    pub offer: Option<Offer>,
 }
 
 impl ToolOutcome {
@@ -112,6 +119,9 @@ impl ToolOutcome {
         }
         if let Some(metrics) = &self.metrics {
             out.insert("metrics".into(), metrics.clone());
+        }
+        if let Some(offer) = &self.offer {
+            out.insert("approval".into(), offer.to_json());
         }
         Value::Object(out)
     }
@@ -183,6 +193,7 @@ impl CallOpts {
             snap_call: args.get("snap").is_some_and(truthy),
             policy,
             scope: super::scope::ScopeCell::default(),
+            approval: crate::approval::CallApproval::default(),
         })
     }
 
@@ -207,6 +218,7 @@ impl CallOpts {
             snap_call: false,
             policy,
             scope: super::scope::ScopeCell::default(),
+            approval: crate::approval::CallApproval::default(),
         }
     }
 }
@@ -482,15 +494,34 @@ impl Ctx<'_> {
                 }
             }
         }
+        // 2026-10-29: resuming on an approval, the steps before the waiting one already ran in the
+        // first call. Their lines and pictures come from the approval; the loop starts at the step
+        // that was waiting, and only if it is the very step the approval was issued for.
+        let resume = self.o.approval.resume.as_deref();
+        let resume_at = match resume {
+            None => 1,
+            Some(r) => {
+                let same = steps
+                    .get(r.index.wrapping_sub(1))
+                    .and_then(Value::as_object)
+                    .is_some_and(|s| approval::step_id(s) == r.step_id);
+                if !same {
+                    return Err(StepError::permission(APPROVAL_MISMATCH));
+                }
+                r.index
+            }
+        };
         // All request-wide budgets and expanded action policies are checked before focus can change.
         self.apply_call_scope(args)?;
-        let mut notes: Vec<String> = Vec::new();
-        let mut shots: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = resume.map(|r| r.notes.clone()).unwrap_or_default();
+        let mut shots: Vec<String> = resume.map(|r| r.shots.clone()).unwrap_or_default();
         let mut failure = None;
-        let mut completed_steps = 0;
+        let mut completed_steps = (resume_at - 1) as u32;
         let mut last_executed = None;
         let input_before = self.be().input_events();
-        let mut acted_in_call = false; // an acting step has already finished in this call
+        let mut acted_in_call = resume_at > 1; // an acting step has already finished in this call
+        let asking = self.o.approval.mode != Mode::Off;
+        let mut pending: Option<Pending> = None; // a step stopped for a yes from the person
         let mut pre_input_failure = false; // a step failed before anything was sent
         // profile=true: wall time per step, its settle included (2026-10-28).
         let mut step_mark: Option<(String, std::time::Instant)> = None;
@@ -502,6 +533,9 @@ impl Ctx<'_> {
                     i + 1
                 )));
             };
+            if i + 1 < resume_at {
+                continue; // ran in the call that asked
+            }
             if let Some((action, t)) = step_mark.take() {
                 crate::prof::step_done(action, t.elapsed());
             }
@@ -551,6 +585,8 @@ impl Ctx<'_> {
             self.o
                 .input_follows
                 .store(input_follows, std::sync::atomic::Ordering::Relaxed);
+            let notes_before_step = notes.len();
+            let events_before_step = if asking { self.be().input_events() } else { 0 };
             if !item.header.is_empty() {
                 notes.push(item.header.clone()); // a recipe step: say which recipe is running
             }
@@ -564,7 +600,7 @@ impl Ctx<'_> {
             .and_then(|skip| {
                 if skip.is_empty() {
                     // a recipe's own only_apps narrows the call's for its steps
-                    self.run_scoped(step, item.scope.as_ref(), own_args)
+                    self.run_approved(step, item.scope.as_ref(), own_args, i + 1)
                         .map(Some)
                 } else {
                     notes.push(format!(
@@ -594,6 +630,19 @@ impl Ctx<'_> {
                         step_action_text(step),
                         exc
                     ));
+                    // a refusal the person could approve, raised before this step sent anything
+                    if asking
+                        && self.be().input_events() == events_before_step
+                        && let Some(need) = self.need_for(&exc)
+                    {
+                        pending = Some(Pending {
+                            need: self.complete_need(step, need),
+                            step_id: approval::step_id(step),
+                            index: i + 1,
+                            notes: notes[..notes_before_step].to_vec(),
+                            shots: shots.clone(),
+                        });
+                    }
                     // 2026-10-08 (W3): a validation error, unknown action, bad or missing target or a
                     // refusal (ValueError incl. TargetError, PermissionError incl. destructive and
                     // protected) raised before any input went out leaves the screen as the caller last
@@ -796,9 +845,104 @@ impl Ctx<'_> {
                 .saturating_sub(start)
                 .as_millis()
                 .min(u64::MAX as u128) as u64,
+            approval: pending,
         })
     }
+
+    /// Run one step. On the step an approval was issued for, a refusal for exactly the approved
+    /// target runs the step once more with only that refusal off; a different target is refused
+    /// (and can be asked about again).
+    fn run_approved(
+        &self,
+        step: &Args,
+        scope: Option<&BTreeSet<String>>,
+        call_args: bool,
+        index: usize,
+    ) -> StepResult<super::actions::StepOut> {
+        let Some(granted) = self
+            .o
+            .approval
+            .resume
+            .as_deref()
+            .filter(|r| r.index == index)
+        else {
+            return self.run_scoped(step, scope, call_args);
+        };
+        let before = self.be().input_events();
+        let exc = match self.run_scoped(step, scope, call_args) {
+            Err(exc) => exc,
+            done => return done,
+        };
+        let Some(need) = self.need_for(&exc) else {
+            return Err(exc);
+        };
+        if need.key() != granted.key || self.be().input_events() != before {
+            self.o.approval.note(need); // the loop asks about this one afresh
+            return Err(exc);
+        }
+        let mut o = CallOpts {
+            approval: CallApproval {
+                resume: None,
+                granted: None,
+                ..self.o.approval.clone()
+            },
+            ..self.o.clone()
+        };
+        match need.kind {
+            // only the rule that wrote this refusal, seen in this place, and only for this step
+            Kind::Destructive(_) => o.policy = Policy::only(&need.reason),
+            Kind::IrreversibleButton => o.approval.granted = Some(need.key()),
+        }
+        let again = Ctx {
+            c: self.c,
+            o,
+            who: self.who,
+        };
+        again.run_scoped(step, scope, call_args)
+    }
+
+    /// The need behind a refusal: one the guard noted, or a destructive-action refusal read back
+    /// from its text. `None` for anything the person cannot approve.
+    fn need_for(&self, exc: &StepError) -> Option<Need> {
+        if let Some(need) = self.o.approval.take_noted(exc.message()) {
+            return Some(need);
+        }
+        if !matches!(exc, StepError::Permission(_)) {
+            return None;
+        }
+        let (category, _, _) = crate::destructive::parse_refusal(exc.message())?;
+        Some(Need::new(
+            Kind::Destructive(category),
+            exc.message(),
+            format!("could {}", category.consequence()),
+            exc.message(),
+        ))
+    }
+
+    /// The need as the card will say it: what the step does and where, filled in from the step and
+    /// the front window when the guard did not know.
+    fn complete_need(&self, step: &Args, need: Need) -> Need {
+        let mut n = need;
+        if n.action.is_empty() {
+            n.action = approval::describe_step(step, false);
+            n.action_log = approval::describe_step(step, true);
+        }
+        if n.place.is_empty()
+            && let Some(app) = self
+                .fg_root()
+                .and_then(|w| self.info(w))
+                .map(|i| i.app)
+                .filter(|a| !a.is_empty())
+        {
+            n.place = format!("in {app}");
+        }
+        n
+    }
 }
+
+/// Said when an approval is used on a call or a step it was not issued for.
+const APPROVAL_MISMATCH: &str = "that approval was issued for a different step than the one now \
+    waiting, so nothing ran. Ask again by repeating the original call";
 
 impl Computer {
     /// A context for work outside a `computer` call: the configured defaults, no allowlist.
@@ -825,7 +969,20 @@ impl Computer {
         policy: Policy,
         who: &Caller,
     ) -> Result<ManyResult, StepError> {
-        let o = CallOpts::from_args(self, args, policy)?;
+        self.run_many_with(args, policy, who, CallApproval::default())
+    }
+
+    /// [`Computer::run_many`] for a call that may stop to ask the person (`approval.mode`) or
+    /// resumes on an approval the person gave (`approval.resume`).
+    pub(crate) fn run_many_with(
+        &self,
+        args: &Args,
+        policy: Policy,
+        who: &Caller,
+        approval: CallApproval,
+    ) -> Result<ManyResult, StepError> {
+        let mut o = CallOpts::from_args(self, args, policy)?;
+        o.approval = approval;
         let ctx = Ctx { c: self, o, who };
         let joined = std::time::Instant::now();
         if self.join_background_settle() {
@@ -861,6 +1018,7 @@ impl Computer {
                 session_id: None,
                 snapshot_id: None,
                 metrics: None,
+                offer: None,
             };
         }
         let _one_at_a_time = match self.lock_tool(only_observes(args)) {
@@ -894,11 +1052,19 @@ impl Computer {
                 *text = clean;
             }
         }
-        if let Some(text) = &mut outcome.result
-            && crate::redact::looks_like_injection(text)
+        // Errors quote the screen too (an alert's text, a field's value), so both get the check.
+        let mut seen = false;
+        for text in [&mut outcome.result, &mut outcome.error]
+            .into_iter()
+            .flatten()
         {
-            text.push('\n');
-            text.push_str(crate::redact::INJECTION_NOTE);
+            if crate::redact::looks_like_injection(text) {
+                text.push('\n');
+                text.push_str(crate::redact::INJECTION_NOTE);
+                seen = true;
+            }
+        }
+        if seen {
             *self.tainted_until.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(std::time::Instant::now() + Self::TAINT);
         }
@@ -919,7 +1085,115 @@ impl Computer {
             session_id: None,
             snapshot_id: None,
             metrics: None,
+            offer: None,
         }
+    }
+
+    /// The approval a call brings back (a card token or a chat code), checked and spent. `Ok(None)`
+    /// when it brings none; an error when it is unknown, used, expired, not approved yet, denied, or
+    /// issued for a different call.
+    fn take_approval(
+        &self,
+        token: Option<String>,
+        code: Option<String>,
+        call: &Args,
+    ) -> Result<Option<Entry>, StepError> {
+        if token.is_none() && code.is_none() {
+            return Ok(None);
+        }
+        let now = self.clock.now();
+        let entry = {
+            let mut store = self.approvals.lock().unwrap_or_else(|e| e.into_inner());
+            match (token, code) {
+                (Some(t), _) => store
+                    .take(&t, now)
+                    .map_err(|why| StepError::permission(why.message()))?,
+                (None, Some(c)) => store
+                    .take_code(&c, now)
+                    .map_err(|why| StepError::permission(why.message()))?,
+                (None, None) => return Ok(None),
+            }
+        };
+        if entry.call_id != approval::call_id(call) {
+            return Err(StepError::permission(APPROVAL_MISMATCH));
+        }
+        Ok(Some(entry))
+    }
+
+    fn entry_for(&self, p: &Pending, call: &Args) -> Entry {
+        Entry {
+            call_id: approval::call_id(call),
+            step_id: p.step_id.clone(),
+            index: p.index,
+            key: p.need.key(),
+            expires: Duration::ZERO,
+            notes: p.notes.clone(),
+            shots: p.shots.clone(),
+        }
+    }
+
+    /// Turn a step that stopped for approval into a card token and sentence. `None` when no
+    /// randomness is available; the caller then just gets the refusal.
+    fn offer_for(&self, p: &Pending, call: &Args) -> Option<Offer> {
+        let token = self
+            .approvals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mint(self.entry_for(p, call), self.clock.now())?;
+        Some(Offer {
+            token,
+            summary: p.need.summary(),
+            log_summary: p.need.log_summary(),
+            kind: p.need.kind.tag(),
+            step: p.index,
+        })
+    }
+
+    /// Turn a step that stopped for approval into a chat code and the text that tells the model
+    /// what to show the person. `None` when no randomness is available; the caller then just gets
+    /// the refusal.
+    fn code_for(&self, p: &Pending, call: &Args) -> Option<String> {
+        let code = self
+            .approvals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mint_code(
+                self.entry_for(p, call),
+                &p.need.log_summary(),
+                self.clock.now(),
+            )?;
+        Some(approval::code_refusal(&p.need.summary(), &code))
+    }
+
+    /// The person's answer to a chat code (`hekaton approve|deny CODE`, through the daemon's
+    /// `/approve` and `/deny` routes). The text is the one line the command prints; the error says
+    /// why the code did not take.
+    pub fn answer_approval_code(&self, code: &str, allow: bool) -> Result<String, String> {
+        let code = approval::normalize_code(code);
+        let summary = self
+            .approvals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .answer_code(&code, allow, self.clock.now())
+            .map_err(|e| match e {
+                approval::CodeError::Unknown => {
+                    format!("no waiting approval {code} (already answered, used, or never issued)")
+                }
+                approval::CodeError::Expired => format!("approval {code} expired"),
+                other => other.message(),
+            })?;
+        let word = if allow { "allow" } else { "deny" };
+        log_action(
+            self.cfg.paths(),
+            "approval",
+            &json!({"answer": word, "via": "chat code", "code": code, "card": summary}),
+            if allow { "allowed" } else { "denied" },
+            allow,
+        );
+        Ok(format!(
+            "{} {code}: {summary}",
+            if allow { "approved" } else { "denied" }
+        ))
     }
 
     fn execute_locked(&self, raw: &Value, who: &Caller) -> ToolOutcome {
@@ -939,6 +1213,23 @@ impl Computer {
             // open: the owner chose to let the model judge destructive text and keys itself
             policy = Policy::allow();
         }
+        // 2026-10-29: approvals (see crate::approval). `approvable` says the MCP server can ask the
+        // person; `approval_token` (a card's Allow) or `approval_code` (a chat code the person
+        // approved) is the yes it brings back. None of them is forwarded or logged as an argument.
+        let mode = Mode::from_arg(map.remove("approvable").as_ref());
+        if mode != Mode::Off && !profile.unrestricted() {
+            // a call that can ask the person: the model's own allow_destructive is a request to
+            // ask, not a yes (the irreversible guard does the same with allow_irreversible)
+            policy = Policy::REFUSE;
+        }
+        let token = map
+            .remove("approval_token")
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|t| !t.is_empty());
+        let code = map
+            .remove("approval_code")
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|t| !t.trim().is_empty());
         let args = Value::Object(map.clone());
         let release = map.get("action").and_then(Value::as_str) == Some("left_mouse_up")
             && !map.contains_key("actions");
@@ -987,9 +1278,44 @@ impl Computer {
             self.observation_epoch
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        match self.run_many(&map, policy, who) {
+        let resume = match self.take_approval(token, code, &map) {
+            Ok(resume) => resume.map(std::sync::Arc::new),
+            Err(e) => return self.fail(&args, &e),
+        };
+        let resumed = resume.is_some();
+        let approval = CallApproval {
+            mode,
+            resume,
+            ..CallApproval::default()
+        };
+        match self.run_many_with(&map, policy, who, approval) {
             Err(e) => self.fail(&args, &e),
-            Ok(done) => {
+            Ok(mut done) => {
+                // a step stopped for a yes: a card for a client that can show one, else a chat code
+                let mut offer = None;
+                let mut code_card = None;
+                if let Some(p) = done.approval.take() {
+                    match mode {
+                        Mode::Card => offer = self.offer_for(&p, &map),
+                        Mode::Chat => {
+                            if let Some(text) = self.code_for(&p, &map) {
+                                done.text = match done.text.rfind(&p.need.reason) {
+                                    Some(at) if !p.need.reason.is_empty() => format!(
+                                        "{}{text}{}",
+                                        &done.text[..at],
+                                        &done.text[at + p.need.reason.len()..]
+                                    ),
+                                    _ => format!("{}\n{text}", done.text),
+                                };
+                                if let Some(f) = done.failure.as_mut() {
+                                    f.error = f.error.with_message(text);
+                                }
+                                code_card = Some(p.need.log_summary());
+                            }
+                        }
+                        Mode::Off => {}
+                    }
+                }
                 let steps = match map.get("actions") {
                     Some(Value::Array(a)) if !a.is_empty() => a.len(),
                     _ => 1,
@@ -1009,6 +1335,16 @@ impl Computer {
                 // never the cells; a call that read cells logs a fixed line, not their text.
                 if let Some(extra) = super::excel::audit_fields(&args) {
                     entry.extend(extra);
+                }
+                // every card offered, every chat code issued and every approval honoured
+                if let Some(o) = &offer {
+                    entry.insert("approval_card".into(), Value::from(o.log_summary.clone()));
+                }
+                if let Some(summary) = &code_card {
+                    entry.insert("approval_code_card".into(), Value::from(summary.clone()));
+                }
+                if resumed {
+                    entry.insert("approval_used".into(), Value::Bool(true));
                 }
                 let logged = match (&done.failure, done.private_output) {
                     (Some(f), true) => f.error.message().to_string(),
@@ -1083,6 +1419,7 @@ impl Computer {
                     session_id: session.as_ref().map(|s| s.id.clone()),
                     snapshot_id,
                     metrics,
+                    offer,
                 }
             }
         }

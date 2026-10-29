@@ -18,6 +18,7 @@ use super::args::{Args, is_truthy};
 use super::ctx::{is_desktop_or_taskbar, is_file_manager, is_run_dialog};
 use super::error::{StepError, StepResult};
 use super::files::expand_vars;
+use crate::approval::{Kind, Need};
 use crate::backend::{BackendError, BackendResult, Point, WindowInfo, WindowRef};
 use crate::caller::agent_host_refusal;
 use crate::textutil::py_repr;
@@ -683,8 +684,12 @@ impl Ctx<'_> {
     /// keystroke; a person double-checks the label before hitting Buy, so the tool does too. Python
     /// `_check_irreversible`.
     pub(crate) fn check_irreversible(&self, p: Point, args: &Args) -> StepResult<()> {
-        // strict: the model's own flag is not the owner's approval
-        let opted_in = is_truthy(args, "allow_irreversible") && self.c.honours_opt_in();
+        // strict: the model's own flag is not the owner's approval. 2026-10-29: nor is it on a call
+        // that can ask the person (there the flag turns into the question), nor while a recent reply
+        // carried injected instructions (Computer::tainted).
+        let opted_in = is_truthy(args, "allow_irreversible")
+            && self.c.honours_opt_in()
+            && self.o.approval.mode == crate::approval::Mode::Off;
         if self.o.only_apps.is_empty() || opted_in || self.cfg().profile().unrestricted() {
             return Ok(());
         }
@@ -695,12 +700,22 @@ impl Ctx<'_> {
         let low = name.to_lowercase();
         for (word, rx) in IRREVERSIBLE_MATCHERS.iter() {
             if rx.is_match(&low) {
-                return Err(StepError::target(format!(
+                let reason = format!(
                     "refused: {} looks like an irreversible action ({}); {}",
                     py_repr(&name),
                     py_repr(word),
                     self.override_hint("click it anyway")
-                )));
+                );
+                // 2026-10-29: the MCP server can ask the person instead (see crate::approval).
+                // Only a call that can ask, or the rerun of a step the person approved, gets here.
+                if self.o.approval.active() {
+                    let need = self.irreversible_need(p, args, &name, &reason);
+                    if self.o.approval.granted.as_deref() == Some(need.key().as_str()) {
+                        return Ok(()); // the person said yes to exactly this button
+                    }
+                    self.o.approval.note(need);
+                }
+                return Err(StepError::target(reason));
             }
         }
         Ok(())
@@ -730,7 +745,9 @@ impl Ctx<'_> {
                  the agent never types or copies secrets, ask the owner to enter it",
             ));
         }
-        let opted_in = is_truthy(args, "allow_irreversible") && self.c.honours_opt_in();
+        let opted_in = is_truthy(args, "allow_irreversible")
+            && self.c.honours_opt_in()
+            && self.o.approval.mode == crate::approval::Mode::Off;
         if crate::redact::looks_like_exfil_url(text)
             && !opted_in
             && !self.cfg().profile().unrestricted()
@@ -742,6 +759,29 @@ impl Ctx<'_> {
             )));
         }
         Ok(())
+    }
+
+    /// The approval card for a refused irreversible-looking button: what, why and in which app.
+    /// Looks up the app only here, on the refusal path.
+    fn irreversible_need(&self, p: Point, args: &Args, name: &str, reason: &str) -> Need {
+        let verb = match args.get("action").and_then(serde_json::Value::as_str) {
+            Some("double_click") => "Double-click",
+            _ => "Click",
+        };
+        let mut need = Need::new(Kind::IrreversibleButton, name, "looks hard to undo", reason);
+        need.action = format!("{verb} \"{}\"", crate::approval::shown(name));
+        if let Some(app) = self
+            .be()
+            .window_at_point(p)
+            .ok()
+            .flatten()
+            .and_then(|w| self.info(self.root_of(w)))
+            .map(|i| i.app)
+            .filter(|a| !a.is_empty())
+        {
+            need.place = format!("in {app}");
+        }
+        need
     }
 
     /// Under only_apps, wait_for_file and list_files may only look under %TEMP%: a task scoped to a few

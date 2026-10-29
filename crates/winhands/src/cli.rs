@@ -20,7 +20,7 @@ use crate::start::Starter;
 use crate::wh::{self, Exit};
 
 /// The short usage line.
-pub const USAGE: &str = "usage: hekaton (or winhands) <acknowledge|status|start|stop|pause|resume|lock|unlock|doctor|daemon|mcp|wh|--version|--build-info>";
+pub const USAGE: &str = "usage: hekaton (or winhands) <acknowledge|status|start|stop|pause|resume|lock|unlock|approve CODE|deny CODE|doctor|daemon|mcp|wh|--version|--build-info>";
 
 fn exe_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winhands"))
@@ -133,6 +133,8 @@ pub fn main(args: Vec<String>) -> i32 {
         "acknowledge" => cmd_acknowledge(),
         "lock" => cmd_lock(&rest),
         "unlock" => cmd_unlock(),
+        "approve" => cmd_answer(&rest, true),
+        "deny" => cmd_answer(&rest, false),
         "doctor" => cmd_doctor(rest),
         other => {
             println!("winhands: unknown command {:?}", other);
@@ -493,6 +495,97 @@ fn cmd_lock(rest: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("winhands: could not write the gaming lock: {e}");
+            1
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------ approvals
+
+/// `approve CODE` / `deny CODE`: the person's answer to a chat code (see `wh_core::approval`). Never
+/// starts a daemon: a code only exists in a running one.
+fn cmd_answer(rest: &[String], allow: bool) -> i32 {
+    let cfg = Config::from_system();
+    let link = DaemonLink::new(
+        "127.0.0.1",
+        cfg.port(),
+        cfg.paths().clone(),
+        None,
+        Duration::from_secs(5),
+    );
+    let mut send = |route: &str, body: &[u8]| {
+        link.send("POST", route, Some(body))
+            .map(|r| (r.status, r.body))
+            .map_err(|e| e.to_string())
+    };
+    run_answer(
+        rest,
+        allow,
+        io::stdin().is_terminal(),
+        &mut send,
+        &mut io::stdout(),
+    )
+}
+
+/// The code argument, normalised, or why it is not one.
+pub fn code_arg(rest: &[String]) -> Result<String, String> {
+    let [code] = rest else {
+        return Err("give exactly one code, e.g. hekaton approve K7QM".into());
+    };
+    let code = wh_core::approval::normalize_code(code);
+    if wh_core::approval::is_code(&code) {
+        Ok(code)
+    } else {
+        Err(format!(
+            "{code:?} is not an approval code (4 characters, at least one digit)"
+        ))
+    }
+}
+
+/// Answer a chat code. `approve` only for a person at a real terminal: a model running it through a
+/// non-interactive shell would be approving its own step. `deny` is allowed anywhere.
+pub fn run_answer(
+    rest: &[String],
+    allow: bool,
+    interactive: bool,
+    send: &mut dyn FnMut(&str, &[u8]) -> Result<(u16, Vec<u8>), String>,
+    out: &mut dyn Write,
+) -> i32 {
+    let code = match code_arg(rest) {
+        Ok(c) => c,
+        Err(why) => {
+            let _ = writeln!(out, "winhands: {why}");
+            return 2;
+        }
+    };
+    if allow && !interactive {
+        let _ = writeln!(
+            out,
+            "winhands: approve needs the owner at a real terminal; nothing was approved"
+        );
+        return 1;
+    }
+    let route = if allow { "/approve" } else { "/deny" };
+    let body = serde_json::json!({ "code": code }).to_string();
+    match send(route, body.as_bytes()) {
+        Ok((status, body)) => {
+            let data: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let text = |k: &str| data.get(k).and_then(Value::as_str).map(str::to_string);
+            if status == 200 {
+                let done = text("result").unwrap_or_else(|| "done".into());
+                let _ = writeln!(out, "winhands: {done}");
+                0
+            } else {
+                let why = text("error").unwrap_or_else(|| "refused".into());
+                let _ = writeln!(out, "winhands: {why}");
+                1
+            }
+        }
+        Err(e) => {
+            let _ = writeln!(
+                out,
+                "winhands: the daemon did not answer ({e}). Is it running? winhands status"
+            );
             1
         }
     }

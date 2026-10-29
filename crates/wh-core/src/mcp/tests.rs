@@ -69,8 +69,8 @@ fn the_definition_stays_within_its_budget() {
             .unwrap()
             .chars()
             .count();
-    assert!((2732..=4175).contains(&size), "{size}");
-    assert!(size < 4176, "smaller than the original baseline");
+    // 2026-10-29: +34 over the 4175 baseline for approval_code (chat-code approvals)
+    assert!((2732..=4308).contains(&size), "{size}");
 }
 
 #[test]
@@ -221,6 +221,7 @@ fn unset_extras_are_not_sent_so_old_payloads_are_unchanged() {
         "display",
         "scope",
         "allow_destructive",
+        "approval_code",
     ] {
         assert!(!p.contains_key(key), "{key}");
     }
@@ -232,7 +233,8 @@ fn set_extras_are_sent() {
     let p = payload(json!({
         "action": "read", "text": "Notepad", "filter": "save", "limit": 5, "button": "right",
         "double": true, "nth": 2, "old": "a", "new": "", "expect": {"text": "x"}, "wake": true,
-        "display": 2, "shot": false, "shot_long": 800, "allow_destructive": true
+        "display": 2, "shot": false, "shot_long": 800, "allow_destructive": true,
+        "approval_code": "ab3d", "approvable": "card", "approval_token": "t"
     }));
     assert_eq!(p["filter"], "save");
     assert_eq!(p["limit"], 5);
@@ -251,6 +253,9 @@ fn set_extras_are_sent() {
     assert_eq!(p["shot"], false);
     assert_eq!(p["shot_long"], 800);
     assert_eq!(p["allow_destructive"], true);
+    assert_eq!(p["approval_code"], "ab3d");
+    // only the server sets these; a model's copy is dropped
+    assert!(!p.contains_key("approvable") && !p.contains_key("approval_token"));
 }
 
 #[test]

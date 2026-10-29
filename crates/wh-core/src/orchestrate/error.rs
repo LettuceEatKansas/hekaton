@@ -65,6 +65,19 @@ impl StepError {
         }
     }
 
+    /// The same kind of error with another message (an approval's chat code replaces a refusal's
+    /// text, and the class must not change with it).
+    pub fn with_message(&self, msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        match self {
+            StepError::Value(_) => StepError::Value(msg),
+            StepError::Target(_) => StepError::Target(msg),
+            StepError::Permission(_) => StepError::Permission(msg),
+            StepError::Runtime(_) => StepError::Runtime(msg),
+            StepError::Expectation(_) => StepError::Expectation(msg),
+        }
+    }
+
     /// Is this a `ValueError` (incl. `TargetError`) or a `PermissionError`? Those raised before any
     /// input went out leave the screen as the caller last saw it.
     pub fn is_validation(&self) -> bool {
