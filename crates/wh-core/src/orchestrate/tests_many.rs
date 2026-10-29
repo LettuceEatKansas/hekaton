@@ -1178,9 +1178,62 @@ fn the_open_profile_drops_the_hard_line_and_the_rate_limit() {
         &json!({"action": "type", "text": "rm -rf C:\\Windows\\System32"}),
         &kit.who,
     );
-    assert!(typed.result.as_ref().unwrap().starts_with("typed "), "{typed:?}");
+    assert!(
+        typed.result.as_ref().unwrap().starts_with("typed "),
+        "{typed:?}"
+    );
     for _ in 0..40 {
-        let r = kit.computer.execute(&json!({"action": "list_windows"}), &kit.who);
+        let r = kit
+            .computer
+            .execute(&json!({"action": "list_windows"}), &kit.who);
         assert!(r.ok, "{r:?}");
     }
+}
+
+// 2026-10-29 (form job): a click opened Brave's "This page says" alert, and the batch's next click
+// landed behind it. The batch now stops and names the dialog, unless the next click aims inside it.
+fn alert_on_first_click(kit: &Kit) {
+    kit.front("Vendor form", "brave.exe", 7);
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(false));
+    kit.fake.set_click_hook(move |fake, _| {
+        let mut o = opened.lock().unwrap();
+        if !*o {
+            *o = true;
+            let info = crate::backend::WindowInfo::basic(
+                "This page says",
+                "brave.exe",
+                7,
+                Rect::from_xywh(100, 60, 120, 50),
+            );
+            let w = fake.add_window(info);
+            fake.set_window_text(w, "This page says Choose a country and a category OK");
+            fake.set_foreground(Some(w));
+        }
+    });
+}
+
+#[test]
+fn a_batch_stops_when_a_click_opens_a_dialog_in_front() {
+    let kit = Kit::with_env(no_shot_env());
+    alert_on_first_click(&kit);
+    let out = kit
+        .run(json!({"actions": [click(50, 50), click(60, 60), {"action": "type", "text": "x"}]}))
+        .unwrap();
+    assert!(
+        out.text.contains(
+            "step 2 not run: a dialog opened in front after step 1: \"This page says\" saying \"This page says Choose a country and a category OK\""
+        ),
+        "{}",
+        out.text
+    );
+    assert_eq!(out.failure.as_ref().map(|f| f.step), Some(2));
+    assert_eq!(kit.fake.typed_text(), "");
+
+    // a next click on the dialog's own words goes ahead
+    let kit = Kit::with_env(no_shot_env());
+    alert_on_first_click(&kit);
+    let out = kit
+        .run(json!({"actions": [click(50, 50), {"action": "click_text", "text": "OK"}]}))
+        .unwrap();
+    assert!(!out.text.contains("dialog opened"), "{}", out.text);
 }

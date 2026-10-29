@@ -730,7 +730,10 @@ pub(crate) fn window_text(window: WindowRef, displays: &[Rect]) -> BackendResult
     }
     visit_all(&win, 8, Duration::from_millis(600), &mut |p, _| {
         if p.role == "AXStaticText"
-            && let Some(t) = p.value_text().or_else(|| p.title.clone())
+            && let Some(t) = p
+                .value_text()
+                .or_else(|| p.title.clone())
+                .or_else(|| p.description.clone())
         {
             let t = crate::textops::strip_bidi(&t)
                 .split_whitespace()

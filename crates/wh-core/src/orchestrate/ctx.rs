@@ -22,6 +22,9 @@ use crate::scale::{parse_display_spec, sort_displays};
 /// How long the monitor list is trusted (`_MON_CACHE`, 2 s).
 const MONITOR_TTL: Duration = Duration::from_secs(2);
 
+/// Text up to this long goes into a browser as keys, not a paste (about 0.7 s of keys at most).
+const BROWSER_KEYS_UP_TO: usize = 60;
+
 /// Windows' file manager, by raw class or by neutral kind.
 pub(crate) fn is_file_manager(info: &WindowInfo) -> bool {
     info.class == "CabinetWClass" || info.kind == WindowKind::FileManager
@@ -422,6 +425,11 @@ impl<'a> Ctx<'a> {
 
     // ------------------------------------------------------------------ typing
 
+    /// The focused element is a dropdown or combo box, which takes no paste.
+    fn focus_is_dropdown(&self) -> bool {
+        matches!(self.be().focused_element(), Ok(Some(e)) if e.role == crate::backend::Role::ComboBox)
+    }
+
     /// Type text the way that survives every app: short text key by key, longer text pasted with the
     /// owner's clipboard put back. Returns " (pasted)" or "" (Python `_type_text`).
     pub(crate) fn type_text(&self, text: &str) -> StepResult<&'static str> {
@@ -431,6 +439,19 @@ impl<'a> Ctx<'a> {
             usize::try_from(self.cfg().paste_over()).unwrap_or(0)
         };
         let target = self.typing_target()?;
+        // 2026-10-29 (form job): a paste into a browser dropdown (<select>) did nothing and said
+        // nothing. Keys pick the option by its first letters, so a dropdown always gets keys.
+        // Brave also dropped about 1 paste in 4 into plain text boxes (caught and retyped by
+        // `type_text_guarded`, at ~0.7 s each), so a browser takes keys up to a line of text.
+        let paste_over = if text.chars().count() <= paste_over {
+            paste_over
+        } else if self.focus_is_dropdown() {
+            usize::MAX
+        } else if self.is_browser(target.0) {
+            paste_over.max(BROWSER_KEYS_UP_TO)
+        } else {
+            paste_over
+        };
         let last_full = Cell::new(self.clock().now());
         let title_scoped = self.o.only_apps.iter().any(|a| a.contains(':'));
         let guard = || {

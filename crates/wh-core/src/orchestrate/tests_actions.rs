@@ -264,6 +264,40 @@ fn typing_needs_text_and_reports_how_it_went_in() {
     assert_eq!(note, "typed 17 chars (pasted)");
 }
 
+// 2026-10-29 (form job): a paste into a browser dropdown did nothing; keys pick the option.
+#[test]
+fn long_text_into_a_dropdown_is_typed_as_keys_not_pasted() {
+    let kit = Kit::new();
+    kit.front("Form", "editor.exe", 30);
+    kit.fake
+        .set_focused(Some(Element::new("country", Role::ComboBox, "Country")));
+    let (note, _) = kit
+        .step(json!({"action": "type", "text": "United Kingdom"}))
+        .unwrap();
+    assert_eq!(note, "typed 14 chars");
+    assert_eq!(kit.fake.typed_text(), "United Kingdom");
+    kit.fake
+        .set_focused(Some(Element::new("notes", Role::Edit, "Notes")));
+    let (note, _) = kit
+        .step(json!({"action": "type", "text": "United Kingdom"}))
+        .unwrap();
+    assert_eq!(note, "typed 14 chars (pasted)");
+}
+
+// 2026-10-29: Brave dropped about 1 paste in 4, so a browser takes up to a line of text as keys.
+#[test]
+fn a_browser_takes_a_line_of_text_as_keys_and_pastes_longer_text() {
+    let kit = Kit::new();
+    kit.front("Vendor form", "brave.exe", 30);
+    let (note, _) = kit
+        .step(json!({"action": "type", "text": "t@example.com"}))
+        .unwrap();
+    assert_eq!(note, "typed 13 chars");
+    let long = "a".repeat(61);
+    let (note, _) = kit.step(json!({"action": "type", "text": long})).unwrap();
+    assert_eq!(note, "typed 61 chars (pasted)");
+}
+
 // Ported from test_keys_without_a_window_refuse_the_agents_own_app (caller-relative since 2026-09-24)
 // and test_20260924_caller_guard: keystrokes into the process driving winhands are refused.
 #[test]

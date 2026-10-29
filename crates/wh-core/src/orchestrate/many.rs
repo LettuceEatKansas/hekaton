@@ -217,6 +217,13 @@ fn on_fail_skips(step: &Args) -> bool {
     }
 }
 
+/// A click of any kind, the steps that land behind a dialog nobody saw open.
+fn is_click(action: Option<&Value>) -> bool {
+    action.and_then(Value::as_str).is_some_and(|a| {
+        POINTER_ACTIONS.contains(&a) && !matches!(a, "mouse_move" | "scroll" | "left_mouse_up")
+    })
+}
+
 fn step_action_text(step: &Args) -> String {
     match step.get("action") {
         None => "None".to_string(),
@@ -330,6 +337,62 @@ impl Ctx<'_> {
     }
 
     /// The batch loop. Python `run_many` after the per-call options are set.
+    /// A new, much smaller window of the same app that took the front since `before` was noted: a
+    /// page alert or an app's own dialog. Named with its text, unless the next step clicks words
+    /// the dialog itself shows (its OK button, say).
+    fn dialog_in_front(&self, before: crate::backend::WindowRef, next: &Args) -> Option<String> {
+        let now = self.be().foreground_window().ok().flatten()?;
+        if now == before {
+            return None;
+        }
+        let windows = self.be().list_windows(false).ok()?;
+        let old = windows.iter().find(|w| w.window == before)?;
+        let new = windows.iter().find(|w| w.window == now)?;
+        let area = |r: &Rect| i64::from(r.width().max(0)) * i64::from(r.height().max(0));
+        if new.pid != old.pid || area(&new.rect) * 5 > area(&old.rect) * 2 {
+            return None;
+        }
+        let title = new.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut text = self.be().window_text(now).unwrap_or_default();
+        text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text == title || text.is_empty() {
+            // Brave's alert names its message only as an element name, which window_text misses.
+            let limits = crate::backend::TreeLimits {
+                max_items: 20,
+                ..crate::backend::TreeLimits::named(Duration::from_millis(300))
+            };
+            if let Ok(tree) = self.be().element_tree(now, &limits) {
+                let words: Vec<String> = tree
+                    .root
+                    .children
+                    .iter()
+                    .map(|e| e.name.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|n| !n.is_empty() && *n != title)
+                    .collect();
+                if !words.is_empty() {
+                    text = words.join(" | ");
+                }
+            }
+        }
+        let aimed_inside = next
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|t| t.trim().to_lowercase())
+            .is_some_and(|t| !t.is_empty() && text.to_lowercase().contains(&t));
+        if aimed_inside {
+            return None;
+        }
+        let mut said: String = text.chars().take(200).collect();
+        if text.chars().count() > 200 {
+            said.push_str("...");
+        }
+        Some(if said.is_empty() || said == new.title {
+            format!("\"{}\"", new.title)
+        } else {
+            format!("\"{}\" saying \"{said}\"", new.title)
+        })
+    }
+
     fn run_steps(&self, args: &Args) -> StepResult<ManyResult> {
         let start = self.clock().now();
         let compact = args.get("compact").is_some_and(truthy);
@@ -429,6 +492,7 @@ impl Ctx<'_> {
         let mut pre_input_failure = false; // a step failed before anything was sent
         // profile=true: wall time per step, its settle included (2026-10-28).
         let mut step_mark: Option<(String, std::time::Instant)> = None;
+        let mut dialog_watch: Option<crate::backend::WindowRef> = None;
         for (i, item) in items.iter().enumerate() {
             let Value::Object(step) = &item.step else {
                 return Err(StepError::value(format!(
@@ -440,6 +504,30 @@ impl Ctx<'_> {
                 crate::prof::step_done(action, t.elapsed());
             }
             step_mark = Some((step_action_text(step), std::time::Instant::now()));
+            if let Some(before) = dialog_watch.take()
+                && let Some(dialog) = self.dialog_in_front(before, step)
+            {
+                let msg = format!(
+                    "a dialog opened in front after step {i}: {dialog}; later clicks would land behind it, so step {} ({}) and the rest were not run",
+                    i + 1,
+                    step_action_text(step)
+                );
+                notes.push(format!("step {} not run: {msg}", i + 1));
+                failure = Some(StepFailure {
+                    step: (i + 1) as u32,
+                    error: StepError::runtime(msg),
+                });
+                break;
+            }
+            // 2026-10-29 (form job): a click that opens a page alert, then a click in the same batch,
+            // landed behind Brave's "This page says" box without a word. Note the front window first.
+            if is_click(step.get("action"))
+                && items
+                    .get(i + 1)
+                    .is_some_and(|n| is_click(n.step.get("action")))
+            {
+                dialog_watch = self.be().foreground_window().ok().flatten();
+            }
             let input_follows = items.get(i + 1).is_some_and(|next| {
                 next.step
                     .get("action")
@@ -555,7 +643,10 @@ impl Ctx<'_> {
                         .and_then(Value::as_str)
                         .is_some_and(|a| POINTER_ACTIONS.contains(&a));
                     let next_action = steps[i + 1].get("action").and_then(Value::as_str);
-                    let next_text = steps[i + 1].get("text").and_then(Value::as_str).unwrap_or("");
+                    let next_text = steps[i + 1]
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
                     // Typing into the same box, then more typing or a plain key: the keys queue in
                     // order and nothing on screen has to move first, so no settle. Enter, Tab and
                     // shortcuts may submit or open something; those still wait. 2026-10-29: the
@@ -563,7 +654,10 @@ impl Ctx<'_> {
                     let plain_key = |k: &str| {
                         let k = normalize_key_text(k);
                         !k.contains('+')
-                            && !matches!(k.as_str(), "enter" | "return" | "tab" | "escape" | "esc" | "f2")
+                            && !matches!(
+                                k.as_str(),
+                                "enter" | "return" | "tab" | "escape" | "esc" | "f2"
+                            )
                     };
                     let keys_into_same_box = raw_action == Some("type")
                         && !text.ends_with(['\n', '\r', '\t'])

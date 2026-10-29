@@ -22,6 +22,9 @@ const KEY_GAP: Duration = Duration::from_millis(12);
 const BEFORE_PASTE: Duration = Duration::from_millis(30);
 /// Let the app read the clipboard before the old contents go back.
 const AFTER_PASTE: Duration = Duration::from_millis(120);
+/// How long a paste may take to show in the box before the text is typed as keys instead.
+const PASTE_PATIENCE: Duration = Duration::from_millis(600);
+const PASTE_POLL: Duration = Duration::from_millis(40);
 
 /// How `type_text` behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +57,8 @@ pub enum TypeOutcome {
     Pasted,
     /// Written straight into the focused text control.
     Inserted,
+    /// Pasted, but the box never showed it, so typed key by key instead.
+    PasteMissed,
 }
 
 impl TypeOutcome {
@@ -63,6 +68,7 @@ impl TypeOutcome {
             TypeOutcome::Typed => "",
             TypeOutcome::Pasted => " (pasted)",
             TypeOutcome::Inserted => " (direct)",
+            TypeOutcome::PasteMissed => " (the paste did not land, so typed as keys)",
         }
     }
 }
@@ -155,6 +161,18 @@ fn type_body(
         }
         return Ok(TypeOutcome::Typed);
     }
+    // 2026-10-29: about 1 paste in 6 into a Brave text box never landed, with no error (the same
+    // silent drop machands had). When the focused box shows its value, keep the clipboard until
+    // the value changes, and type the text as keys if it never does.
+    let box_value = || {
+        backend
+            .focused_element()
+            .ok()
+            .flatten()
+            .filter(|e| !e.password)
+            .and_then(|e| e.value)
+    };
+    let before = box_value();
     let saved = backend.clipboard_text().ok();
     guard()?;
     backend.set_clipboard_text(text)?;
@@ -164,14 +182,34 @@ fn type_body(
         Platform::Mac => Key::Meta,
     };
     let pasted = backend.key_chord(&[paste_modifier, Key::Char('v')], 1, guard);
+    let mut landed = true;
     if pasted.is_ok() {
         thread::sleep(AFTER_PASTE);
+        // a box that already holds the text (a paste over the same words) shows no change
+        if before.as_deref().is_some_and(|v| !v.contains(text)) {
+            landed = box_value() != before;
+            let mut waited = AFTER_PASTE;
+            while !landed && waited < PASTE_PATIENCE {
+                thread::sleep(PASTE_POLL);
+                waited += PASTE_POLL;
+                landed = box_value() != before;
+            }
+        }
     }
     if let Some(saved) = saved {
         // Putting the old text back is best effort, as in Python.
         let _ = backend.set_clipboard_text(&saved);
     }
     pasted?;
+    if !landed {
+        let keys = TypeOptions {
+            paste_over: usize::MAX,
+            direct: false,
+            ..*options
+        };
+        type_body(backend, text, &keys, guard)?;
+        return Ok(TypeOutcome::PasteMissed);
+    }
     Ok(TypeOutcome::Pasted)
 }
 
@@ -187,10 +225,19 @@ mod tests {
     fn a_native_text_box_takes_the_text_directly_with_no_keys_or_clipboard() {
         let backend = FakeBackend::new();
         backend.set_direct_insert(true);
-        let out = type_text(&backend, OFF, "a long sentence, no paste", &TypeOptions::new(6)).unwrap();
+        let out = type_text(
+            &backend,
+            OFF,
+            "a long sentence, no paste",
+            &TypeOptions::new(6),
+        )
+        .unwrap();
         assert_eq!(out, TypeOutcome::Inserted);
         assert_eq!(out.note_suffix(), " (direct)");
-        assert_eq!(backend.inserted(), vec!["a long sentence, no paste".to_string()]);
+        assert_eq!(
+            backend.inserted(),
+            vec!["a long sentence, no paste".to_string()]
+        );
         assert!(backend.events().is_empty(), "no key events, no paste chord");
     }
 
@@ -214,7 +261,10 @@ mod tests {
         backend.set_direct_insert(true);
         let mut opts = TypeOptions::new(6);
         opts.direct = false;
-        assert_eq!(type_text(&backend, OFF, "abc", &opts).unwrap(), TypeOutcome::Typed);
+        assert_eq!(
+            type_text(&backend, OFF, "abc", &opts).unwrap(),
+            TypeOutcome::Typed
+        );
         assert!(backend.inserted().is_empty());
     }
 
@@ -372,5 +422,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(backend.typed_text(), "vssadmin delete shadows");
+    }
+
+    fn text_box(value: &str) -> crate::backend::Element {
+        let mut e = crate::backend::Element::new("box", crate::backend::Role::Edit, "Email");
+        e.value = Some(value.to_string());
+        e
+    }
+
+    #[test]
+    fn a_paste_the_box_never_shows_is_typed_as_keys_instead() {
+        let backend = FakeBackend::new();
+        backend.set_focused(Some(text_box("")));
+        let out = type_text(&backend, OFF, "t@example.com", &TypeOptions::new(6)).unwrap();
+        assert_eq!(out, TypeOutcome::PasteMissed);
+        assert_eq!(backend.typed_text(), "t@example.com");
+    }
+
+    #[test]
+    fn a_paste_that_shows_in_the_box_is_not_typed_again() {
+        let backend = FakeBackend::new();
+        backend.set_focused(Some(text_box("")));
+        backend.set_chord_hook(|fake, keys| {
+            if keys.contains(&Key::Char('v')) {
+                fake.set_focused(Some(text_box("t@example.com")));
+            }
+        });
+        let out = type_text(&backend, OFF, "t@example.com", &TypeOptions::new(6)).unwrap();
+        assert_eq!(out, TypeOutcome::Pasted);
+        assert_eq!(backend.typed_text(), "");
     }
 }
