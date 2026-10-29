@@ -63,6 +63,11 @@ pub fn served_description() -> &'static str {
             .filter(|l| !l.starts_with("Excel (owner opt-in)"))
             .collect::<Vec<_>>()
             .join("\n")
+            // a Mac shortcut is Command; "ctrl+s" there presses Control and does nothing
+            .replace("key(text \"ctrl+s\"", "key(text \"cmd+s\"")
+            // 2026-10-29 leads run: two zooms missed because the region's space was not said
+            .replace("zoom(region)", "zoom(region=[x0,y0,x1,y1] in the last screenshot)")
+            .replace(" read_text ", " read_text(text=word,window) ")
     });
     if cfg!(windows) {
         TOOL_DESCRIPTION
@@ -257,7 +262,7 @@ mod tests {
             assert!(d.contains("recipe_list") && d.contains("press("));
             assert!(!props.contains_key("workbook") && !props.contains_key("sum_field"));
             assert!(props.contains_key("only_apps") && props.contains_key("name"));
-            assert!(TOOL_DESCRIPTION.chars().count() - d.chars().count() > 300);
+            assert!(TOOL_DESCRIPTION.chars().count() - d.chars().count() > 250);
         }
         for p in EXCEL_PARAMS {
             assert!(input_schema()["properties"].get(p).is_some(), "{p} is not a schema parameter");
