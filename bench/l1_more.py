@@ -91,7 +91,9 @@ def explorer(c: Client) -> dict:
         {"action": "wait", "duration": 0.3},
         {"action": "key", "text": "ctrl+a"},
         {"action": "type", "text": "after.txt\n"},
-        {"action": "wait_for_file", "text": str(base / "after.txt"), "timeout": 3},
+        # wait_for_file is refused here by design: under an allowlist it only watches Temp and
+        # files this call saved. The disk check below is the proof.
+        {"action": "wait", "duration": 0.4},
     ]
     ok2, text2, _ = c({"actions": steps, "only_apps": ["explorer.exe"]})
     made = (base / "made-by-hekaton").is_dir()
