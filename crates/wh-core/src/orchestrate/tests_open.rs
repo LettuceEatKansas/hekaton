@@ -930,7 +930,10 @@ fn open_a_folder_path_goes_to_finder_on_macos() {
     let path = folder.to_string_lossy().to_string();
     let _ = do_open(&kit, &path, 0.2, true, true);
     let launched = kit.fake.launches();
-    assert_eq!(launched[0].target, AppTarget::Executable("/usr/bin/open".into()));
+    assert_eq!(
+        launched[0].target,
+        AppTarget::Executable("/usr/bin/open".into())
+    );
     assert_eq!(launched[0].args, format!("\"{path}\""));
 }
 

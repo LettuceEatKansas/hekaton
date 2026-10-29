@@ -244,10 +244,7 @@ impl<'a> WindowRefs<'a> {
             // 2026-10-28 (macOS): models name the app ("Safari"), not a window title, and a Mac
             // process is a bundle id (com.apple.Safari). Match the program: its name without .exe,
             // or a bundle id's last part. Several windows of it stay ambiguous below.
-            matches = wins
-                .iter()
-                .filter(|w| app_is(&w.process, &lower))
-                .collect();
+            matches = wins.iter().filter(|w| app_is(&w.process, &lower)).collect();
         }
         // Defect 3 (2026-09-17): only genuinely usable windows count towards ambiguity. A cloaked
         // window duplicates the title but cannot be foregrounded, so it never makes a name ambiguous.

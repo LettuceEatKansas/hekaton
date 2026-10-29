@@ -892,3 +892,35 @@ fn read_text_shows_as_many_matching_lines_as_limit_asks() {
     assert!(all.contains("180: 180 routine log entry"), "{all}");
     assert!(!all.contains("more matching lines"), "{all}");
 }
+
+// 2026-10-29 leads run 3: three read_text steps on one YouTube page copied it three times. Steps in
+// one batch share the copy until a step that is not read_text runs.
+#[test]
+fn read_text_steps_in_one_batch_copy_the_page_once() {
+    let (kit, _w) = tk_kit();
+    let body = log_text();
+    let copies = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = copies.clone();
+    kit.fake.set_chord_hook(move |fake, keys| {
+        if keys == [cmd_key(), Key::Char('c')] {
+            seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            fake.set_clipboard(ClipboardContent::Text(body.clone()));
+        }
+    });
+    let out = kit.computer.execute(
+        &json!({"actions": [
+            {"action": "read_text", "text": "access code"},
+            {"action": "read_text", "text": "routine"},
+            {"action": "key", "text": "End"},
+            {"action": "read_text", "text": "access code"}
+        ], "shot": false}),
+        &kit.who,
+    );
+    assert!(out.ok, "{:?}", out.error);
+    assert!(
+        out.result.as_ref().unwrap().contains("097 access code"),
+        "{:?}",
+        out.result
+    );
+    assert_eq!(copies.load(std::sync::atomic::Ordering::Relaxed), 2);
+}

@@ -171,6 +171,7 @@ impl CallOpts {
             saved_paths: Default::default(),
             private_output: Default::default(),
             input_follows: Default::default(),
+            copied_text: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
             read_only: args.get("read_only").is_some_and(truthy) || truthy(&c.cfg.get("read_only")),
             helper_images: args.get("max_images").is_none_or(|v| v.as_u64() != Some(0))
@@ -195,6 +196,7 @@ impl CallOpts {
             saved_paths: Default::default(),
             private_output: Default::default(),
             input_follows: Default::default(),
+            copied_text: Default::default(),
             deadline: None,
             read_only: false,
             helper_images: true,
@@ -528,12 +530,24 @@ impl Ctx<'_> {
             {
                 dialog_watch = self.be().foreground_window().ok().flatten();
             }
+            // read_text acts (select-all + copy) but only to look: a wait before it may end once
+            // the page settles. 2026-10-29 leads run 3: machands' wait 4 s returned after 1.7 s on
+            // each YouTube channel page, Hekaton's wait 3 s ran out every time (8 channels, ~10 s).
             let input_follows = items.get(i + 1).is_some_and(|next| {
                 next.step
                     .get("action")
                     .and_then(Value::as_str)
-                    .is_some_and(|a| is_action(a) && !is_passive(a) && !a.starts_with("wait"))
+                    .is_some_and(|a| {
+                        is_action(a) && !is_passive(a) && !a.starts_with("wait") && a != "read_text"
+                    })
             });
+            if step.get("action").and_then(Value::as_str) != Some("read_text") {
+                self.o
+                    .copied_text
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+            }
             self.o
                 .input_follows
                 .store(input_follows, std::sync::atomic::Ordering::Relaxed);

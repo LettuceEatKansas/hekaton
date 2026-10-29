@@ -1202,6 +1202,7 @@ impl Ctx<'_> {
     /// 2026-10-29: `window` names the window to read. A leads run read_text(window="Untitled") with
     /// the browser in front and was refused for the browser's app; now the named window is read
     /// (its UIA text needs no focus; the copy fallback brings it to the front first).
+    #[cfg(test)]
     pub(crate) fn read_text(&self, query: &str, window: &str) -> StepResult<String> {
         self.read_text_lines(query, window, 30)
     }
@@ -1245,7 +1246,25 @@ impl Ctx<'_> {
                 self.be().bring_to_foreground(root)?;
                 self.sleep(0.15);
             }
-            text = self.doc_text_by_copy()?;
+            let cached = self
+                .o
+                .copied_text
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .filter(|(w, _)| *w == root)
+                .map(|(_, t)| t.clone());
+            text = match cached {
+                Some(t) => t,
+                None => {
+                    let t = self.doc_text_by_copy()?;
+                    if !t.trim().is_empty() {
+                        *self.o.copied_text.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some((root, t.clone()));
+                    }
+                    t
+                }
+            };
             // 2026-10-29 Mac demo: a web page's select-all is not dropped by the arrow key (only an
             // editable box's is), so the page stayed highlighted while the note said "cleared".
             source = if self.is_browser(root) {

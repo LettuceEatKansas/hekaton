@@ -343,6 +343,10 @@ pub(crate) struct CallOpts {
     /// full time instead of returning once the screen looks calm (2026-10-28: a `wait 1.5` cut to
     /// 0.6 s pasted a table into Excel's start screen while the blank workbook was still loading).
     pub input_follows: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// A page read_text copied with select-all in this batch, kept until a step that is not
+    /// read_text runs. 2026-10-29 leads run: three read_text steps (for "@", "instagram",
+    /// "subscribers") copied the same YouTube page three times, about 1 s per channel.
+    pub copied_text: std::sync::Arc<std::sync::Mutex<Option<(crate::backend::WindowRef, String)>>>,
     /// Absolute deadline on the injected clock.
     pub deadline: Option<Duration>,
     /// Refuse any operation that can mutate desktop or clipboard state.

@@ -1166,6 +1166,18 @@ fn a_wait_before_blind_input_runs_its_full_time() {
         "a wait before a look may still end early: {:?}",
         out.result
     );
+
+    // read_text sends select-all + copy, but only to look
+    let out = kit.computer.execute(
+        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "read_text"}], "shot": false}),
+        &kit.who,
+    );
+    assert!(out.ok, "{:?}", out.error);
+    let said = out.result.unwrap_or_default();
+    assert!(
+        !said.starts_with("waited 2.0s"),
+        "a wait before read_text may end early: {said}"
+    );
 }
 
 // 2026-10-29: the owner's open profile lets the model judge destructive text itself and drops the
