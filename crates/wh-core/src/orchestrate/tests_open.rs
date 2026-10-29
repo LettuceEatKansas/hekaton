@@ -99,7 +99,8 @@ fn a_new_tab_that_never_appears_is_reported_not_hidden() {
     );
 }
 
-// Ported from test_open_reuse_false_skips_focus_shortcut.
+// Ported from test_open_reuse_false_skips_focus_shortcut. The notepad -> notepad.exe alias is Windows only.
+#[cfg(windows)]
 #[test]
 fn open_with_reuse_false_launches_even_when_it_is_running() {
     let kit = Kit::new();
@@ -130,6 +131,17 @@ fn open_reuses_a_store_app_by_its_title() {
     let out = do_open(&kit, "calc", 8.0, true, true).unwrap();
     assert!(out.contains("already running"), "{out}");
     assert_eq!(kit.fake.foreground_window().unwrap(), Some(calc));
+    assert!(kit.fake.launches().is_empty());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn open_reuses_a_running_mac_app_by_its_bundle_id() {
+    let kit = Kit::new();
+    let safari = app_window(&kit, "DuckDuckGo search", "com.apple.Safari", 30);
+    let out = do_open(&kit, "Safari", 8.0, true, true).unwrap();
+    assert!(out.contains("already running"), "{out}");
+    assert_eq!(kit.fake.foreground_window().unwrap(), Some(safari));
     assert!(kit.fake.launches().is_empty());
 }
 
@@ -169,6 +181,7 @@ fn a_protected_window_is_not_focused_by_open() {
 }
 
 // Ported from test_open_a_folder_path_goes_to_explorer_not_createprocess.
+#[cfg(windows)]
 #[test]
 fn open_a_folder_path_goes_to_explorer_not_to_createprocess() {
     let kit = Kit::new();
@@ -904,5 +917,35 @@ fn an_opener_before_file_dialog_skips_the_settle_once_focus_moved() {
         kit.fake.capture_count(),
         0,
         "no settle between the chord and the dialog"
+    );
+}
+
+// 2026-10-28: on macOS a folder opens through /usr/bin/open (Finder), never explorer.exe.
+#[cfg(not(windows))]
+#[test]
+fn open_a_folder_path_goes_to_finder_on_macos() {
+    let kit = Kit::new();
+    let folder = kit.tmp.path().join("Reports");
+    std::fs::create_dir(&folder).unwrap();
+    let path = folder.to_string_lossy().to_string();
+    let _ = do_open(&kit, &path, 0.2, true, true);
+    let launched = kit.fake.launches();
+    assert_eq!(launched[0].target, AppTarget::Executable("/usr/bin/open".into()));
+    assert_eq!(launched[0].args, format!("\"{path}\""));
+}
+
+// 2026-10-28: an app name with a space is one app, not a program plus an argument.
+#[test]
+fn split_launch_keeps_a_spaced_app_name_whole() {
+    let knows = |n: &str| matches!(n, "Microsoft Excel" | "Microsoft" | "notepad");
+    let no = |_: &str| false;
+    assert_eq!(
+        super::open::split_launch("Microsoft Excel", &knows, &no, &no),
+        ("Microsoft Excel".to_string(), String::new())
+    );
+    // a real program plus argument still splits
+    assert_eq!(
+        super::open::split_launch("notepad notes.txt", &knows, &no, &no),
+        ("notepad".to_string(), "notes.txt".to_string())
     );
 }

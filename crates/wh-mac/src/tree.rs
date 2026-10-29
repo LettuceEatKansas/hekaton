@@ -703,19 +703,43 @@ pub(crate) fn find_file_dialog_field(
     displays: &[Rect],
 ) -> BackendResult<Option<ElementId>> {
     perm::require_accessibility("find the file name field")?;
-    let win = ax_window(window, displays)?;
-    let found = find_first(&win, 10, Duration::from_millis(600), &|p| {
-        matches!(p.role.as_str(), "AXTextField" | "AXComboBox")
-            && (p.identifier.as_deref() == Some("saveAsNameTextField")
-                || p.description
-                    .as_deref()
-                    .or(p.title.as_deref())
-                    .is_some_and(|d| {
-                        let d = d.to_lowercase();
-                        d.contains("save as") || d.contains("go to the folder")
-                    }))
+    let found = ax_window(window, displays).ok().and_then(|win| {
+        find_first(&win, 10, Duration::from_millis(600), &|p| {
+            matches!(p.role.as_str(), "AXTextField" | "AXComboBox")
+                && (p.identifier.as_deref() == Some("saveAsNameTextField")
+                    || p.description
+                        .as_deref()
+                        .or(p.title.as_deref())
+                        .is_some_and(|d| {
+                            let d = d.to_lowercase();
+                            d.contains("save as") || d.contains("go to the folder")
+                        }))
+        })
+        .map(|(ax, _)| ax)
     });
-    Ok(found.map(|(ax, _)| reg.insert(ax, Some(window))))
+    if let Some(ax) = found {
+        return Ok(Some(reg.insert(ax, Some(window))));
+    }
+    // A Save or Open panel runs in a separate process, so its window tree is not readable from the
+    // app. Its name box has the keyboard focus when the panel opens, and the focused control is
+    // reachable (found 2026-10-09 with TextEdit). Only for a window titled like the panel.
+    let title = winlist::info(window, displays)
+        .map(|i| i.title.to_lowercase())
+        .unwrap_or_default();
+    if matches!(
+        title.as_str(),
+        "save" | "open" | "export" | "import" | "save as"
+    ) {
+        if let Some(ax) = focused_ax()
+            && matches!(
+                ax.string("AXRole").as_deref(),
+                Some("AXTextField" | "AXComboBox")
+            )
+        {
+            return Ok(Some(reg.insert(ax, Some(window))));
+        }
+    }
+    Ok(None)
 }
 
 /// The items of the open context menu.

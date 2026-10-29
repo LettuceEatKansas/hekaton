@@ -70,7 +70,12 @@ static EXE_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
 static DRIVE_START: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z]:[\\/]").expect("DRIVE_START"));
 
+/// Windows only: on macOS "calculator" must stay a name the backend resolves to Calculator.app
+/// (2026-10-28: open_app "Calculator" tried to start calc.exe on the Mac).
 fn known_exe(name: &str) -> Option<&'static str> {
+    if !cfg!(windows) {
+        return None;
+    }
     KNOWN.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
 }
 
@@ -143,6 +148,11 @@ pub(crate) fn split_launch(
 ) -> (String, String) {
     let lower = app.to_lowercase();
     if known_exe(&lower).is_some() || exists(app) {
+        return (app.to_string(), String::new());
+    }
+    // 2026-10-28: on macOS "Microsoft Excel" split into "Microsoft" + "Excel", and "Microsoft"
+    // prefix-matched Word.app. A whole string that already names an app is never split.
+    if app.contains(char::is_whitespace) && knows(app) {
         return (app.to_string(), String::new());
     }
     let mut split: Option<(String, String)> = SPLIT_ARGS.captures(app).map(|m| {
@@ -382,7 +392,11 @@ impl Ctx<'_> {
                 ));
             }
         }
-        self.do_open(&format!("explorer.exe \"{path}\""), wait, true, false)
+        if cfg!(windows) {
+            self.do_open(&format!("explorer.exe \"{path}\""), wait, true, false)
+        } else {
+            self.do_open(&format!("/usr/bin/open \"{path}\""), wait, true, false)
+        }
     }
 
     /// Focus only on an exact ref (`wN`) or exact full-title match. Otherwise (default `new`) launch a
@@ -457,10 +471,17 @@ impl Ctx<'_> {
                     t == **n || t.ends_with(&format!(" - {n}")) || t.ends_with(&format!(" | {n}"))
                 })
             };
+            // On macOS the process is a bundle id (com.apple.Safari) and window titles are page or
+            // document names, so neither matched and a second open_app("Safari") waited 8 s for a
+            // new window that never comes (2026-10-28 Holo demo). Match the bundle id's last part.
+            let proc_is = |p: &str| {
+                let p = removesuffix_exe(p);
+                p == stem || (!cfg!(windows) && p.rsplit('.').next() == Some(stem.as_str()))
+            };
             // Store apps (Calculator) run under ApplicationFrameHost, so match the title too.
             let same: Vec<&WindowLine> = wins
                 .iter()
-                .filter(|w| !w.cloaked && (removesuffix_exe(&w.process) == stem || title_is(w)))
+                .filter(|w| !w.cloaked && (proc_is(&w.process) || title_is(w)))
                 .collect();
             if !same.is_empty() {
                 let w = same.iter().find(|w| w.focused).unwrap_or(&same[0]);
@@ -516,7 +537,7 @@ impl Ctx<'_> {
         }
         let exe_l = exe.to_lowercase();
         let target: AppTarget;
-        if exe_l.ends_with(".lnk") {
+        if exe_l.ends_with(".lnk") || exe_l.ends_with(".app") {
             target = AppTarget::Shortcut(exe.clone());
         } else {
             if resolved.is_none() && !is_abs(&exe) {
@@ -641,6 +662,22 @@ impl Ctx<'_> {
         // 2026-09-21: under only_apps, the dialog itself was never checked, so it filled and confirmed
         // a file path in whatever app's Save As happened to be in front, allowlisted or not.
         self.check_allowed(self.root_of(dialog))?;
+        // macOS Save and Open panels do not take a folder typed into the name box: go to the folder
+        // first (cmd+shift+g), then the box gets the file name alone.
+        let mut typed = path.clone();
+        if !cfg!(windows)
+            && let Some((dir, name)) = path.rsplit_once('/')
+            && !dir.is_empty()
+            && !name.is_empty()
+        {
+            self.send_combo("cmd+shift+g", 1)?;
+            self.sleep(0.7);
+            self.type_text(dir)?;
+            self.sleep(0.3);
+            self.send_combo("enter", 1)?;
+            self.sleep(0.9);
+            typed = name.to_string();
+        }
         // Not SetValue: the dialog shows the new text but keeps its own copy of the name, so Enter
         // saved the old name instead of the path (tested 2026-09-21). Focus the box, select all,
         // paste: the dialog sees real keyboard input.
@@ -664,10 +701,10 @@ impl Ctx<'_> {
         for attempt in 0..3 {
             self.send_combo(self.select_all(), 1)?;
             if attempt < 2 {
-                self.type_text(&path)?;
+                self.type_text(&typed)?;
             } else {
                 // last try: real keystrokes, no clipboard
-                for ch in path.chars() {
+                for ch in typed.chars() {
                     let mut buf = [0u8; 4];
                     self.be()
                         .type_text(ch.encode_utf8(&mut buf), &crate::backend::no_guard)?;
@@ -678,9 +715,9 @@ impl Ctx<'_> {
                 || {
                     shown = match self.be().element(&edit) {
                         Ok(el) => el.value.unwrap_or_default().trim().to_string(),
-                        Err(_) => path.clone(),
+                        Err(_) => typed.clone(),
                     };
-                    (shown.to_lowercase() == path.to_lowercase()).then_some(())
+                    (shown.to_lowercase() == typed.to_lowercase()).then_some(())
                 },
                 0.3,
                 0.03,

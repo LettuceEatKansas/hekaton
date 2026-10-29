@@ -236,7 +236,22 @@ impl Ctx<'_> {
                     .copied()
                     .filter(|w| {
                         let p = self.proc_name(w);
-                        p.strip_suffix(".exe").unwrap_or(&p) == low
+                        let p = p.strip_suffix(".exe").unwrap_or(&p);
+                        // macOS reports a bundle id (`com.apple.textedit`): its last part is the app
+                        // name people say (`TextEdit`).
+                        p == low
+                            || (p.matches('.').count() >= 2 && p.rsplit('.').next() == Some(&low))
+                    })
+                    .collect();
+            }
+            if hits.is_empty() {
+                // 2026-10-11: Brave is `com.brave.Browser`, so "Brave" names the middle part.
+                hits = live
+                    .iter()
+                    .copied()
+                    .filter(|w| {
+                        let p = self.proc_name(w);
+                        p.matches('.').count() >= 2 && p.split('.').skip(1).any(|part| part == low)
                     })
                     .collect();
             }
@@ -408,10 +423,26 @@ impl Ctx<'_> {
                     );
                 }
                 self.be().window_op(window, WindowOp::Move(want))?;
-                self.sleep(0.1);
-                let frame = self.be().window_geometry(window)?.frame;
-                let got = [frame.left, frame.top, frame.width(), frame.height()];
                 let asked = [want.left, want.top, want.width(), want.height()];
+                // 2026-10-11 (macOS): the window animates to its new place, so a read 0.1s in
+                // reported the old position. Wait up to 1s for it to land.
+                let read = || {
+                    self.be()
+                        .window_geometry(window)
+                        .map(|g| [g.frame.left, g.frame.top, g.frame.width(), g.frame.height()])
+                };
+                let close = |r: [i32; 4]| r.iter().zip(asked).all(|(g, a)| (g - a).abs() <= 1);
+                let mut got = read()?;
+                for _ in 0..20 {
+                    if close(got) {
+                        break;
+                    }
+                    self.sleep(0.05);
+                    got = read()?;
+                }
+                if close(got) {
+                    got = asked;
+                }
                 let fmt = |r: [i32; 4]| format!("[{}, {}, {}, {}]", r[0], r[1], r[2], r[3]);
                 let mut line = format!("moved {label} to {}", fmt(got));
                 if got != asked {

@@ -150,12 +150,17 @@ pub fn settle_with_frame(
     guard()?;
     let mut prev = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;
     let mut calm = 0u32;
+    let mut looked = clock.now();
     while clock.now().saturating_sub(start) < params.max {
+        // 2026-10-11 (macOS): a capture alone takes ~50 ms, so the gap counts from the last look's
+        // start, not its end; sleeping the full interval after it made every settle ~120 ms a look.
+        let gap = LOOK_INTERVAL.saturating_sub(clock.now().saturating_sub(looked));
         checked_sleep(
             clock,
-            LOOK_INTERVAL.min(params.max.saturating_sub(clock.now().saturating_sub(start))),
+            gap.min(params.max.saturating_sub(clock.now().saturating_sub(start))),
             guard,
         )?;
+        looked = clock.now();
         image = look()?;
         guard()?;
         let cur = imaging::thumbnail(&image).map_err(|e| BackendError::Os(e.to_string()))?;

@@ -780,3 +780,21 @@ fn read_text_is_an_acting_step() {
         "{err}"
     );
 }
+
+// 2026-10-11 (macOS TextEdit): find_text saw a two-word phrase in the document while
+// wait_for_text, OCR word by word, never did. locate_text now reads the document too.
+#[test]
+fn locate_text_finds_a_phrase_in_the_document() {
+    let kit = half_kit();
+    let w = front_with(&kit, &[]);
+    kit.fake.set_document(w, "first line\n2nd line here\n");
+    kit.fake.set_document_rects(
+        w,
+        1,
+        Rect::new(300, 505, 500, 525),
+        Rect::new(100, 500, 900, 530),
+    );
+    let cands = kit.ctx(json!({})).locate_text("2nd line").unwrap();
+    assert_eq!(cands.len(), 1);
+    assert_eq!((cands[0].x, cands[0].y), (400, 515));
+}

@@ -88,6 +88,10 @@ build_binary() {
   need rustup "Install Rust from https://rustup.rs (Homebrew's 'rust' lacks the second CPU target)."
   local host targets t target_dir
   local -a outs
+  # 2026-10-11: Homebrew's cargo ahead of rustup's in PATH built without the x86_64 target that
+  # rustup had installed ("can't find crate for core"). Use rustup's toolchain first.
+  PATH="$(dirname "$(rustup which cargo)"):$PATH"
+  export PATH
   host=$(rustc -vV | sed -n 's/^host: //p')
   if [ "$NATIVE" = 1 ]; then
     targets=$host
