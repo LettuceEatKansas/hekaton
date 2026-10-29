@@ -118,7 +118,7 @@ pub fn default_value(key: &str) -> Option<Value> {
         "paste_over" => Value::from(6),
         // comma-separated exe names never clicked or typed into, whoever is calling
         "protect_processes" => Value::from(""),
-        // named limits: "strict", "normal" or "hackathon" (crate::safety::Profile)
+        // named limits: "strict", "normal", "hackathon" or "open" (crate::safety::Profile)
         "safety_profile" => Value::from("normal"),
         // "auto" refuses input while a game runs; "off" leaves only the owner's `lock`
         "game_lock" => Value::from("off"),

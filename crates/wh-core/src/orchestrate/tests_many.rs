@@ -1167,3 +1167,20 @@ fn a_wait_before_blind_input_runs_its_full_time() {
         out.result
     );
 }
+
+// 2026-10-29: the owner's open profile lets the model judge destructive text itself and drops the
+// rate limit; the human-activity pause and the gaming lock stay theirs.
+#[test]
+fn the_open_profile_drops_the_hard_line_and_the_rate_limit() {
+    let kit = Kit::with_env(no_shot_env().with("WINHANDS_SAFETY_PROFILE", "open"));
+    kit.front("Terminal", "term.exe", 4);
+    let typed = kit.computer.execute(
+        &json!({"action": "type", "text": "rm -rf C:\\Windows\\System32"}),
+        &kit.who,
+    );
+    assert!(typed.result.as_ref().unwrap().starts_with("typed "), "{typed:?}");
+    for _ in 0..40 {
+        let r = kit.computer.execute(&json!({"action": "list_windows"}), &kit.who);
+        assert!(r.ok, "{r:?}");
+    }
+}

@@ -660,7 +660,7 @@ impl Ctx<'_> {
         // strict: the model's own flag is not the owner's approval
         let opted_in =
             is_truthy(args, "allow_irreversible") && self.cfg().profile().honours_call_opt_in();
-        if self.o.only_apps.is_empty() || opted_in {
+        if self.o.only_apps.is_empty() || opted_in || self.cfg().profile().unrestricted() {
             return Ok(());
         }
         let name = self.irreversible_name_at(p);

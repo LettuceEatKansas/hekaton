@@ -807,6 +807,10 @@ impl Computer {
             // strict: a flag the model wrote is not the owner's approval
             policy = Policy::REFUSE;
         }
+        if profile.unrestricted() {
+            // open: the owner chose to let the model judge destructive text and keys itself
+            policy = Policy::allow();
+        }
         let args = Value::Object(map.clone());
         let release = map.get("action").and_then(Value::as_str) == Some("left_mouse_up")
             && !map.contains_key("actions");
@@ -835,7 +839,7 @@ impl Computer {
         if let Err(refused) = crate::ack::check_acknowledged(&self.cfg, "computer", &args) {
             return self.fail(&args, &refused.into());
         }
-        if !self.rate.check(self.clock.as_ref()) {
+        if !profile.unrestricted() && !self.rate.check(self.clock.as_ref()) {
             return self.fail(&args, &StepError::runtime("rate limit exceeded"));
         }
         let mut session = match super::sessions::SessionGuard::enter(self, &args, who) {

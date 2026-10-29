@@ -1,10 +1,14 @@
 //! Named safety profiles and the gaming lock.
 //!
-//! A profile changes limits, never protections: every profile keeps `only_apps`, the irreversible
-//! button guard, the human-activity pause, the acknowledgement gate, protected processes,
-//! `read_only`, stop and cancel, and typing focus binding. `strict` adds checks on top; `hackathon`
-//! only shortens waits. The profile comes from the owner's config or environment (`safety_profile`), never
-//! from a call, so a model cannot pick a looser one.
+//! `strict`, `normal` and `hackathon` change limits, never protections: they keep `only_apps`, the
+//! irreversible button guard, the human-activity pause, the acknowledgement gate, protected
+//! processes, `read_only`, stop and cancel, and typing focus binding. `strict` adds checks on top;
+//! `hackathon` only shortens waits. `open` (2026-10-29, the owner's call: a capable model judges its
+//! own actions) also drops the hard line on destructive text and keys, the irreversible button
+//! guard and the rate limit; it keeps what puts the owner back in control (the human-activity
+//! pause, stop and cancel, the gaming lock, protected processes the owner listed) and what keeps a
+//! run from typing into its own driver. The profile comes from the owner's config or environment
+//! (`safety_profile`), never from a call, so a model cannot pick a looser one.
 //!
 //! The gaming lock refuses every input until it is released. The owner turns it on with
 //! `hekaton lock` (or `game_lock: "auto"` turns it on whenever a game is running) and off with
@@ -28,11 +32,13 @@ pub enum Profile {
     Normal,
     /// Shorter waits and a bigger clipboard cap for a supervised demo. Protections unchanged.
     Hackathon,
+    /// Hackathon's limits with the destructive and irreversible refusals and the rate limit off.
+    Open,
 }
 
 impl Profile {
     /// Every profile name, for messages.
-    pub const NAMES: &'static str = "strict, normal, hackathon";
+    pub const NAMES: &'static str = "strict, normal, hackathon, open";
 
     /// Parse a configured name. Unknown names are `None`; the caller treats that as `strict`, so a
     /// typo never loosens anything.
@@ -41,6 +47,7 @@ impl Profile {
             "strict" => Some(Self::Strict),
             "" | "normal" | "default" => Some(Self::Normal),
             "hackathon" | "fast" => Some(Self::Hackathon),
+            "open" | "unlimited" => Some(Self::Open),
             _ => None,
         }
     }
@@ -51,6 +58,7 @@ impl Profile {
             Self::Strict => "strict",
             Self::Normal => "normal",
             Self::Hackathon => "hackathon",
+            Self::Open => "open",
         }
     }
 
@@ -62,9 +70,9 @@ impl Profile {
             (Self::Strict, "loading_ms") => Value::from(8000),
             (Self::Strict, "clip_max") => Value::from(5000),
             (Self::Strict, "idle_min") => Value::from(30),
-            (Self::Hackathon, "settle_ms") => Value::from(1000),
-            (Self::Hackathon, "loading_ms") => Value::from(4000),
-            (Self::Hackathon, "clip_max") => Value::from(100_000),
+            (Self::Hackathon | Self::Open, "settle_ms") => Value::from(1000),
+            (Self::Hackathon | Self::Open, "loading_ms") => Value::from(4000),
+            (Self::Hackathon | Self::Open, "clip_max") => Value::from(100_000),
             _ => return None,
         })
     }
@@ -78,6 +86,11 @@ impl Profile {
     /// Must every acting call carry an `only_apps` allowlist?
     pub fn needs_allowlist(self) -> bool {
         self == Self::Strict
+    }
+
+    /// Are the destructive-text hard line, the irreversible button guard and the rate limit off?
+    pub fn unrestricted(self) -> bool {
+        self == Self::Open
     }
 }
 
@@ -142,7 +155,10 @@ mod tests {
         assert_eq!(Profile::from_name("Strict"), Some(Profile::Strict));
         assert_eq!(Profile::from_name(""), Some(Profile::Normal));
         assert_eq!(Profile::from_name("hackathon"), Some(Profile::Hackathon));
+        assert_eq!(Profile::from_name("open"), Some(Profile::Open));
         assert_eq!(Profile::from_name("yolo"), None);
+        assert!(Profile::Open.unrestricted());
+        assert!(!Profile::Hackathon.unrestricted());
     }
 
     #[test]
