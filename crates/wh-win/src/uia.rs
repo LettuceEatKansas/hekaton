@@ -159,6 +159,9 @@ pub(crate) struct Uia {
     /// Every property a snapshot prints, cached with the element (`_snapshot_batched`'s CacheRequest).
     pub cache: IUIAutomationCacheRequest,
     pub true_cond: IUIAutomationCondition,
+    /// `IsOffscreen == false`: the provider skips scrolled-away and clipped elements itself, which
+    /// halves a big window's read (2026-10-28, Explorer: 395 ms -> 195 ms, 526 -> 298 elements).
+    pub onscreen_cond: IUIAutomationCondition,
     /// The raw view: Python's `uiautomation` package walked it (`GetChildren`, `GetParentControl`).
     pub raw: IUIAutomationTreeWalker,
 }
@@ -199,11 +202,14 @@ fn create() -> windows::core::Result<Uia> {
             cache.AddProperty(id)?;
         }
         let true_cond = auto.CreateTrueCondition()?;
+        let onscreen_cond =
+            auto.CreatePropertyCondition(UIA_IsOffscreenPropertyId, &VARIANT::from(false))?;
         let raw = auto.RawViewWalker()?;
         Ok(Uia {
             auto,
             cache,
             true_cond,
+            onscreen_cond,
             raw,
         })
     }

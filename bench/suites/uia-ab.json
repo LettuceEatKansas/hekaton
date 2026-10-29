@@ -1,0 +1,7 @@
+[
+  {"name": "read_explorer", "repeat": 3, "args": {"action": "read", "text": "File Explorer"}},
+  {"name": "read_steam",    "repeat": 3, "args": {"action": "read", "text": "Steam"}},
+  {"name": "read_wavelink", "repeat": 3, "args": {"action": "read", "text": "Elgato Wave Link"}},
+  {"name": "read_brave",    "repeat": 3, "args": {"action": "read", "text": "Lavish - Brave"}},
+  {"name": "find_home",     "repeat": 3, "args": {"action": "find_text", "text": "Home", "scope": "File Explorer"}}
+]

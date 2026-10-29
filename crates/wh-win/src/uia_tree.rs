@@ -22,7 +22,7 @@ use wh_core::backend::{
 };
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{
-    IUIAutomationElement, TreeScope_Children, TreeScope_Descendants,
+    IUIAutomationCondition, IUIAutomationElement, TreeScope_Children, TreeScope_Descendants,
 };
 
 use crate::model::{self, Budget};
@@ -184,6 +184,17 @@ fn read_items(
 
 // ------------------------------------------------------------------------------------ batched
 
+/// What a read asks the provider for: everything for an `All` read, else only elements on screen
+/// (scrolled-away and clipped ones are never printed, and skipping them in the provider halves a
+/// big window's read). `WINHANDS_UIA_OFFSCREEN=1` asks for everything (A/B and debugging).
+fn query_condition<'a>(u: &'a Uia, limits: &TreeLimits) -> &'a IUIAutomationCondition {
+    if limits.filter == ElementFilter::All || std::env::var_os("WINHANDS_UIA_OFFSCREEN").is_some() {
+        &u.true_cond
+    } else {
+        &u.onscreen_cond
+    }
+}
+
 fn read_batched(
     u: &Uia,
     root: &IUIAutomationElement,
@@ -191,8 +202,10 @@ fn read_batched(
     limits: &TreeLimits,
 ) -> BackendResult<Items> {
     // SAFETY: one search of a live window's descendants with the shared cache request.
-    let found = unsafe { root.FindAllBuildCache(TreeScope_Descendants, &u.true_cond, &u.cache) }
-        .map_err(|e| os_err("UI Automation search failed", &e))?;
+    let found = unsafe {
+        root.FindAllBuildCache(TreeScope_Descendants, query_condition(u, limits), &u.cache)
+    }
+    .map_err(|e| os_err("UI Automation search failed", &e))?;
     // SAFETY: reading the length of the array just returned.
     let n = unsafe { found.Length() }.map_err(|e| os_err("UI Automation search failed", &e))?;
     // The query is done; this only converts cached answers, so give it its own, fresh budget.
@@ -224,6 +237,7 @@ fn read_batched(
 
 struct Walk<'a> {
     u: &'a Uia,
+    cond: &'a IUIAutomationCondition,
     raw: u64,
     filter: ElementFilter,
     flatten: bool,
@@ -244,9 +258,9 @@ impl Walk<'_> {
             return here;
         }
         // SAFETY: one query for a live element's direct children with the shared cache request.
-        let Ok(kids) = (unsafe {
-            parent.FindAllBuildCache(TreeScope_Children, &self.u.true_cond, &self.u.cache)
-        }) else {
+        let Ok(kids) =
+            (unsafe { parent.FindAllBuildCache(TreeScope_Children, self.cond, &self.u.cache) })
+        else {
             return here;
         };
         // SAFETY: reading the length of the array just returned.
@@ -291,6 +305,7 @@ fn read_walk(
 ) -> BackendResult<Items> {
     let mut walk = Walk {
         u,
+        cond: query_condition(u, limits),
         raw,
         filter: limits.filter,
         flatten: limits.flatten,

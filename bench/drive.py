@@ -153,6 +153,7 @@ def main() -> int:
                     "wall_ms": round(wall, 1),
                     "resp_bytes": len(data),
                     "text_chars": len(text),
+                    "text": text,
                     "images": len(imgs),
                     "est_tokens": math.ceil(len(text) / 4) + itok,
                     "metrics": res.get("metrics"),
