@@ -14,6 +14,8 @@
 //! gave it.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, WindowRef};
 use crate::config::Config;
@@ -262,6 +264,64 @@ pub fn identify(
     peer_host: &str,
     remote: bool,
 ) -> Caller {
+    identify_cached(backend, None, peer_port, server_port, peer_host, remote)
+}
+
+/// How long a cached process chain stays trusted.
+const CHAIN_TTL: Duration = Duration::from_secs(60);
+/// Most chains a cache holds; a daemon sees a handful of callers, so this only bounds a flood.
+const CHAIN_CACHE_MAX: usize = 64;
+
+/// Process chains by `(pid, process start time)`.
+///
+/// Walking the chain snapshots every process on the machine: about 18 ms on a desktop with 700
+/// processes (2026-10-28), paid on every call before this cache. The key includes the start time, so a
+/// recycled pid is a different key and never inherits a dead process's chain. A process whose start
+/// time cannot be read is never cached.
+#[derive(Debug, Default)]
+pub struct ChainCache {
+    map: Mutex<HashMap<(u32, u64), (Instant, Vec<(u32, String)>)>>,
+}
+
+impl ChainCache {
+    fn chain(&self, backend: &dyn Backend, pid: u32) -> Vec<(u32, String)> {
+        let started = backend
+            .process_info(pid)
+            .ok()
+            .flatten()
+            .and_then(|p| p.started_at)
+            .unwrap_or(0);
+        if pid == 0 || started == 0 {
+            return process_chain(backend, pid);
+        }
+        let key = (pid, started);
+        let now = Instant::now();
+        if let Ok(map) = self.map.lock()
+            && let Some((at, chain)) = map.get(&key)
+            && now.duration_since(*at) < CHAIN_TTL
+        {
+            return chain.clone();
+        }
+        let chain = process_chain(backend, pid);
+        if let Ok(mut map) = self.map.lock() {
+            map.retain(|_, (at, _)| now.duration_since(*at) < CHAIN_TTL);
+            if map.len() < CHAIN_CACHE_MAX {
+                map.insert(key, (now, chain.clone()));
+            }
+        }
+        chain
+    }
+}
+
+/// [`identify`] with an optional [`ChainCache`] (the daemon keeps one for its lifetime).
+pub fn identify_cached(
+    backend: &dyn Backend,
+    cache: Option<&ChainCache>,
+    peer_port: u16,
+    server_port: u16,
+    peer_host: &str,
+    remote: bool,
+) -> Caller {
     let fallback = || {
         if remote {
             Caller::remote()
@@ -280,7 +340,10 @@ pub fn identify(
             Err(_) => return fallback(),
         }
     };
-    let chain = process_chain(backend, pid);
+    let chain = match cache {
+        Some(cache) => cache.chain(backend, pid),
+        None => process_chain(backend, pid),
+    };
     if let Some((_, first)) = chain.first()
         && PROXY_HOSTS.contains(&first.as_str())
     {
@@ -547,6 +610,32 @@ mod tests {
         ]);
         let chain = process_chain(&backend, 10);
         assert_eq!(chain, vec![(10, "child.exe".to_string())]);
+    }
+
+    #[test]
+    fn a_cached_chain_is_reused_but_never_for_a_recycled_pid() {
+        let backend = FakeBackend::new();
+        backend.set_processes(vec![
+            proc(42, 7, "claude.exe", Some(100)),
+            proc(7, 0, "explorer.exe", Some(1)),
+        ]);
+        backend.set_peer(50000, 47811, 42);
+        let cache = ChainCache::default();
+        let id =
+            |b: &FakeBackend| identify_cached(b, Some(&cache), 50000, 47811, "127.0.0.1", false);
+        let first = id(&backend);
+        assert_eq!(first.chain().len(), 2);
+        // the parent changes but pid 42 is the same process: the cached chain answers
+        backend.set_processes(vec![proc(42, 0, "claude.exe", Some(100))]);
+        assert_eq!(id(&backend).chain(), first.chain());
+        // pid 42 is reused by a new process: a fresh walk, not the dead process's chain
+        backend.set_processes(vec![proc(42, 0, "game.exe", Some(900))]);
+        assert_eq!(id(&backend).chain(), &[(42, "game.exe".to_string())]);
+        // no start time: never cached
+        backend.set_processes(vec![proc(42, 0, "a.exe", None)]);
+        let _ = id(&backend);
+        backend.set_processes(vec![proc(42, 0, "b.exe", None)]);
+        assert_eq!(id(&backend).chain(), &[(42, "b.exe".to_string())]);
     }
 
     #[test]

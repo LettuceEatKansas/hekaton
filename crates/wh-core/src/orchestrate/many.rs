@@ -642,6 +642,7 @@ impl Computer {
     /// fields. Never fails: a refusal or an error comes back as `ok: false`. Python
     /// `_execute_tool(path="computer", ...)`.
     pub fn execute(&self, args: &Value, who: &Caller) -> ToolOutcome {
+        crate::prof::reset();
         self.idle.touch(self.clock.as_ref());
         if args.get("action").and_then(Value::as_str) == Some("status")
             && args.get("actions").is_none()
@@ -803,7 +804,7 @@ impl Computer {
                     text.push_str(&format!("\n[snapshot {id}]"));
                 }
                 let profile = map.get("profile").is_some_and(truthy);
-                let metrics = profile.then(|| json!({"elapsed_ms": done.elapsed_ms, "completed_steps": done.completed_steps, "input_sent": done.input_sent, "images": images.len(), "image_bytes_base64": images.iter().map(String::len).sum::<usize>()}));
+                let metrics = profile.then(|| json!({"elapsed_ms": done.elapsed_ms, "completed_steps": done.completed_steps, "input_sent": done.input_sent, "images": images.len(), "image_bytes_base64": images.iter().map(String::len).sum::<usize>(), "phases": crate::prof::take()}));
                 if profile {
                     text.push_str(&format!(
                         "\n[{} ms; {} completed; input_sent={}]",

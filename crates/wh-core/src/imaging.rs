@@ -106,6 +106,7 @@ fn resize_raw(
 /// Resize to exactly `(out_w, out_h)` the way `screenshot_b64` did. An image already that size is
 /// returned as is.
 pub fn resize(img: &Image, out_w: u32, out_h: u32) -> Result<Image, ImageError> {
+    let _p = crate::prof::span("resize");
     if (img.width(), img.height()) == (out_w, out_h) {
         return Ok(img.clone());
     }
@@ -201,6 +202,7 @@ pub fn encode_png(img: &Image) -> Result<Vec<u8>, ImageError> {
 
 /// Encode in the configured format. Python `_encode`, before the base64 step.
 pub fn encode(img: &Image, format: ImageFormat) -> Result<Vec<u8>, ImageError> {
+    let _p = crate::prof::span("encode");
     match format {
         ImageFormat::Jpeg => encode_jpeg(img),
         ImageFormat::Png => encode_png(img),

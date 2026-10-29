@@ -131,6 +131,7 @@ impl Backend for WindowsBackend {
     }
 
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image> {
+        let _p = wh_core::prof::span("capture");
         let rect = match target {
             CaptureTarget::VirtualDesktop => display::virtual_screen_rect(),
             CaptureTarget::Display(id) => {
@@ -162,72 +163,89 @@ impl Backend for WindowsBackend {
     // ------------------------------------------------------------------ windows
 
     fn list_windows(&self, include_hidden: bool) -> BackendResult<Vec<WindowInfo>> {
+        let _p = wh_core::prof::span("windows");
         Ok(wnd::list_windows(include_hidden))
     }
 
     fn window_info(&self, window: WindowRef) -> BackendResult<WindowInfo> {
+        let _p = wh_core::prof::span("windows");
         wnd::window_info(window)
     }
 
     fn window_pid(&self, window: WindowRef) -> BackendResult<u32> {
+        let _p = wh_core::prof::span("windows");
         wnd::window_pid(window)
     }
 
     fn foreground_window(&self) -> BackendResult<Option<WindowRef>> {
+        let _p = wh_core::prof::span("windows");
         Ok(wnd::foreground_window())
     }
 
     fn window_at_point(&self, p: Point) -> BackendResult<Option<WindowRef>> {
+        let _p = wh_core::prof::span("windows");
         Ok(wnd::window_at_point(p.x, p.y))
     }
 
     fn root_window(&self, window: WindowRef) -> BackendResult<WindowRef> {
+        let _p = wh_core::prof::span("windows");
         wnd::root_window(window)
     }
 
     fn owner_chain(&self, window: WindowRef) -> BackendResult<Vec<WindowRef>> {
+        let _p = wh_core::prof::span("windows");
         wnd::owner_chain(window)
     }
 
     fn hosted_app(&self, window: WindowRef) -> BackendResult<Option<String>> {
+        let _p = wh_core::prof::span("windows");
         wnd::hosted_app(window)
     }
 
     fn window_text(&self, window: WindowRef) -> BackendResult<String> {
+        let _p = wh_core::prof::span("windows");
         wnd::window_text(window)
     }
 
     fn bring_to_foreground(&self, window: WindowRef) -> BackendResult<()> {
+        let _p = wh_core::prof::span("focus");
         wnd::bring_to_foreground(window)
     }
 
     fn restore_window(&self, window: WindowRef, timeout: Duration) -> BackendResult<()> {
+        let _p = wh_core::prof::span("focus");
         wnd::restore_window(window, timeout)
     }
 
     fn wait_window_ready(&self, window: WindowRef, timeout: Duration) -> BackendResult<()> {
+        let _p = wh_core::prof::span("focus");
         wnd::wait_window_ready(window, timeout)
     }
 
     fn popup_menus(&self) -> BackendResult<Vec<WindowRef>> {
+        let _p = wh_core::prof::span("uia");
         Ok(wnd::popup_menus())
     }
 
     fn menu_items(&self, budget: Duration) -> BackendResult<Vec<MenuItem>> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::menu_items(budget)
     }
 
     // ------------------------------------------------------------------ accessibility
 
     fn element_tree(&self, window: WindowRef, limits: &TreeLimits) -> BackendResult<TreeSnapshot> {
+        let _p = wh_core::prof::span("uia");
         uia_tree::element_tree(window, limits)
     }
 
     fn element(&self, id: &ElementId) -> BackendResult<Element> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::element(id)
     }
 
     fn element_window(&self, id: &ElementId) -> BackendResult<WindowRef> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::element_window(id)
     }
 
@@ -237,24 +255,29 @@ impl Backend for WindowsBackend {
         max_ancestors: usize,
         budget: Duration,
     ) -> BackendResult<Option<ElementHit>> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::element_at(p, max_ancestors, budget)
     }
 
     fn focused_element(&self) -> BackendResult<Option<Element>> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::focused_element()
     }
 
     fn perform(&self, id: &ElementId, action: ElementAction) -> BackendResult<bool> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::perform(id, action)
     }
 
     fn find_file_dialog_field(&self, window: WindowRef) -> BackendResult<Option<ElementId>> {
+        let _p = wh_core::prof::span("uia");
         uia_ops::find_file_dialog_field(window)
     }
 
     // ------------------------------------------------------------------ text
 
     fn document_text(&self, window: WindowRef, max_chars: usize) -> BackendResult<Option<String>> {
+        let _p = wh_core::prof::span("uia");
         uia_text::document_text(window, max_chars)
     }
 
@@ -265,22 +288,36 @@ impl Backend for WindowsBackend {
         max_hits: usize,
         budget: Duration,
     ) -> BackendResult<Vec<DocumentHit>> {
+        let _p = wh_core::prof::span("uia");
         uia_text::find_in_documents(window, query, max_hits, budget)
     }
 
     fn document_line_at(&self, window: WindowRef, p: Point) -> BackendResult<Option<String>> {
+        let _p = wh_core::prof::span("uia");
         uia_text::document_line_at(window, p)
     }
 
+    fn document_lines_at(
+        &self,
+        window: WindowRef,
+        points: &[Point],
+    ) -> BackendResult<Vec<Option<String>>> {
+        let _p = wh_core::prof::span("uia");
+        uia_text::document_lines_at(window, points)
+    }
+
     fn caret(&self) -> BackendResult<Option<Caret>> {
+        let _p = wh_core::prof::span("uia");
         Ok(wnd::caret())
     }
 
     fn has_caret(&self, window: Option<WindowRef>) -> BackendResult<bool> {
+        let _p = wh_core::prof::span("uia");
         Ok(wnd::has_caret(window))
     }
 
     fn focus_token(&self) -> BackendResult<u64> {
+        let _p = wh_core::prof::span("uia");
         Ok(wnd::focus_token())
     }
 
@@ -297,10 +334,12 @@ impl Backend for WindowsBackend {
     }
 
     fn mouse_move(&self, to: Point) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.move_to(to)
     }
 
     fn mouse_button(&self, button: MouseButton, down: bool) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.button(button, down)
     }
 
@@ -311,6 +350,7 @@ impl Backend for WindowsBackend {
         count: u8,
         guard: InputGuard<'_>,
     ) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.click(at, button, count, guard)
     }
 
@@ -321,26 +361,32 @@ impl Backend for WindowsBackend {
         notches: u32,
         guard: InputGuard<'_>,
     ) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.scroll(at, direction, notches, guard)
     }
 
     fn mouse_drag(&self, from: Point, to: Point, guard: InputGuard<'_>) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.drag(from, to, guard)
     }
 
     fn key_down(&self, key: Key) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.key(key, false)
     }
 
     fn key_up(&self, key: Key) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.key(key, true)
     }
 
     fn key_chord(&self, keys: &[Key], repeat: u32, guard: InputGuard<'_>) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.chord(keys, repeat, guard)
     }
 
     fn type_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()> {
+        let _p = wh_core::prof::span("input");
         self.input.type_text(text, guard)
     }
 
@@ -372,20 +418,24 @@ impl Backend for WindowsBackend {
     // ------------------------------------------------------------------ clipboard
 
     fn clipboard(&self) -> BackendResult<ClipboardContent> {
+        let _p = wh_core::prof::span("clipboard");
         clipboard::read()
     }
 
     fn set_clipboard_text(&self, text: &str) -> BackendResult<()> {
+        let _p = wh_core::prof::span("clipboard");
         clipboard::write_text(text)
     }
 
     fn clipboard_sequence(&self) -> BackendResult<Option<u64>> {
+        let _p = wh_core::prof::span("clipboard");
         Ok(clipboard::sequence())
     }
 
     // ------------------------------------------------------------------ OCR
 
     fn ocr(&self, image: &Image) -> BackendResult<OcrResult> {
+        let _p = wh_core::prof::span("ocr");
         self.ocr.recognize(image)
     }
 
@@ -400,38 +450,46 @@ impl Backend for WindowsBackend {
     // ------------------------------------------------------------------ processes
 
     fn process_table(&self) -> BackendResult<Vec<ProcessInfo>> {
+        let _p = wh_core::prof::span("process");
         process::process_table()
     }
 
     fn process_info(&self, pid: u32) -> BackendResult<Option<ProcessInfo>> {
+        let _p = wh_core::prof::span("process");
         process::process_info(pid)
     }
 
     fn peer_pid(&self, peer_port: u16, server_port: u16) -> BackendResult<Option<u32>> {
+        let _p = wh_core::prof::span("process");
         process::peer_pid(peer_port, server_port)
     }
 
     // ------------------------------------------------------------------ launching
 
     fn resolve_app(&self, name: &str) -> BackendResult<Option<AppTarget>> {
+        let _p = wh_core::prof::span("launch");
         Ok(launch::resolve_app(&self.machine, name))
     }
 
     fn launch(&self, spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
+        let _p = wh_core::prof::span("launch");
         launch::launch(spec)
     }
 
     // ------------------------------------------------------------------ window and folder shortcuts
 
     fn window_geometry(&self, window: WindowRef) -> BackendResult<WindowGeometry> {
+        let _p = wh_core::prof::span("windows");
         shortcuts::window_geometry(window)
     }
 
     fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        let _p = wh_core::prof::span("launch");
         shortcuts::window_op(window, op)
     }
 
     fn folder_window(&self, folder: &str) -> BackendResult<Option<WindowRef>> {
+        let _p = wh_core::prof::span("launch");
         shell::folder_window(folder)
     }
 
@@ -443,6 +501,7 @@ impl Backend for WindowsBackend {
         sort: Option<FolderSort>,
         timeout: Duration,
     ) -> BackendResult<Option<FolderViewState>> {
+        let _p = wh_core::prof::span("launch");
         shell::set_folder_view(window, folder, view, sort, timeout)
     }
 
@@ -475,6 +534,7 @@ impl Backend for WindowsBackend {
     // ------------------------------------------------------------------ provided helpers
 
     fn window_exists(&self, window: WindowRef) -> bool {
+        let _p = wh_core::prof::span("windows");
         wnd::is_window(hwnd_of(window))
     }
 }

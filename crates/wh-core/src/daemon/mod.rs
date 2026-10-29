@@ -36,7 +36,7 @@ use serde_json::{Map, Value, json};
 
 use crate::audit::log_action;
 use crate::backend::HotkeyChord;
-use crate::caller::{Caller, identify};
+use crate::caller::{Caller, ChainCache, identify_cached};
 use crate::config::truthy;
 use crate::keys::Key;
 use crate::orchestrate::Computer;
@@ -152,8 +152,9 @@ impl PeerCaller<'_> {
             };
             // remote_caller() is true when the owner set the flag OR the daemon is bound off loopback:
             // then the pid on the other end of the socket is a relay at best, so it is not trusted.
-            identify(
+            identify_cached(
                 self.daemon.computer.backend(),
+                Some(&self.daemon.chains),
                 port,
                 self.daemon.port,
                 &host,
@@ -171,6 +172,8 @@ pub struct Daemon {
     hotkey: Mutex<Option<String>>,
     warm: Arc<WarmGate>,
     rate: RateLimiter,
+    /// Caller process chains, so identifying a caller is not a full process snapshot per call.
+    chains: ChainCache,
 }
 
 impl Daemon {
@@ -184,6 +187,7 @@ impl Daemon {
             hotkey: Mutex::new(None),
             warm: Arc::new(WarmGate::new()),
             rate: RateLimiter::new(),
+            chains: ChainCache::default(),
         }
     }
 

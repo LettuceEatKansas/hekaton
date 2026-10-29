@@ -1,0 +1,9 @@
+[
+  {"name": "list_windows",      "repeat": 10, "args": {"action": "list_windows"}},
+  {"name": "cursor_position",   "repeat": 10, "args": {"action": "cursor_position"}},
+  {"name": "screenshot_full",   "repeat": 10, "args": {"action": "screenshot"}},
+  {"name": "screenshot_scoped", "repeat": 10, "args": {"action": "screenshot", "scope": "File Explorer"}},
+  {"name": "zoom_region",       "repeat": 10, "args": {"action": "zoom", "region": [0, 0, 800, 600]}},
+  {"name": "read_window",       "repeat": 10, "args": {"action": "read", "text": "File Explorer"}},
+  {"name": "find_text",         "repeat": 10, "args": {"action": "find_text", "text": "Home", "scope": "File Explorer"}}
+]

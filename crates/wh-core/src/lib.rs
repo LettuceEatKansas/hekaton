@@ -26,6 +26,7 @@ pub mod imaging;
 pub mod input;
 pub mod keys;
 pub mod paths;
+pub mod prof;
 pub mod recipes;
 pub mod request;
 pub mod scale;

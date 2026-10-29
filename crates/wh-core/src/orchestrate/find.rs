@@ -802,17 +802,22 @@ impl Ctx<'_> {
             .collect()
     }
 
-    /// The document's own text for the line at a screen point, or "". Python `_exact_line_at`.
-    fn exact_line_at(&self, root: Option<WindowRef>, x: i32, y: i32) -> String {
-        let Some(root) = root else {
-            return String::new();
-        };
-        self.be()
-            .document_line_at(root, Point { x, y })
-            .ok()
-            .flatten()
-            .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
-            .unwrap_or_default()
+    /// The document's own text for the line at each screen point, "" where there is none. Python
+    /// `_exact_line_at`, batched.
+    fn exact_lines_at(&self, root: Option<WindowRef>, points: &[Point]) -> Vec<String> {
+        let found = root
+            .and_then(|root| self.be().document_lines_at(root, points).ok())
+            .unwrap_or_default();
+        (0..points.len())
+            .map(|i| {
+                found
+                    .get(i)
+                    .cloned()
+                    .flatten()
+                    .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default()
+            })
+            .collect()
     }
 
     /// OCR of a zoom box: (items for [`group_into_rows`], source label, caution text). Each line gets
@@ -851,22 +856,30 @@ impl Ctx<'_> {
         let mut items = Vec::new();
         let (mut fixed, mut unsure, mut at_caret): (usize, Vec<String>, Vec<String>) =
             (0, Vec::new(), Vec::new());
-        for row in rows {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| !row.text.trim().is_empty())
+            .collect();
+        // A page or rich editor knows its own characters: swap the OCR guess for the real line
+        // when it is clearly the same line (h-longsite: OCR said T115YIL for TII5ML). One batched
+        // lookup for every row, not one UIA round trip per row.
+        let points: Vec<Point> = rows
+            .iter()
+            .map(|row| {
+                let r = row.rect;
+                Point {
+                    x: (f64::from(origin.x) + f64::from(r.left) / f + 2.0) as i32,
+                    y: (f64::from(origin.y) + f64::from(r.top + r.bottom) / 2.0 / f) as i32,
+                }
+            })
+            .collect();
+        let exact_lines = self.exact_lines_at(root, &points);
+        for (row, exact) in rows.into_iter().zip(exact_lines) {
             let mut words = row.text.trim().to_string();
-            if words.is_empty() {
-                continue;
-            }
             let r = row.rect;
             let cx = f64::from(origin.x) + f64::from(r.left + r.right) / 2.0 / f;
             let cy = f64::from(origin.y) + f64::from(r.top + r.bottom) / 2.0 / f;
             let lh = f64::from(r.bottom - r.top) / f;
-            // A page or rich editor knows its own characters: swap the OCR guess for the real line
-            // when it is clearly the same line (h-longsite: OCR said T115YIL for TII5ML).
-            let exact = self.exact_line_at(
-                root,
-                (f64::from(origin.x) + f64::from(r.left) / f + 2.0) as i32,
-                cy as i32,
-            );
             if !exact.is_empty() && same_line(&words, &exact) {
                 words = exact;
                 fixed += 1;

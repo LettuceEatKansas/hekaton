@@ -126,6 +126,7 @@ pub fn settle_with_frame(
     params: &SettleParams,
     guard: &dyn Fn() -> BackendResult<()>,
 ) -> BackendResult<SettledFrame> {
+    let _p = crate::prof::span("settle");
     let calm_needed = params.calm_needed.max(1);
     let start = clock.now();
     checked_sleep(clock, FIRST_LOOK_DELAY, guard)?;
@@ -265,6 +266,7 @@ pub fn settle_floor(
     probe: &UiaProbe,
     fallback_monitor: Rect,
 ) -> Duration {
+    let _p = crate::prof::span("settle");
     let floor = Duration::from_secs_f64(cfg.settle_floor_s());
     if floor >= LONG_SETTLE_FLOOR {
         return floor;

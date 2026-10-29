@@ -282,6 +282,34 @@ pub(crate) fn find_in_documents(
 }
 
 /// The document's own text of the line at a screen point (`_exact_line_at`).
+/// [`document_line_at`] for many points: the documents are found once and every point is one
+/// `RangeFromPoint` inside one deadline. A point whose line is empty in every document is `None`.
+pub(crate) fn document_lines_at(
+    window: WindowRef,
+    points: &[Point],
+) -> BackendResult<Vec<Option<String>>> {
+    let raw = window.raw();
+    let points = points.to_vec();
+    uia::with_deadline(
+        Duration::from_millis(1500),
+        move || -> BackendResult<Vec<Option<String>>> {
+            let u = uia()?;
+            let docs = text_docs(u, WindowRef::from_raw(raw), 4);
+            Ok(points
+                .iter()
+                .map(|p| {
+                    docs.iter().find_map(|tp| {
+                        // SAFETY: asks a live text pattern for the range at a point.
+                        let range = unsafe { tp.RangeFromPoint(win_point(*p)) }.ok()?;
+                        let text = line_text(&range);
+                        (!text.is_empty()).then_some(text)
+                    })
+                })
+                .collect())
+        },
+    )?
+}
+
 pub(crate) fn document_line_at(window: WindowRef, p: Point) -> BackendResult<Option<String>> {
     let raw = window.raw();
     uia::with_deadline(

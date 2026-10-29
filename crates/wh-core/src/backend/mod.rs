@@ -300,6 +300,20 @@ pub trait Backend: Send + Sync {
     /// Replaces `computer.py:_exact_line_at` (`RangeFromPoint` + `ExpandToEnclosingUnit(Line)`).
     fn document_line_at(&self, window: WindowRef, p: Point) -> BackendResult<Option<String>>;
 
+    /// [`Backend::document_line_at`] for many points at once, in order. Backends that pay a fixed
+    /// cost per lookup (finding the window's documents, a thread hop) override this to pay it once:
+    /// a zoom over 28 lines of text made 56 UIA calls, 784 ms, before this existed (2026-10-28).
+    fn document_lines_at(
+        &self,
+        window: WindowRef,
+        points: &[Point],
+    ) -> BackendResult<Vec<Option<String>>> {
+        points
+            .iter()
+            .map(|p| self.document_line_at(window, *p))
+            .collect()
+    }
+
     /// Where the foreground thread's text cursor is, if it shows one.
     ///
     /// Replaces `computer.py:_caret_screen_point`, `_gui_thread_info`.
