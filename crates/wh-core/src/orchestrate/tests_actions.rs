@@ -181,6 +181,12 @@ fn space_separated_keys_are_pressed_in_turn_and_modifier_words_stay_one_chord() 
         .unwrap();
     let seen = chords.lock().unwrap().clone();
     assert_eq!(seen, vec![vec![Key::Ctrl, Key::Shift, Key::Char('s')]]);
+    chords.lock().unwrap().clear();
+    let (note, _) = kit
+        .step(json!({"action": "key", "text": "1 2 * 3 Return"}))
+        .unwrap();
+    assert_eq!(note, "pressed 1, 2, *, 3, enter in turn");
+    assert!(kit.fake.typed_text().contains('*'));
     let err = err_of(kit.step(json!({"action": "key", "text": "Home Retun"})));
     assert!(err.message().starts_with("unknown key"), "{err}");
 }

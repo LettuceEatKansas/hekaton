@@ -815,9 +815,9 @@ impl Ctx<'_> {
                 }
                 if pieces.len() > 1
                     && parse_key_combo(&combo, Platform::current()).is_err()
-                    && pieces
-                        .iter()
-                        .all(|p| parse_key_combo(p, Platform::current()).is_ok())
+                    && pieces.iter().all(|p| {
+                        p.chars().count() == 1 || parse_key_combo(p, Platform::current()).is_ok()
+                    })
                 {
                     // 2026-10-29 Mac demo: a worker sent key "1 2 3 4 Return" (the xdotool style
                     // computer-use takes) and got "unknown key", then spent a step per digit.
@@ -825,7 +825,12 @@ impl Ctx<'_> {
                     // one chord.
                     for _ in 0..reps {
                         for p in &pieces {
-                            self.send_combo(p, 1)?;
+                            if p.chars().count() == 1 && key_from_name(p).is_none() {
+                                // a symbol such as * or = is typed, as for a lone key
+                                self.be().type_text(p, &|| self.keyboard_guard())?;
+                            } else {
+                                self.send_combo(p, 1)?;
+                            }
                             self.sleep(0.012);
                         }
                     }
