@@ -272,15 +272,15 @@ const CHAIN_TTL: Duration = Duration::from_secs(60);
 /// Most chains a cache holds; a daemon sees a handful of callers, so this only bounds a flood.
 const CHAIN_CACHE_MAX: usize = 64;
 
+/// When a chain was walked, and the chain.
+type CachedChain = (Instant, Vec<(u32, String)>);
+
 /// Process chains by `(pid, process start time)`.
 ///
 /// Walking the chain snapshots every process on the machine: about 18 ms on a desktop with 700
 /// processes (2026-10-28), paid on every call before this cache. The key includes the start time, so a
 /// recycled pid is a different key and never inherits a dead process's chain. A process whose start
 /// time cannot be read is never cached.
-/// When a chain was walked, and the chain.
-type CachedChain = (Instant, Vec<(u32, String)>);
-
 #[derive(Debug, Default)]
 pub struct ChainCache {
     map: Mutex<HashMap<(u32, u64), CachedChain>>,
