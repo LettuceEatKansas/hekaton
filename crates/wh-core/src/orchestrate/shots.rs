@@ -144,6 +144,22 @@ impl Ctx<'_> {
         self.encode_frame(img, w.max(1) as u32, h.max(1) as u32, true)
     }
 
+    /// Remember where the pointer acted, for the marker on the next screenshot.
+    pub(crate) fn set_last_point(&self, p: crate::backend::Point) {
+        let now = self.clock().now();
+        let mut mem = self.c.mem();
+        mem.last_point = Some(p);
+        mem.last_point_at = now;
+    }
+
+    /// The last pointer point, if it is recent enough to still mean something on screen.
+    fn recent_point(&self) -> Option<crate::backend::Point> {
+        let now = self.clock().now();
+        let mem = self.c.mem();
+        mem.last_point
+            .filter(|_| now.saturating_sub(mem.last_point_at) <= super::MARK_MAX_AGE)
+    }
+
     fn encode_frame(&self, img: &Image, out_w: u32, out_h: u32, whole: bool) -> StepResult<String> {
         self.check_cancelled()?;
         if !self.cfg().mark() && img.width() == out_w && img.height() == out_h {
@@ -153,7 +169,7 @@ impl Ctx<'_> {
         let mut img = imaging::resize(img, out_w, out_h)?;
         if whole
             && self.cfg().mark()
-            && let Some(p) = self.c.mem().last_point
+            && let Some(p) = self.recent_point()
         {
             let px = (f64::from(p.x - display.left) * f64::from(out_w) / f64::from(display.width()))
                 as i32;

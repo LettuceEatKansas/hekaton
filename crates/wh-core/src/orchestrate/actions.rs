@@ -530,7 +530,7 @@ impl Ctx<'_> {
         }
         let c = &cands[(nth - 1) as usize];
         let p = Point { x: c.x, y: c.y };
-        self.c.mem().last_point = Some(p);
+        self.set_last_point(p);
         self.host_at(p)?;
         let button_name = if is_truthy(step, "button") {
             text_arg(step, "button")
@@ -577,7 +577,7 @@ impl Ctx<'_> {
             )));
         };
         let p = Point { x: c.x, y: c.y };
-        self.c.mem().last_point = Some(p);
+        self.set_last_point(p);
         self.host_at(p)?;
         let hit = self.be().window_at_point(p).ok().flatten();
         self.refuse_explorer_open(hit.map(|h| self.root_of(h)))?;
@@ -823,7 +823,7 @@ impl Ctx<'_> {
                 (p.x, p.y)
             }
         };
-        self.c.mem().last_point = Some(Point { x, y });
+        self.set_last_point(Point { x, y });
         let coord_repr = match coord {
             Some(c) => py_value_repr(c),
             // a window-relative point has no screenshot coordinate to echo: say where it landed

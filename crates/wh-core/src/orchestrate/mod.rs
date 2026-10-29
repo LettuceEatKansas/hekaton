@@ -92,10 +92,16 @@ pub use snapshot::{WindowLine, format_windows};
 
 /// What a call remembers about the world between calls (the Python module globals that
 /// `run_many` deliberately does NOT reset).
+/// How long after a pointer action its marker is still drawn on screenshots.
+pub(crate) const MARK_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Memory {
     /// Screen point of the last pointer action, drawn on the next screenshot (`_LAST_POINT`).
     pub last_point: Option<Point>,
+    /// When `last_point` was set. 2026-10-28: a click minutes old, in a window long closed, was
+    /// still ringed on fresh screenshots, so only a recent one is drawn ([`MARK_MAX_AGE`]).
+    pub last_point_at: std::time::Duration,
     /// The app window that was in front when the model last looked (`_TARGET`).
     pub target: Option<WindowRef>,
     /// Foreground window and focus token just before the last key combo (`_PRE_KEY`).

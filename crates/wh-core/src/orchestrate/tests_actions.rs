@@ -1519,6 +1519,12 @@ fn the_last_point_is_ringed_on_the_next_screenshot() {
         .unwrap();
     let (_, plain) = off.step(json!({"action": "screenshot"})).unwrap();
     assert_ne!(with_ring, plain, "the marker changes the picture");
+    // a click long ago is not drawn on a fresh screenshot
+    kit.clock.advance(std::time::Duration::from_secs(31));
+    let (_, stale) = kit.step(json!({"action": "screenshot"})).unwrap();
+    let never = Kit::with_env(MapEnv::new().with("WINHANDS_IMG", "png"));
+    let (_, unclicked) = never.step(json!({"action": "screenshot"})).unwrap();
+    assert_eq!(stale, unclicked, "a stale marker is dropped");
 }
 
 // Ported from test_zoom_never_upscales_more_than_2x, test_zoom_never_exceeds_shot_long and
