@@ -26,4 +26,10 @@ fn main() {
     time("window_info", 50, || b.window_info(w));
     time("list_windows", 50, || b.list_windows(false));
     time("window_at_point", 50, || b.window_at_point(wh_core::backend::Point { x: 700, y: 500 }));
+    let screen = b.virtual_screen().unwrap();
+    time("capture_preview cold", 1, || b.capture_preview(screen, 320, 180));
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    time("capture_preview", 20, || b.capture_preview(screen, 320, 180));
+    time("capture_full", 10, || b.capture(wh_core::backend::CaptureTarget::Display(1)));
+    time("focus_token", 20, || b.focus_token());
 }

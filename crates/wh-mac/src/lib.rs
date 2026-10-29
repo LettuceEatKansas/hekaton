@@ -45,6 +45,8 @@ mod perm;
 #[cfg(target_os = "macos")]
 mod procs;
 #[cfg(target_os = "macos")]
+mod stream;
+#[cfg(target_os = "macos")]
 mod text;
 #[cfg(target_os = "macos")]
 mod tree;

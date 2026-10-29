@@ -690,6 +690,7 @@ impl Ctx<'_> {
     // ------------------------------------------------------------------ keyboard
 
     fn keyboard(&self, step: &Args, action: &str, text: &str) -> StepResult<String> {
+        let _p = crate::prof::span("keyboard");
         let fg = self.be().foreground_window().ok().flatten();
         let is_key = action == "key" || action == "hold_key";
         let combo_now = if is_key {
@@ -776,7 +777,10 @@ impl Ctx<'_> {
                 } else {
                     None
                 };
-                self.send_combo(&combo, reps)?;
+                {
+                    let _p = crate::prof::span("send_combo");
+                    self.send_combo(&combo, reps)?;
+                }
                 let mut note = format!("pressed {combo}");
                 if COPY_COMBOS.contains(&combo.as_str()) {
                     note.push_str(&self.copy_result(seq0));

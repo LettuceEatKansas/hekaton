@@ -67,6 +67,7 @@ objc2-screen-capture-kit = { workspace = true, features = [
     "SCShareableContent",
     "SCStream",
     "block2",
+    "dispatch2",
     "libc",
     "objc2-core-foundation",
     "objc2-core-graphics",

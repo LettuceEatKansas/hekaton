@@ -45,6 +45,7 @@ type DisplayCache = Option<(Instant, Vec<(u32, Shared<Retained<SCDisplay>>)>)>;
 #[derive(Default)]
 pub(crate) struct Capturer {
     displays: Mutex<DisplayCache>,
+    feeds: crate::stream::Feeds,
 }
 
 fn os(msg: impl Into<String>) -> BackendError {
@@ -285,6 +286,47 @@ impl Capturer {
         Ok(fresh)
     }
 
+    /// The newest streamed frame of `display` and its pixels per point (see [`crate::stream`]).
+    fn live_frame(
+        &self,
+        display: &DisplayInfo,
+        deadline: Instant,
+    ) -> Option<(crate::stream::Frame, f64)> {
+        self.feeds
+            .frame(display.cg_id, display.rect, display.scale, || {
+                self.display_objects(false, deadline)
+                    .ok()?
+                    .into_iter()
+                    .find(|(id, _)| *id == display.cg_id)
+                    .map(|(_, d)| d.0)
+            })
+    }
+
+    /// `relative` (points from the display's top left) of a streamed frame at `out_w` x `out_h`, or
+    /// `None` when no frame is ready or the stream holds fewer pixels than asked for.
+    fn from_stream(
+        &self,
+        display: &DisplayInfo,
+        relative: Rect,
+        out_w: u32,
+        out_h: u32,
+        deadline: Instant,
+    ) -> Option<Image> {
+        let (frame, per_point) = self.live_frame(display, deadline)?;
+        let px = |v: i32| (f64::from(v) * per_point).round() as i32;
+        let src = Rect {
+            left: px(relative.left),
+            top: px(relative.top),
+            right: px(relative.right),
+            bottom: px(relative.bottom),
+        };
+        if i64::from(out_w) > i64::from(src.width()) + 1 {
+            // a zoom wants more detail than the stream keeps
+            return None;
+        }
+        frame.read(src, out_w, out_h)
+    }
+
     /// Capture the region a [`CapturePlan`] describes, one ScreenCaptureKit call per display.
     pub(crate) fn capture_plan(
         &self,
@@ -296,9 +338,20 @@ impl Capturer {
         let mut canvas = Canvas::new(plan.width, plan.height);
         for part in &plan.parts {
             remaining(deadline)?;
-            let cg_id = displays[part.display].cg_id;
-            let img =
-                self.capture_display_rect(cg_id, part.relative, part.width, part.height, deadline)?;
+            let display = &displays[part.display];
+            if let Some(img) =
+                self.from_stream(display, part.relative, part.width, part.height, deadline)
+            {
+                canvas.blit(img.rgba(), img.width(), img.height(), part.dest_x, part.dest_y);
+                continue;
+            }
+            let img = self.capture_display_rect(
+                display.cg_id,
+                part.relative,
+                part.width,
+                part.height,
+                deadline,
+            )?;
             let (w, h, rgba) = cgimage_to_rgba(&img)?;
             canvas.blit(&rgba, w, h, part.dest_x, part.dest_y);
         }
@@ -360,14 +413,17 @@ impl Capturer {
     /// change detection, so origin and scale are left at their defaults.
     pub(crate) fn capture_small(
         &self,
-        cg_id: u32,
+        display: &DisplayInfo,
         relative: Rect,
         width: u32,
         height: u32,
         deadline: Instant,
     ) -> BackendResult<Image> {
         perm::require_screen_capture("take screenshots")?;
-        let img = self.capture_display_rect(cg_id, relative, width, height, deadline)?;
+        if let Some(img) = self.from_stream(display, relative, width, height, deadline) {
+            return Ok(img);
+        }
+        let img = self.capture_display_rect(display.cg_id, relative, width, height, deadline)?;
         let (w, h, rgba) = cgimage_to_rgba(&img)?;
         Ok(Image::new(w, h, rgba)?)
     }

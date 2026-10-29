@@ -31,7 +31,14 @@ pub struct MacBackend {
     registry: Registry,
     procs: Procs,
     hotkeys: Hotkeys,
+    /// The last few `window_info` answers. One key press asks for the same window's details six
+    /// times over in its safety checks, ~2 ms each from the window server (2026-10-29 profile).
+    info_cache: std::sync::Mutex<Vec<(std::time::Instant, WindowRef, WindowInfo)>>,
 }
+
+/// How long a cached `window_info` answer stays good. Short enough that a window the user drags or
+/// retitles is read fresh on the next step; long enough to cover one step's guards.
+const INFO_TTL: Duration = Duration::from_millis(60);
 
 /// Seconds east of UTC in the user's time zone at a Unix time.
 fn local_offset(unix_secs: i64) -> BackendResult<i32> {
@@ -62,6 +69,13 @@ impl MacBackend {
             registry: Registry::default(),
             procs: Procs::default(),
             hotkeys: Hotkeys::default(),
+            info_cache: std::sync::Mutex::default(),
+        }
+    }
+
+    fn forget_info(&self) {
+        if let Ok(mut c) = self.info_cache.lock() {
+            c.clear();
         }
     }
 
@@ -126,7 +140,7 @@ impl MacBackend {
             return self.capturer.capture_plan(&plan, &list, deadline);
         };
         self.capturer
-            .capture_small(list[part.display].cg_id, part.relative, width, height, deadline)
+            .capture_small(&list[part.display], part.relative, width, height, deadline)
     }
 }
 
@@ -221,7 +235,21 @@ impl Backend for MacBackend {
     }
 
     fn window_info(&self, window: WindowRef) -> BackendResult<WindowInfo> {
-        winlist::info(window, &self.display_rects())
+        let now = std::time::Instant::now();
+        if let Ok(mut c) = self.info_cache.lock() {
+            c.retain(|(t, _, _)| now.duration_since(*t) < INFO_TTL);
+            if let Some((_, _, info)) = c.iter().find(|(_, w, _)| *w == window) {
+                return Ok(info.clone());
+            }
+        }
+        let info = winlist::info(window, &self.display_rects())?;
+        if let Ok(mut c) = self.info_cache.lock() {
+            if c.len() >= 8 {
+                c.remove(0);
+            }
+            c.push((now, window, info.clone()));
+        }
+        Ok(info)
     }
 
     fn foreground_window(&self) -> BackendResult<Option<WindowRef>> {
@@ -252,10 +280,12 @@ impl Backend for MacBackend {
     }
 
     fn bring_to_foreground(&self, window: WindowRef) -> BackendResult<()> {
+        self.forget_info();
         winlist::bring_to_front(window, &self.display_rects())
     }
 
     fn restore_window(&self, window: WindowRef, timeout: Duration) -> BackendResult<()> {
+        self.forget_info();
         winlist::restore(window, timeout)
     }
 
@@ -493,6 +523,7 @@ impl Backend for MacBackend {
     }
 
     fn window_op(&self, window: WindowRef, op: WindowOp) -> BackendResult<()> {
+        self.forget_info();
         winops::op(window, op)
     }
 
