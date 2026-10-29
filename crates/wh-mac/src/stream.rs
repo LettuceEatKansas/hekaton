@@ -179,7 +179,7 @@ fn scale_bgra(
             let from = (sy + y) * row + sx * 4;
             let src = &px[from..from + sw * 4];
             let dst = &mut out[y * out_w * 4..(y + 1) * out_w * 4];
-            for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
                 d[0] = s[2];
                 d[1] = s[1];
                 d[2] = s[0];

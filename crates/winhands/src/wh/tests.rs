@@ -750,7 +750,7 @@ fn pictures_are_written_to_files_and_their_paths_printed() {
     );
     assert_eq!(r.code, 0);
     let line = r.out.lines().last().unwrap();
-    assert!(line.ends_with("winhands-shot1.jpg"), "{line}");
+    assert!(line.contains("winhands-shot") && line.ends_with("-1.jpg"), "{line}");
     assert_eq!(std::fs::read(line).unwrap(), b"\x89PNG-fake");
 }
 

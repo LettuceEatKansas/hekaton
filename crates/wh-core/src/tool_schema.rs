@@ -48,12 +48,48 @@ pub fn input_schema() -> Value {
     SCHEMA.clone()
 }
 
+/// Top-level parameters only the Windows Excel channel reads.
+const EXCEL_PARAMS: [&str; 15] = [
+    "workbook", "sheet", "range", "values", "formulas", "kind", "rule", "value", "value2", "color",
+    "title", "rows", "columns", "sum_field", "anchor",
+];
+
+/// The description this platform serves. Off Windows there is no Excel channel, so its line goes:
+/// a model reads the definition every turn, and the line and its parameters are ~190 tokens.
+pub fn served_description() -> &'static str {
+    static OFF_WINDOWS: LazyLock<String> = LazyLock::new(|| {
+        TOOL_DESCRIPTION
+            .lines()
+            .filter(|l| !l.starts_with("Excel (owner opt-in)"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    if cfg!(windows) {
+        TOOL_DESCRIPTION
+    } else {
+        &OFF_WINDOWS
+    }
+}
+
+/// The input schema this platform serves: without the Excel parameters off Windows.
+pub fn served_schema() -> Value {
+    let mut schema = input_schema();
+    if !cfg!(windows)
+        && let Some(props) = schema["properties"].as_object_mut()
+    {
+        for p in EXCEL_PARAMS {
+            props.remove(p);
+        }
+    }
+    schema
+}
+
 /// `{"name", "description", "inputSchema"}`, the object an MCP `tools/list` answer carries.
 pub fn tool_definition() -> Value {
     json!({
         "name": TOOL_NAME,
-        "description": TOOL_DESCRIPTION,
-        "inputSchema": input_schema(),
+        "description": served_description(),
+        "inputSchema": served_schema(),
     })
 }
 
@@ -204,8 +240,27 @@ mod tests {
     fn the_tool_definition_is_the_three_fields_an_mcp_client_reads() {
         let d = tool_definition();
         assert_eq!(d["name"], "computer");
-        assert_eq!(d["description"], TOOL_DESCRIPTION);
-        assert_eq!(d["inputSchema"], input_schema());
+        assert_eq!(d["description"], served_description());
+        assert_eq!(d["inputSchema"], served_schema());
         assert_eq!(d.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn the_served_definition_drops_excel_only_off_windows() {
+        let d = served_description();
+        let props = served_schema()["properties"].as_object().cloned().unwrap();
+        if cfg!(windows) {
+            assert_eq!(d, TOOL_DESCRIPTION);
+            assert!(props.contains_key("workbook"));
+        } else {
+            assert!(!d.contains("excel("));
+            assert!(d.contains("recipe_list") && d.contains("press("));
+            assert!(!props.contains_key("workbook") && !props.contains_key("sum_field"));
+            assert!(props.contains_key("only_apps") && props.contains_key("name"));
+            assert!(TOOL_DESCRIPTION.chars().count() - d.chars().count() > 300);
+        }
+        for p in EXCEL_PARAMS {
+            assert!(input_schema()["properties"].get(p).is_some(), "{p} is not a schema parameter");
+        }
     }
 }

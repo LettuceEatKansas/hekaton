@@ -1410,6 +1410,22 @@ fn list_windows_lists_hidden_ones_on_request() {
     assert!(all.contains("[cloaked]"));
 }
 
+// 2026-10-29 leads run: the owner's mail window title showed up in a task scoped to two apps.
+#[test]
+fn list_windows_under_only_apps_names_only_allowed_windows() {
+    let kit = Kit::new();
+    kit.window("Untitled - Notepad", "notepad.exe", 1, Rect::from_xywh(0, 0, 10, 10));
+    kit.window("Inbox - Mail", "outlook.exe", 2, Rect::from_xywh(0, 0, 10, 10));
+    let (out, _) = kit
+        .step_only(&["notepad.exe"], json!({"action": "list_windows"}))
+        .unwrap();
+    assert!(out.contains("Untitled - Notepad"), "{out}");
+    assert!(!out.contains("Inbox"), "{out}");
+    assert!(out.ends_with("(1 windows of apps outside only_apps not shown)"), "{out}");
+    let (plain, _) = kit.step(json!({"action": "list_windows"})).unwrap();
+    assert!(plain.contains("Inbox"), "{plain}");
+}
+
 // ---------------------------------------------------------------------------- expect
 
 fn expect_kit() -> Kit {

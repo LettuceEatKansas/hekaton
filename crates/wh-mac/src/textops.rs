@@ -122,6 +122,28 @@ pub(crate) fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
+/// Does an app draw text with its own engine rather than AppKit: a Chromium or Electron shell (named
+/// by a framework in its bundle) or a Gecko browser (by bundle id)? Their text boxes take an
+/// accessibility write without updating what the app itself holds.
+pub(crate) fn own_text_engine(
+    bundle_id: &str,
+    frameworks: impl IntoIterator<Item = String>,
+) -> bool {
+    let id = bundle_id.to_lowercase();
+    if id.starts_with("org.mozilla.") || id.starts_with("app.zen-browser") {
+        return true;
+    }
+    frameworks.into_iter().any(|f| {
+        let f = f.to_lowercase();
+        f.starts_with("electron framework")
+            || f.contains("chromium")
+            || f.contains("chrome framework")
+            || f.contains("browser framework")
+            || f.contains("edge framework")
+            || f.starts_with("cef")
+    })
+}
+
 // ------------------------------------------------------------------------------------ lines and search
 
 /// The line holding UTF-16 offset `idx`, as `(start, end)` with `end` before the newline.
@@ -327,6 +349,18 @@ pub(crate) fn drag_path(from: Point, to: Point) -> Vec<Point> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chromium_electron_and_gecko_apps_have_their_own_text_engine() {
+        let fw = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(own_text_engine("com.brave.Browser", fw(&["Brave Browser Framework.framework"])));
+        assert!(own_text_engine("com.google.Chrome", fw(&["Google Chrome Framework.framework"])));
+        assert!(own_text_engine("com.tinyspeck.slackmacgap", fw(&["Electron Framework.framework", "Squirrel.framework"])));
+        assert!(own_text_engine("org.mozilla.firefox", fw(&[])));
+        assert!(!own_text_engine("com.apple.TextEdit", fw(&[])));
+        assert!(!own_text_engine("com.apple.Safari", fw(&[])));
+        assert!(!own_text_engine("com.example.app", fw(&["Sparkle.framework"])));
+    }
+
     use super::*;
 
     #[test]

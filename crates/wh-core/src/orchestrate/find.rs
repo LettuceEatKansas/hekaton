@@ -1196,9 +1196,19 @@ impl Ctx<'_> {
     /// UIA text and no Find. find_text and zoom only see what is on screen, so a model scrolled for 20
     /// steps, skipped past the line and ran out. A person presses ctrl+f; this is the tool's ctrl+f
     /// for any document. Python `_read_text`.
-    pub(crate) fn read_text(&self, query: &str) -> StepResult<String> {
+    ///
+    /// 2026-10-29: `window` names the window to read. A leads run read_text(window="Untitled") with
+    /// the browser in front and was refused for the browser's app; now the named window is read
+    /// (its UIA text needs no focus; the copy fallback brings it to the front first).
+    pub(crate) fn read_text(&self, query: &str, window: &str) -> StepResult<String> {
         const MAX_CHARS: usize = 6000;
-        let Some(root) = self.fg_root() else {
+        let fg = self.fg_root();
+        let root = if window.trim().is_empty() {
+            fg
+        } else {
+            Some(self.root_of(self.c.window_refs().resolve(Some(window.trim()))?))
+        };
+        let Some(root) = root else {
             return Err(StepError::target("no window is in front to read"));
         };
         self.check_not_protected(root)?;
@@ -1217,6 +1227,10 @@ impl Ctx<'_> {
         let mut text = self.doc_text_uia(root);
         let mut source = "uia";
         if text.trim().is_empty() {
+            if fg != Some(root) {
+                self.be().bring_to_foreground(root)?;
+                self.sleep(0.15);
+            }
             text = self.doc_text_by_copy()?;
             source = "select-all + copy; selection cleared";
         }
@@ -1263,9 +1277,11 @@ impl Ctx<'_> {
                     .join("\n")
             ));
         }
+        // blank lines keep their numbers but are not printed: a web page copy is a third blank
         let mut out = lines
             .iter()
             .enumerate()
+            .filter(|(_, ln)| !ln.trim().is_empty())
             .map(|(i, ln)| format!("{}: {}", i + 1, ln.trim_end()))
             .collect::<Vec<_>>()
             .join("\n");

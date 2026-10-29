@@ -704,6 +704,8 @@ impl Ctx<'_> {
             .var("TEMP")
             .filter(|t| !t.is_empty())
             .or_else(|| env.var("TMP").filter(|t| !t.is_empty()))
+            // macOS names its per-user temp folder TMPDIR (2026-10-29 leads run: save_to refused)
+            .or_else(|| env.var("TMPDIR").filter(|t| !t.is_empty()))
             .unwrap_or_default();
         if temp.is_empty() {
             return Err(StepError::target(

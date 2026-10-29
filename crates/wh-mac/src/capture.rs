@@ -304,7 +304,7 @@ impl Capturer {
 
     /// `relative` (points from the display's top left) of a streamed frame at `out_w` x `out_h`, or
     /// `None` when no frame is ready or the stream holds fewer pixels than asked for.
-    fn from_stream(
+    fn streamed(
         &self,
         display: &DisplayInfo,
         relative: Rect,
@@ -340,7 +340,7 @@ impl Capturer {
             remaining(deadline)?;
             let display = &displays[part.display];
             if let Some(img) =
-                self.from_stream(display, part.relative, part.width, part.height, deadline)
+                self.streamed(display, part.relative, part.width, part.height, deadline)
             {
                 canvas.blit(img.rgba(), img.width(), img.height(), part.dest_x, part.dest_y);
                 continue;
@@ -420,12 +420,12 @@ impl Capturer {
         deadline: Instant,
     ) -> BackendResult<Image> {
         perm::require_screen_capture("take screenshots")?;
-        if let Some(img) = self.from_stream(display, relative, width, height, deadline) {
+        if let Some(img) = self.streamed(display, relative, width, height, deadline) {
             return Ok(img);
         }
         let img = self.capture_display_rect(display.cg_id, relative, width, height, deadline)?;
         let (w, h, rgba) = cgimage_to_rgba(&img)?;
-        Ok(Image::new(w, h, rgba)?)
+        Image::new(w, h, rgba)
     }
 
     /// Capture one window's own pixels (even when covered), at `scale` pixels per point.

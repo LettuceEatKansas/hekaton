@@ -252,8 +252,22 @@ impl Ctx<'_> {
                 return Ok((format!("cursor at {}", self.pt(p.x, p.y)), None));
             }
             "list_windows" => {
-                let wins = self.c.window_refs().list(is_truthy(step, "all"))?;
-                return Ok((super::refs::format_windows(&wins).join("\n"), None));
+                let mut wins = self.c.window_refs().list(is_truthy(step, "all"))?;
+                // 2026-10-29 leads run: under only_apps the list still named every other app's
+                // window, the owner's mail title included. Those windows cannot be used anyway, so
+                // they are counted, not named.
+                let before = wins.len();
+                if !self.o.only_apps.is_empty() {
+                    wins.retain(|w| self.check_allowed(w.window).is_ok());
+                }
+                let mut lines = super::refs::format_windows(&wins);
+                if wins.len() < before {
+                    lines.push(format!(
+                        "({} windows of apps outside only_apps not shown)",
+                        before - wins.len()
+                    ));
+                }
+                return Ok((lines.join("\n"), None));
             }
             "read" => {
                 // UIA first: the window's elements as `N Type "name" [state]`, no picture needed.
@@ -326,7 +340,7 @@ impl Ctx<'_> {
             "read_text" => {
                 // Sends select-all / copy only when the app exposes no text to UIA, so it is an
                 // acting step.
-                self.read_text(&text)?
+                self.read_text(&text, &text_arg(step, "window"))?
             }
             "file_dialog" => {
                 if text.is_empty() {

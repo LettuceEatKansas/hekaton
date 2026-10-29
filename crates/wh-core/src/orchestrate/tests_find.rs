@@ -605,7 +605,7 @@ fn read_text_finds_the_line_in_a_long_uia_document() {
     let (kit, w) = tk_kit();
     kit.fake.set_document(w, &log_text());
     let chords = kit.fake.events();
-    let out = kit.ctx(json!({})).read_text("access code").unwrap();
+    let out = kit.ctx(json!({})).read_text("access code", "").unwrap();
     assert!(
         out.contains("180 lines") && out.contains("97: 097 access code: KX-6968"),
         "{out}"
@@ -616,7 +616,7 @@ fn read_text_finds_the_line_in_a_long_uia_document() {
         chords,
         "no keystrokes: the document gave its own text"
     );
-    let whole = kit.ctx(json!({})).read_text("").unwrap();
+    let whole = kit.ctx(json!({})).read_text("", "").unwrap();
     assert!(
         whole
             .starts_with("read_text (uia, exact characters, 180 lines):\n1: 001 routine log entry"),
@@ -626,7 +626,7 @@ fn read_text_finds_the_line_in_a_long_uia_document() {
         whole.ends_with("180: 180 routine log entry"),
         "short enough to come back whole: {whole}"
     );
-    let none = kit.ctx(json!({})).read_text("zzz").unwrap();
+    let none = kit.ctx(json!({})).read_text("zzz", "").unwrap();
     assert_eq!(
         none,
         "read_text (uia, exact characters, 180 lines): no line contains 'zzz'"
@@ -640,7 +640,7 @@ fn a_long_document_is_cut_with_a_pointer_to_the_search() {
         .map(|i| format!("{i:03} {}\n", "x".repeat(40)))
         .collect();
     kit.fake.set_document(w, &long);
-    let out = kit.ctx(json!({})).read_text("").unwrap();
+    let out = kit.ctx(json!({})).read_text("", "").unwrap();
     assert!(
         out.ends_with("\n(cut here; pass text = a word to get only the lines that contain it)"),
         "{out}"
@@ -656,7 +656,7 @@ fn a_long_document_is_cut_with_a_pointer_to_the_search() {
 fn read_text_counts_extra_matches() {
     let (kit, w) = tk_kit();
     kit.fake.set_document(w, &log_text());
-    let out = kit.ctx(json!({})).read_text("routine").unwrap();
+    let out = kit.ctx(json!({})).read_text("routine", "").unwrap();
     assert!(out.contains("179 contain 'routine':"), "{out}");
     assert!(out.ends_with("(149 more matching lines)"), "{out}");
     assert_eq!(
@@ -683,7 +683,7 @@ fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
             fake.set_clipboard(ClipboardContent::Text(body.clone()));
         }
     });
-    let out = kit.ctx(json!({})).read_text("").unwrap();
+    let out = kit.ctx(json!({})).read_text("", "").unwrap();
     assert!(
         out.starts_with(
             "read_text (select-all + copy; selection cleared, exact characters, 180 lines)"
@@ -708,7 +708,7 @@ fn read_text_refuses_when_the_clipboard_holds_files_and_when_nothing_comes_back(
     let (kit, _w) = tk_kit();
     kit.fake
         .set_clipboard(ClipboardContent::Files(vec!["C:\\a.txt".into()]));
-    let err = kit.ctx(json!({})).read_text("").unwrap_err();
+    let err = kit.ctx(json!({})).read_text("", "").unwrap_err();
     assert_eq!(
         err.message(),
         "read_text needs the clipboard, which holds copied files right now; paste them first, then read"
@@ -717,7 +717,7 @@ fn read_text_refuses_when_the_clipboard_holds_files_and_when_nothing_comes_back(
     // nothing copied: the window draws its text as pictures
     kit.fake
         .set_clipboard(ClipboardContent::Text("mine".into()));
-    let out = kit.ctx(json!({})).read_text("").unwrap();
+    let out = kit.ctx(json!({})).read_text("", "").unwrap();
     assert_eq!(
         out,
         "read_text: the front window gave no text (it may draw its text as pictures); use zoom"
@@ -738,13 +738,13 @@ fn read_text_refuses_explorer_and_the_allowlist_still_applies() {
     let w = kit.front("Docs", "explorer.exe", 4);
     kit.fake
         .update_window(w, |i| i.class = "CabinetWClass".into());
-    let err = kit.ctx(json!({})).read_text("x").unwrap_err();
+    let err = kit.ctx(json!({})).read_text("x", "").unwrap_err();
     assert!(matches!(err, StepError::Target(_)));
     assert!(err.message().contains("list_files"), "{err}");
     let (kit, _) = tk_kit();
     let err = kit
         .ctx(json!({"only_apps": ["notepad.exe"]}))
-        .read_text("x")
+        .read_text("x", "")
         .unwrap_err();
     assert!(
         err.message()
@@ -753,7 +753,7 @@ fn read_text_refuses_explorer_and_the_allowlist_still_applies() {
     );
     let empty = plain_kit();
     assert_eq!(
-        empty.ctx(json!({})).read_text("").unwrap_err().message(),
+        empty.ctx(json!({})).read_text("", "").unwrap_err().message(),
         "no window is in front to read"
     );
     // a protected process is refused too
@@ -761,7 +761,7 @@ fn read_text_refuses_explorer_and_the_allowlist_still_applies() {
     std::fs::create_dir_all(kit.computer.config().paths().dir()).unwrap();
     std::fs::write(kit.computer.config().paths().protected(), "pythonw.exe").unwrap();
     assert!(matches!(
-        kit.ctx(json!({})).read_text("").unwrap_err(),
+        kit.ctx(json!({})).read_text("", "").unwrap_err(),
         StepError::Permission(_)
     ));
 }
@@ -812,4 +812,22 @@ fn a_link_and_its_own_text_at_one_spot_are_one_match() {
     );
     let cands = kit.ctx(json!({})).locate_text("learn more").unwrap();
     assert_eq!(cands.len(), 2, "{cands:?}");
+}
+
+// 2026-10-29 leads run: read_text(window="Untitled") with the browser in front read the browser.
+#[test]
+fn read_text_reads_the_named_window_not_the_front_one() {
+    let kit = plain_kit();
+    let doc = kit.window("Untitled", "TextEdit", 7, Rect::from_xywh(10, 10, 400, 300));
+    kit.fake.set_document(doc, "Name | Handle\nDrew Binsky | @drewbinsky");
+    let page = kit.front("YouTube", "Brave Browser", 8);
+    kit.fake.set_document(page, "Subscribe\nHome");
+    let out = kit
+        .ctx(json!({"only_apps": ["TextEdit"]}))
+        .read_text("", "Untitled")
+        .unwrap();
+    assert!(out.contains("2: Drew Binsky | @drewbinsky"), "{out}");
+    assert!(!out.contains("Subscribe"), "{out}");
+    use crate::backend::Backend;
+    assert_eq!(kit.fake.foreground_window().unwrap(), Some(page), "UIA text needs no focus change");
 }

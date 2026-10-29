@@ -149,12 +149,15 @@ pub(crate) fn make_element(id: ElementId, props: &Props, window_rect: Option<Rec
     ) {
         state.selected = props.selected;
     }
+    // 2026-10-29: Chromium answers AXExpanded=false for every group and link on a page, so a
+    // YouTube read was dozens of `AXGroup "" [collapsed]` lines. "collapsed" is only kept for roles
+    // that actually open; "expanded" is always real.
     if let Some(open) = props.expanded.or(props.disclosing) {
-        state.expanded = Some(if open {
-            Expand::Expanded
-        } else {
-            Expand::Collapsed
-        });
+        if open {
+            state.expanded = Some(Expand::Expanded);
+        } else if can_expand(&props.role) {
+            state.expanded = Some(Expand::Collapsed);
+        }
     }
 
     let mut affordances = Vec::new();
@@ -195,6 +198,24 @@ pub(crate) fn make_element(id: ElementId, props: &Props, window_rect: Option<Rec
         affordances,
         children: Vec::new(),
     }
+}
+
+/// AX roles whose collapsed state means something (they open a list, menu or subtree).
+fn can_expand(ax_role: &str) -> bool {
+    matches!(
+        ax_role,
+        "AXButton"
+            | "AXPopUpButton"
+            | "AXMenuButton"
+            | "AXDisclosureTriangle"
+            | "AXComboBox"
+            | "AXRow"
+            | "AXOutlineRow"
+            | "AXMenuItem"
+            | "AXMenuBarItem"
+            | "AXTreeItem"
+            | "AXDisclosure"
+    )
 }
 
 struct Node {

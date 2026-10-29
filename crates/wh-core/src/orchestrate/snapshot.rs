@@ -33,6 +33,15 @@ static JUNK: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("JUNK")
 });
+/// macOS containers with no name and no value (`AXGroup "" =""`): a web page on Mac is mostly these,
+/// and nobody clicks a nameless group by number (2026-10-29: 30 of the first 44 lines of a YouTube
+/// read). Windows roles are left to JUNK, since a nameless pane there can be a canvas worth clicking.
+static MAC_EMPTY_CONTAINER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"^\d+ AX(?:Group|GenericElement|Section|List|ScrollArea|SplitGroup|LayoutArea|Unknown|Grid|Column) "" (?:\[\w+\] )*(?:="" )?@-?\d+,-?\d+$"#,
+    )
+    .expect("MAC_EMPTY_CONTAINER")
+});
 static TYPE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+) (\w+?)Control ").expect("TYPE_RE"));
 static COORD_RE: LazyLock<Regex> =
@@ -97,7 +106,7 @@ pub(crate) fn render_snapshot(
     let mut body: Vec<&String> = lines
         .iter()
         .filter(|l| !l.starts_with("window ") && l.as_str() != "(truncated)")
-        .filter(|l| !JUNK.is_match(l))
+        .filter(|l| !JUNK.is_match(l) && !MAC_EMPTY_CONTAINER.is_match(l))
         .collect();
     if !filter.is_empty() {
         let f = filter.to_lowercase();
@@ -240,6 +249,27 @@ mod tests {
     use crate::orchestrate::testkit::Kit;
 
     // ---- ported from tests/test_20260919_fixes.py ----
+
+    #[test]
+    fn nameless_mac_containers_are_dropped_but_named_ones_and_windows_panes_stay() {
+        let lines: Vec<String> = [
+            "window \"Dale Philip - YouTube\"",
+            "0 AXButton \"Back\" =\"\" @20,50",
+            "1 AXGroup \"\" =\"\" @300,400",
+            "2 AXGroup \"\" [collapsed] =\"\" @300,420",
+            "3 AXGroup \"Comments\" =\"\" @300,440",
+            "4 AXGroup \"\" =\"3.74M\" @300,460",
+            "5 PaneControl \"\" @300,480",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let out = render_snapshot(&lines, 40, "", false);
+        assert!(!out.contains("1 AXGroup") && !out.contains("2 AXGroup"), "{out}");
+        assert!(out.contains("3 AXGroup \"Comments\""), "{out}");
+        assert!(out.contains("4 AXGroup \"\" =\"3.74M\""), "{out}");
+        assert!(out.contains("5 Pane"), "{out}");
+    }
 
     #[test]
     fn snapshot_filter_applies_before_cap() {

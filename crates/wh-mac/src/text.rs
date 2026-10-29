@@ -241,6 +241,7 @@ pub(crate) fn insert_text(text: &str) -> BackendResult<bool> {
     ) || is_secure_field(&p.role, p.subrole.as_deref())
         || (text.contains('\n') && p.role != "AXTextArea")
         || in_web_content(&ax)
+        || !ax.pid().is_some_and(appkit_text_app)
         || !ax.is_settable("AXSelectedText")
     {
         return Ok(false);
@@ -270,6 +271,37 @@ pub(crate) fn insert_text(text: &str) -> BackendResult<bool> {
         // Something changed: typing again would double it.
         _ => Ok(true),
     }
+}
+
+/// Does this app draw its text boxes with AppKit, whose `AXSelectedText` write is a real edit?
+/// Chromium and Electron apps (their own views even outside a page: Brave's address bar took the
+/// write and kept its old URL, 2026-10-29) and Firefox get real keys. Cached per pid.
+fn appkit_text_app(pid: i32) -> bool {
+    static CACHE: std::sync::Mutex<Vec<(i32, bool)>> = std::sync::Mutex::new(Vec::new());
+    if let Some(&(_, ok)) = CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(p, _)| *p == pid)
+    {
+        return ok;
+    }
+    let ok = crate::apps::bundle_path(pid).is_some_and(|path| {
+        !crate::textops::own_text_engine(
+            &crate::apps::bundle_id(pid),
+            std::fs::read_dir(std::path::Path::new(&path).join("Contents/Frameworks"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned()),
+        )
+    });
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() > 64 {
+        cache.clear();
+    }
+    cache.push((pid, ok));
+    ok
 }
 
 /// Is this element inside a web page (a browser tab, an Electron app)? Their editors take an

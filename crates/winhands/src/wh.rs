@@ -528,6 +528,13 @@ pub fn run(
         let _ = writeln!(out, "{text}");
     }
     if let Some(Value::Array(content)) = data.get("content") {
+        // 2026-10-29 leads run: every call wrote winhands-shot1.jpg, so a zoom in the next call
+        // replaced a picture the model had not looked at yet. Each call now gets its own names, and
+        // pictures older than ten minutes are dropped so the temp folder does not fill up.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() % 100_000_000);
+        prune_old_shots(temp_dir);
         for (i, item) in content.iter().enumerate() {
             // computer / capture_after results carry their picture here
             if item.get("type").and_then(Value::as_str) == Some("image") {
@@ -539,7 +546,7 @@ pub fn run(
                 };
                 let data64 = item.get("data").and_then(Value::as_str).unwrap_or("");
                 if let Some(bytes) = decode_base64(data64) {
-                    let path = temp_dir.join(format!("winhands-shot{i}{ext}"));
+                    let path = temp_dir.join(format!("winhands-shot{stamp}-{i}{ext}"));
                     if std::fs::write(&path, bytes).is_ok() {
                         let _ = writeln!(out, "{}", path.display());
                     }
@@ -555,6 +562,28 @@ pub fn run(
     }
     let ok = data.get("ok").is_none_or(wh_core::config::truthy);
     if reply.status == 200 && ok { 0 } else { 1 }
+}
+
+/// Remove this client's own pictures (`winhands-shot<stamp>-<i>.jpg|png`) older than ten minutes.
+fn prune_old_shots(temp_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(temp_dir) else { return };
+    let cutoff = std::time::Duration::from_secs(600);
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let ours = name.starts_with("winhands-shot")
+            && name.contains('-')
+            && (name.ends_with(".jpg") || name.ends_with(".png"));
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > cutoff);
+        if ours && old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 fn decode_base64(text: &str) -> Option<Vec<u8>> {

@@ -17,7 +17,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServiceExt};
 use serde_json::{Map, Value};
 use wh_core::mcp::{
-    self, Block, Reply, ShimDefaults, TOOL_DESCRIPTION, TOOL_NAME, build_payload,
+    self, Block, Reply, ShimDefaults, TOOL_NAME, build_payload,
     reply_from_daemon, timeout_message,
 };
 
@@ -53,7 +53,14 @@ impl Activity {
 
 /// The one tool, as `list_tools` serves it.
 pub fn tool_definition() -> Tool {
-    Tool::new(TOOL_NAME, TOOL_DESCRIPTION, Arc::new(mcp::input_schema()))
+    Tool::new(
+        TOOL_NAME,
+        wh_core::tool_schema::served_description(),
+        Arc::new(match wh_core::tool_schema::served_schema() {
+            Value::Object(m) => m,
+            _ => mcp::input_schema(),
+        }),
+    )
 }
 
 /// One MCP call to the daemon and back: the payload the Python shim builds, the request with its
@@ -347,10 +354,13 @@ mod tests {
     fn the_tool_is_the_python_tool() {
         let t = tool_definition();
         assert_eq!(t.name, "computer");
-        assert_eq!(t.description.as_deref(), Some(TOOL_DESCRIPTION));
+        assert_eq!(
+            t.description.as_deref(),
+            Some(wh_core::tool_schema::served_description())
+        );
         assert_eq!(
             Value::Object((*t.input_schema).clone()),
-            Value::Object(mcp::input_schema())
+            wh_core::tool_schema::served_schema()
         );
     }
 
