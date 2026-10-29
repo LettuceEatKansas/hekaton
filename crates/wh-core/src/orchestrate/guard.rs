@@ -48,6 +48,19 @@ const IRREVERSIBLE_WORDS: &[&str] = &[
     "post",
     "publish",
     "uninstall",
+    // Browser permission prompts, sign-in grants, downloads and extensions: one click hands a site
+    // the camera, an account or a file to run.
+    "allow",
+    "always allow",
+    "authorize",
+    "grant access",
+    "download",
+    "add extension",
+    "add to chrome",
+    "add to brave",
+    // Ads: a malicious ad is the usual way a drive-by download starts.
+    "sponsored",
+    "advertisement",
 ];
 
 static IRREVERSIBLE_MATCHERS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
@@ -690,6 +703,33 @@ impl Ctx<'_> {
                     py_repr(word)
                 )));
             }
+        }
+        Ok(())
+    }
+
+    /// Text the agent is about to type or put on the clipboard. A secret (API key, token, private
+    /// key, password assignment, card number) is refused outright: those are entered by the owner,
+    /// never by an agent a web page might be steering. A link carrying a long opaque blob is refused
+    /// unless the call opts in with `allow_irreversible`, because that is how injected pages get
+    /// data smuggled out.
+    pub(crate) fn check_outgoing(&self, args: &Args, text: &str) -> StepResult<()> {
+        if crate::redact::has_secret(text) {
+            return Err(StepError::permission(
+                "refused: the text looks like a secret (API key, token, password or card number); \
+                 the agent never types or copies secrets, ask the owner to enter it",
+            ));
+        }
+        let opted_in =
+            is_truthy(args, "allow_irreversible") && self.cfg().profile().honours_call_opt_in();
+        if crate::redact::looks_like_exfil_url(text)
+            && !opted_in
+            && !self.cfg().profile().unrestricted()
+        {
+            return Err(StepError::permission(
+                "refused: the text is a web address carrying a long encoded blob, the usual way a \
+                 page tricks an agent into sending data out; pass \"allow_irreversible\": true if \
+                 the owner asked for exactly this link",
+            ));
         }
         Ok(())
     }

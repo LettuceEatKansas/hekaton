@@ -207,9 +207,15 @@ mod tests {
         );
         let mac = proc(
             "Hades",
-            Some("/Users/x/Library/Application Support/Steam/steamapps/common/Hades/Hades.app/Contents/MacOS/Hades"),
+            Some(
+                "/Users/x/Library/Application Support/Steam/steamapps/common/Hades/Hades.app/Contents/MacOS/Hades",
+            ),
         );
-        assert_eq!(running_game(&[mac], &none).as_deref(), Some("Hades"), "a Mac Steam library");
+        assert_eq!(
+            running_game(&[mac], &none).as_deref(),
+            Some("Hades"),
+            "a Mac Steam library"
+        );
         let named = BTreeSet::from(["javaw.exe".to_string()]);
         let mc = proc("javaw.exe", None);
         assert_eq!(running_game(&[mc], &named).as_deref(), Some("javaw.exe"));

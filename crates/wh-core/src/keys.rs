@@ -496,7 +496,9 @@ pub fn is_calc_like(text: &str) -> bool {
 /// 2026-10-28 Mac stress test: macOS Calculator took a pasted "12345678" but ignored a pasted
 /// "12345*6789=", and the step still said "typed 11 chars (pasted)".
 pub fn is_arithmetic(text: &str) -> bool {
-    text.chars().count() <= 64 && is_calc_like(text) && text.contains(['*', '/', '+', '-', '=', '%'])
+    text.chars().count() <= 64
+        && is_calc_like(text)
+        && text.contains(['*', '/', '+', '-', '=', '%'])
 }
 
 #[cfg(test)]

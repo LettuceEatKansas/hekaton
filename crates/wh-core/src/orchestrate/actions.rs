@@ -412,6 +412,7 @@ impl Ctx<'_> {
                 if text.is_empty() {
                     return Err(StepError::value("clipboard_set needs text"));
                 }
+                self.check_outgoing(step, &text)?;
                 let n = text.chars().count();
                 let cap = self.cfg().clip_max();
                 if n as i64 > cap {
@@ -767,6 +768,7 @@ impl Ctx<'_> {
                 if text.is_empty() {
                     return Err(StepError::value("type needs text"));
                 }
+                self.check_outgoing(step, text)?;
                 Ok(format!(
                     "typed {} chars{}",
                     text.chars().count(),

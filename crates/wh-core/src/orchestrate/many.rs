@@ -880,8 +880,23 @@ impl Computer {
                 &StepError::permission("request expired before execution; no input sent"),
             );
         }
-        let outcome = self.execute_locked(args, who);
+        let mut outcome = self.execute_locked(args, who);
         self.idle.touch(self.clock.as_ref());
+        // Last stop before the text goes to the model's provider (see `redact`).
+        for text in [&mut outcome.result, &mut outcome.error]
+            .into_iter()
+            .flatten()
+        {
+            if let std::borrow::Cow::Owned(clean) = crate::redact::redact(text) {
+                *text = clean;
+            }
+        }
+        if let Some(text) = &mut outcome.result
+            && crate::redact::looks_like_injection(text)
+        {
+            text.push('\n');
+            text.push_str(crate::redact::INJECTION_NOTE);
+        }
         outcome
     }
 

@@ -80,6 +80,42 @@ fn known_exe(name: &str) -> Option<&'static str> {
 }
 
 /// Windows' `isabs`: a drive and a separator, or a leading separator.
+/// Files that install or run code: disk images, packages, scripts, Windows programs, and a `.app`
+/// that still sits in Downloads or a temp folder. A malicious ad or download lands as one of these.
+pub(crate) fn is_installer(launch: &str) -> bool {
+    static TOKEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#""([^"]*)"|(\S+)"#).expect("TOKEN"));
+    const RUNS_CODE: [&str; 15] = [
+        ".dmg",
+        ".pkg",
+        ".mpkg",
+        ".command",
+        ".sh",
+        ".tool",
+        ".terminal",
+        ".workflow",
+        ".jar",
+        ".msi",
+        ".scr",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".vbs",
+    ];
+    const FRESH: [&str; 4] = ["/downloads/", "/tmp/", "/temp/", "/var/folders/"];
+    let low = launch.to_lowercase().replace('\\', "/");
+    let runs = |t: &str| {
+        let t = t.trim().trim_end_matches('/');
+        RUNS_CODE.iter().any(|e| t.ends_with(e))
+            || ((t.ends_with(".exe") || t.ends_with(".app")) && FRESH.iter().any(|f| t.contains(f)))
+    };
+    // the whole string too: an unquoted path with spaces is one file, not several words
+    runs(low.trim_matches('"'))
+        || TOKEN
+            .captures_iter(&low)
+            .any(|c| runs(c.get(1).or(c.get(2)).map_or("", |m| m.as_str())))
+}
+
 fn is_abs(path: &str) -> bool {
     DRIVE_START.is_match(path) || path.starts_with(['/', '\\'])
 }
@@ -412,6 +448,13 @@ impl Ctx<'_> {
     ) -> StepResult<String> {
         // the owner's hard line
         self.o.policy.check_command(app, "the launch string")?;
+        if is_installer(app) && !self.cfg().profile().unrestricted() {
+            return Err(StepError::permission(format!(
+                "refused: {} is an installer, script or downloaded app; the owner opens those \
+                 themselves",
+                py_repr(app.trim())
+            )));
+        }
         let wins = self.c.window_refs().list(false)?;
         let app_stripped = app.trim().to_string();
         let focus = |w: &WindowLine| -> StepResult<()> {
@@ -790,6 +833,33 @@ mod tests {
     use super::*;
 
     // ---- ported from tests/test_computer.py::test_repair_escapes_* ----
+
+    #[test]
+    fn installers_scripts_and_fresh_downloads_are_spotted() {
+        for yes in [
+            "/Users/jon/Downloads/Setup.dmg",
+            "/usr/bin/open \"/Users/jon/Downloads/Zoom Installer.pkg\"",
+            "~/Desktop/run.command",
+            "/Users/jon/Downloads/Cool App.app",
+            "C:\\Users\\jon\\Downloads\\setup.exe",
+            "explorer.exe \"C:\\Users\\jon\\AppData\\Local\\Temp\\x.msi\"",
+            "powershell.ps1",
+        ] {
+            assert!(is_installer(yes), "{yes}");
+        }
+        for no in [
+            "notepad",
+            "notepad.exe",
+            "viewer.exe --fast",
+            "Safari",
+            "/Applications/TextEdit.app",
+            "explorer.exe \"C:\\Users\\jon\\Downloads\\photos\"",
+            "/usr/bin/open \"/Users/jon/Downloads/report.pdf\"",
+            "/usr/bin/open \"/Users/jon/Downloads/sub folder\"",
+        ] {
+            assert!(!is_installer(no), "{no}");
+        }
+    }
 
     #[test]
     fn repair_escapes_restores_backslashes() {
