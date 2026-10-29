@@ -109,10 +109,39 @@ pub fn type_text_guarded(
     policy
         .check_text(text, "the text to type")
         .map_err(TypeError::Refused)?;
+    // A trailing newline means "and press Enter" (a file name, a search box, a prompt). Pasted, a
+    // single-line box drops it: 2026-10-28, Explorer's rename box kept "New folder" for a pasted
+    // "made-by-hekaton\n" and took the name once Enter was a real key press.
+    let body = text.trim_end_matches(['\r', '\n']);
+    let enters = match text[body.len()..].matches('\n').count() {
+        0 if body.len() < text.len() => 1,
+        n => n,
+    };
+    let outcome = type_body(backend, body, options, guard)?;
+    if enters > 0 {
+        guard()?;
+        backend.key_chord(&[Key::Enter], u32::try_from(enters).unwrap_or(1), guard)?;
+    }
+    Ok(outcome)
+}
+
+fn type_body(
+    backend: &dyn Backend,
+    text: &str,
+    options: &TypeOptions,
+    guard: InputGuard<'_>,
+) -> Result<TypeOutcome, TypeError> {
+    if text.is_empty() {
+        return Ok(TypeOutcome::Typed);
+    }
     if text.chars().count() <= options.paste_over {
-        for ch in text.chars() {
-            let mut buf = [0u8; 4];
-            backend.type_text(ch.encode_utf8(&mut buf), guard)?;
+        for ch in text.chars().filter(|&ch| ch != '\r') {
+            if ch == '\n' {
+                backend.key_chord(&[Key::Enter], 1, guard)?;
+            } else {
+                let mut buf = [0u8; 4];
+                backend.type_text(ch.encode_utf8(&mut buf), guard)?;
+            }
             thread::sleep(KEY_GAP);
         }
         return Ok(TypeOutcome::Typed);
@@ -199,6 +228,44 @@ mod tests {
             ]
         );
         assert_eq!(backend.clipboard_text().unwrap(), "jon's clipboard");
+    }
+
+    #[test]
+    fn a_trailing_newline_is_pasted_as_a_real_enter_press() {
+        let backend = FakeBackend::new();
+        let opts = TypeOptions {
+            paste_over: 6,
+            platform: Platform::Windows,
+        };
+        let out = type_text(&backend, OFF, "made-by-hekaton\n", &opts).unwrap();
+        assert_eq!(out, TypeOutcome::Pasted);
+        let keys: Vec<InputEvent> = backend.events();
+        assert_eq!(
+            &keys[4..],
+            [
+                InputEvent::KeyDown(Key::Enter),
+                InputEvent::KeyUp(Key::Enter)
+            ],
+            "{keys:?}"
+        );
+        assert!(
+            backend
+                .clipboard_history()
+                .iter()
+                .any(|t| t == "made-by-hekaton"),
+            "the newline is not pasted"
+        );
+    }
+
+    #[test]
+    fn short_text_presses_enter_for_a_newline() {
+        let backend = FakeBackend::new();
+        type_text(&backend, OFF, "ab\r\n", &TypeOptions::new(6)).unwrap();
+        assert_eq!(backend.typed_text(), "ab");
+        assert_eq!(
+            backend.events().last(),
+            Some(&InputEvent::KeyUp(Key::Enter))
+        );
     }
 
     #[test]

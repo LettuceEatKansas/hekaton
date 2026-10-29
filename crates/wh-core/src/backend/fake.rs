@@ -105,6 +105,8 @@ struct State {
     idle: Duration,
     idle_reads: u64,
     clipboard: ClipboardContent,
+    /// Every text `set_clipboard_text` wrote, in order.
+    clipboard_writes: Vec<String>,
     clip_seq: u64,
     ocr: OcrResult,
     ocr_available: bool,
@@ -210,6 +212,7 @@ impl FakeBackend {
                 idle: Duration::from_secs(3600),
                 idle_reads: 0,
                 clipboard: ClipboardContent::Empty,
+                clipboard_writes: Vec::new(),
                 clip_seq: 0,
                 ocr: OcrResult::default(),
                 ocr_available: true,
@@ -470,6 +473,11 @@ impl FakeBackend {
     /// How many times `human_input_idle` was read.
     pub fn human_idle_reads(&self) -> u64 {
         self.st().idle_reads
+    }
+
+    /// Every text the code under test put on the clipboard, oldest first.
+    pub fn clipboard_history(&self) -> Vec<String> {
+        self.st().clipboard_writes.clone()
     }
 
     /// Put something on the clipboard (bumps the sequence number).
@@ -1334,6 +1342,7 @@ impl Backend for FakeBackend {
     fn set_clipboard_text(&self, text: &str) -> BackendResult<()> {
         let mut s = self.st();
         s.clipboard = ClipboardContent::Text(text.to_string());
+        s.clipboard_writes.push(text.to_string());
         s.clip_seq += 1;
         Ok(())
     }
