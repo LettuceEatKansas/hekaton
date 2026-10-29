@@ -83,6 +83,8 @@ struct State {
     /// `capture_preview` shrinks like the Windows backend instead of returning a full capture.
     shrink_previews: bool,
     previews: u64,
+    /// [`Backend::settle_in_background`].
+    background_settle: bool,
     /// The rectangle of every capture, in order.
     capture_log: Vec<Rect>,
     trees: HashMap<WindowRef, Element>,
@@ -188,6 +190,7 @@ impl FakeBackend {
                 captures: 0,
                 shrink_previews: false,
                 previews: 0,
+                background_settle: false,
                 capture_log: Vec::new(),
                 trees: HashMap::new(),
                 performed: Vec::new(),
@@ -349,6 +352,11 @@ impl FakeBackend {
     /// captures), as the Windows backend does.
     pub fn set_shrink_previews(&self, on: bool) {
         self.st().shrink_previews = on;
+    }
+
+    /// Let a blind call finish its trailing settle on a background thread, as Windows does.
+    pub fn set_settle_in_background(&self, on: bool) {
+        self.st().background_settle = on;
     }
 
     /// How many shrunk previews have been taken.
@@ -797,6 +805,10 @@ impl Backend for FakeBackend {
                 a.bottom.max(b.bottom),
             )
         }))
+    }
+
+    fn settle_in_background(&self) -> bool {
+        self.st().background_settle
     }
 
     fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {

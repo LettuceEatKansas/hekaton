@@ -141,6 +141,11 @@ impl Backend for WindowsBackend {
         Ok(display::virtual_screen_rect())
     }
 
+    fn settle_in_background(&self) -> bool {
+        // WINHANDS_SETTLE_SYNC=1 keeps every settle inside its call (A/B timing, debugging).
+        std::env::var_os("WINHANDS_SETTLE_SYNC").is_none()
+    }
+
     fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {
         let _p = wh_core::prof::span("capture_preview");
         match self.dup.preview(region, width, height) {

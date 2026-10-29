@@ -125,6 +125,8 @@ pub struct Computer {
     /// Ownership of the raw left-button hold; never includes human-held input.
     pub(crate) owned_mouse: Mutex<bool>,
     tool_lock: Mutex<()>,
+    /// The previous blind call's trailing settle, still running; the next call joins it first.
+    pub(crate) pending_settle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Computer {
@@ -174,7 +176,21 @@ impl Computer {
             observation_epoch: std::sync::atomic::AtomicU64::new(0),
             owned_mouse: Mutex::new(false),
             tool_lock: Mutex::new(()),
+            pending_settle: Mutex::new(None),
         }
+    }
+
+    /// Wait for the previous blind call's background settle. True when there was one.
+    pub(crate) fn join_background_settle(&self) -> bool {
+        let pending = self
+            .pending_settle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        pending.is_some_and(|handle| {
+            let _ = handle.join();
+            true
+        })
     }
 
     /// The pause flag the kill hotkey toggles.

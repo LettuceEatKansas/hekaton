@@ -136,6 +136,13 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:grab` (and so `computer.py:_grab`, `screenshot_b64`, `settle`).
     fn capture(&self, target: CaptureTarget) -> BackendResult<Image>;
 
+    /// True when the trailing settle of a call that returns no picture may finish on a background
+    /// thread while the model thinks; the next call waits for it before acting. Off for backends
+    /// whose clock or captures are not safe to drive from a second thread.
+    fn settle_in_background(&self) -> bool {
+        false
+    }
+
     /// A cheap, roughly `width` x `height` look at `region`, for telling whether the screen is still
     /// moving. A backend that cannot shrink while copying returns the full-size capture.
     fn capture_preview(&self, region: Rect, width: u32, height: u32) -> BackendResult<Image> {

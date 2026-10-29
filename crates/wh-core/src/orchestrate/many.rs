@@ -581,7 +581,14 @@ impl Ctx<'_> {
                 // Acting calls always settle, even with shot=false: the next call must find the UI at
                 // rest.
                 let min_s = if acted { self.settle_floor_s() } else { 0.0 };
+                let background = !want_shot
+                    && self.be().settle_in_background()
+                    && self.settle_in_background(min_s);
                 let observation = (|| -> StepResult<()> {
+                    if background {
+                        notes.push("screen still settling; the next call waits for it".into());
+                        return Ok(());
+                    }
                     let settled = self.settle_looks(None, min_s, 2)?;
                     let waited = settled.elapsed.as_secs_f64();
                     self.remember_target();
@@ -660,6 +667,11 @@ impl Computer {
     ) -> Result<ManyResult, StepError> {
         let o = CallOpts::from_args(self, args, policy)?;
         let ctx = Ctx { c: self, o, who };
+        let joined = std::time::Instant::now();
+        if self.join_background_settle() {
+            crate::prof::step_done("(previous settle)".into(), joined.elapsed());
+            ctx.remember_target();
+        }
         if ctx.o.read_only && args.get("scope").is_some_and(truthy) {
             return Err(StepError::permission(
                 "read_only refuses scope because it may raise a window",

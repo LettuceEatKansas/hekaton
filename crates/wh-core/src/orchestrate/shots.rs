@@ -210,6 +210,45 @@ impl Ctx<'_> {
         .map_err(StepError::from)
     }
 
+    /// Run the trailing settle of a blind call on a background thread so the call returns at once;
+    /// the next call joins it before acting ([`Computer::join_background_settle`]), so it still
+    /// finds the UI at rest. False when the thread could not start (the caller settles inline).
+    pub(crate) fn settle_in_background(&self, min_s: f64) -> bool {
+        let backend = std::sync::Arc::clone(&self.c.backend);
+        let clock = std::sync::Arc::clone(&self.c.clock);
+        let pause = std::sync::Arc::clone(&self.c.pause);
+        let generation = self.o.cancel_generation;
+        let region = self.display_rect();
+        let params = SettleParams::from_config(self.cfg())
+            .with_min(secs(min_s))
+            .with_calm_needed(2);
+        let spawned = std::thread::Builder::new()
+            .name("settle".into())
+            .spawn(move || {
+                let guard = || {
+                    if pause.is_paused() || pause.generation() != generation {
+                        return Err(crate::backend::BackendError::Denied("paused".into()));
+                    }
+                    Ok(())
+                };
+                // A failed look only means the next call starts without a settled screen; its own
+                // steps look again.
+                let _ =
+                    settle_with_frame(backend.as_ref(), clock.as_ref(), region, &params, &guard);
+            });
+        match spawned {
+            Ok(handle) => {
+                *self
+                    .c
+                    .pending_settle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Minimum watch time of the trailing settle after an acting call: `settle_floor_ms` (130 by
     /// default) for ordinary windows, 450 ms where late fades happen (a fullscreen window or a window
     /// that exposes no UIA elements: a game engine draws everything itself). Python `_settle_floor_s`.

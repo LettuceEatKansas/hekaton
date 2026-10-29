@@ -263,3 +263,40 @@ fn settle_looks_at_previews_and_grabs_full_pixels_only_for_a_returned_shot() {
         "one full grab after the screen settled"
     );
 }
+
+#[test]
+fn a_blind_call_settles_in_the_background_and_the_next_call_waits_for_it() {
+    let kit = Kit::new();
+    kit.front("Editor", "notepad.exe", 7);
+    kit.fake.set_shrink_previews(true);
+    kit.fake.set_settle_in_background(true);
+    let blind = kit
+        .computer
+        .execute(&json!({"action":"key","text":"a","shot":false}), &kit.who);
+    assert!(blind.ok, "{:?}", blind.error);
+    let text = blind.result.unwrap_or_default();
+    assert!(text.contains("the next call waits for it"), "{text}");
+
+    let next = kit
+        .computer
+        .execute(&json!({"action":"key","text":"b","shot":false}), &kit.who);
+    assert!(next.ok, "{:?}", next.error);
+    // The first settle was joined before "b" was sent; "b" left a settle of its own pending.
+    assert!(kit.fake.preview_count() >= 2, "the first settle looked");
+    assert!(kit.computer.join_background_settle());
+    assert!(
+        !kit.computer.join_background_settle(),
+        "nothing left running"
+    );
+
+    kit.fake.set_settle_in_background(false);
+    let shown = kit
+        .computer
+        .execute(&json!({"action":"key","text":"c","shot":true}), &kit.who);
+    assert!(shown.ok, "{:?}", shown.error);
+    assert_eq!(
+        shown.images.len(),
+        1,
+        "a call that returns a shot settles inline"
+    );
+}
