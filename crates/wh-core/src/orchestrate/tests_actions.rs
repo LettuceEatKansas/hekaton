@@ -1665,3 +1665,68 @@ fn read_finds_a_window_by_its_app_and_takes_window_as_well_as_text() {
     let err = err_of(kit.step(json!({"action": "read", "text": "Safari"})));
     assert!(err.message().contains("ambiguous window"), "{}", err.message());
 }
+
+// ---------------------------------------------------------------------------- press (2026-10-29)
+
+fn pressable_app(kit: &Kit) -> WindowRef {
+    let w = kit.front("Calc", "calc.exe", 41);
+    let mut seven = Element::new("seven", Role::Button, "7").at(Rect::new(10, 10, 50, 50));
+    seven.affordances.push(crate::backend::Affordance::Invoke);
+    let label = Element::new("pic", Role::Button, "Logo").at(Rect::new(100, 10, 140, 50));
+    kit.fake.set_tree(w, Element::new("root", Role::Window, "Calc").with_child(seven).with_child(label));
+    w
+}
+
+#[test]
+fn press_does_the_elements_own_action_without_the_mouse() {
+    let kit = Kit::new();
+    pressable_app(&kit);
+    kit.step(json!({"action": "read", "text": "Calc"})).unwrap();
+    let (note, img) = kit.step(json!({"action": "press", "text": "0"})).unwrap();
+    assert!(note.starts_with("pressed 0 "), "{note}");
+    assert!(note.ends_with("'7'"), "{note}");
+    assert!(img.is_none());
+    assert!(clicks(&kit).is_empty(), "no mouse click");
+    assert_eq!(kit.fake.performed().len(), 1);
+}
+
+#[test]
+fn press_clicks_the_centre_of_an_element_with_no_action() {
+    let kit = Kit::new();
+    pressable_app(&kit);
+    kit.step(json!({"action": "read", "text": "Calc"})).unwrap();
+    let (note, _) = kit.step(json!({"action": "press", "text": "1"})).unwrap();
+    assert!(note.contains("it has no press action"), "{note}");
+    let c = clicks(&kit);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].0, Point { x: 120, y: 30 });
+}
+
+#[test]
+fn press_needs_a_number_from_a_read() {
+    let kit = Kit::new();
+    pressable_app(&kit);
+    let err = err_of(kit.step(json!({"action": "press", "text": "Save"})));
+    assert!(err.message().starts_with("press needs text"), "{}", err.message());
+    let err = err_of(kit.step(json!({"action": "press", "text": "5"})));
+    assert!(err.message().contains("read it first"), "{}", err.message());
+}
+
+#[test]
+fn typing_into_the_same_box_skips_the_settle_between_steps() {
+    let kit = Kit::new();
+    kit.front("Editor", "editor.exe", 30);
+    let before = kit.fake.preview_count() + kit.fake.capture_count();
+    kit.run(json!({"actions": [
+        {"action": "type", "text": "ab"}, {"action": "type", "text": "cd"}, {"action": "key", "text": "End"}
+    ], "shot": false}))
+    .unwrap();
+    let typed_looks = kit.fake.preview_count() + kit.fake.capture_count() - before;
+    let before = kit.fake.preview_count() + kit.fake.capture_count();
+    kit.run(json!({"actions": [
+        {"action": "type", "text": "ab\n"}, {"action": "type", "text": "cd"}, {"action": "key", "text": "End"}
+    ], "shot": false}))
+    .unwrap();
+    let enter_looks = kit.fake.preview_count() + kit.fake.capture_count() - before;
+    assert!(typed_looks < enter_looks, "{typed_looks} vs {enter_looks}: Enter still waits");
+}

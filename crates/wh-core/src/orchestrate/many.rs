@@ -554,7 +554,27 @@ impl Ctx<'_> {
                         .get("action")
                         .and_then(Value::as_str)
                         .is_some_and(|a| POINTER_ACTIONS.contains(&a));
-                    if raw_action == Some("key") && next_is_pointer {
+                    let next_action = steps[i + 1].get("action").and_then(Value::as_str);
+                    let next_text = steps[i + 1].get("text").and_then(Value::as_str).unwrap_or("");
+                    // Typing into the same box, then more typing or a plain key: the keys queue in
+                    // order and nothing on screen has to move first, so no settle. Enter, Tab and
+                    // shortcuts may submit or open something; those still wait. 2026-10-29: the
+                    // settle cost 170-300 ms per step of a 5-line batch on the Mac.
+                    let plain_key = |k: &str| {
+                        let k = normalize_key_text(k);
+                        !k.contains('+')
+                            && !matches!(k.as_str(), "enter" | "return" | "tab" | "escape" | "esc" | "f2")
+                    };
+                    let keys_into_same_box = raw_action == Some("type")
+                        && !text.ends_with(['\n', '\r', '\t'])
+                        && match next_action {
+                            Some("type") => true,
+                            Some("key") => plain_key(next_text),
+                            _ => false,
+                        };
+                    if keys_into_same_box {
+                        // no settle: see above
+                    } else if raw_action == Some("key") && next_is_pointer {
                         // a key that selects something, then a click: no redraw to wait for
                         self.sleep(0.08);
                     } else if raw_action == Some("key") && normalize_key_text(&text) == "f2" {

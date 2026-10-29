@@ -18,7 +18,8 @@ pub const POINTER_ACTIONS: [&str; 12] = [
 ];
 
 /// The rest of computer.py `ACTIONS` (everything that is not a pointer action).
-pub const OTHER_ACTIONS: [&str; 26] = [
+pub const OTHER_ACTIONS: [&str; 27] = [
+    "press",
     "screenshot",
     "zoom",
     "cursor_position",
@@ -114,7 +115,7 @@ pub const REPORTABLE_ACTIONS: [&str; 6] = ["click", "type", "key", "scroll", "dr
 
 /// Every action name in the order Python's `sorted(ACTIONS)` lists them (the "unknown action"
 /// message prints this).
-pub const ACTIONS_SORTED: [&str; 38] = [
+pub const ACTIONS_SORTED: [&str; 39] = [
     "click_text",
     "clipboard_get",
     "clipboard_set",
@@ -135,6 +136,7 @@ pub const ACTIONS_SORTED: [&str; 38] = [
     "middle_click",
     "mouse_move",
     "open_app",
+    "press",
     "read",
     "read_field",
     "read_text",
@@ -155,7 +157,7 @@ pub const ACTIONS_SORTED: [&str; 38] = [
     "zoom",
 ];
 
-/// Is `action` one of the 38 actions the `computer` tool knows?
+/// Is `action` one of the 39 actions the `computer` tool knows?
 pub fn is_action(action: &str) -> bool {
     POINTER_ACTIONS.contains(&action) || OTHER_ACTIONS.contains(&action)
 }
@@ -200,7 +202,7 @@ mod tests {
 
     #[test]
     fn the_action_set_has_the_documented_size() {
-        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 38);
+        assert_eq!(POINTER_ACTIONS.len() + OTHER_ACTIONS.len(), 39);
         assert!(PASSIVE_ACTIONS.iter().all(|a| is_action(a)));
         assert!(NO_TRAILING_SHOT.iter().all(|a| is_action(a)));
         assert!(!is_action("nope"));

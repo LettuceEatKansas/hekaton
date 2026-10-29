@@ -212,7 +212,15 @@ struct Walk<'a> {
     kept: usize,
     saw_document: bool,
     truncated: bool,
+    /// How many web areas enclose the node being visited.
+    web_depth: u32,
+    /// Plain text lines kept under the Interactive filter.
+    texts_kept: usize,
 }
+
+/// At most this many plain text lines (labels, a calculator's display) join an interactive read,
+/// so a label-heavy window cannot crowd its buttons out of the cap.
+const MAX_TEXT_LINES: usize = 20;
 
 fn keeps(el: &Element, filter: ElementFilter) -> bool {
     let visible = el.rect.is_none_or(|r| !r.is_empty());
@@ -258,6 +266,8 @@ impl Walk<'_> {
         let mut el = make_element(ElementId(String::new()), &props, self.window_rect);
         self.saw_document |= el.role == Role::Document;
         let mut kids = Vec::new();
+        let web = props.role == "AXWebArea";
+        self.web_depth += u32::from(web);
         if depth < self.limits.max_depth {
             for child in props.children.iter().cloned() {
                 if self.stop() {
@@ -297,7 +307,22 @@ impl Walk<'_> {
         {
             el.affordances.push(Affordance::Invoke);
         }
-        let kept = keeps(&el, self.limits.filter);
+        self.web_depth -= u32::from(web);
+        // 2026-10-29: read listed Calculator's buttons but not its display, so a text-only agent
+        // pressed 1 2 3 x 9 = and could not see 1,107. Native static text now joins the list; a web
+        // page's text stays out (find_text and read_text cover it, and it would flood the cap).
+        let plain_text = self.limits.filter == ElementFilter::Interactive
+            && el.role == Role::Text
+            && self.web_depth == 0
+            && kids.is_empty()
+            && !el.name.trim().is_empty()
+            && el.name.chars().count() <= 200
+            && el.rect.is_some_and(|r| !r.is_empty())
+            && self.texts_kept < MAX_TEXT_LINES;
+        let kept = keeps(&el, self.limits.filter) || plain_text;
+        if plain_text && !keeps(&el, self.limits.filter) {
+            self.texts_kept += 1;
+        }
         if kept {
             self.kept += 1;
         }
@@ -370,6 +395,8 @@ fn walk_window(
         kept: 0,
         saw_document: false,
         truncated: false,
+        web_depth: 0,
+        texts_kept: 0,
     };
     let root = w.visit(win.clone(), 0).ok_or(BackendError::ElementGone)?;
     let (visited, saw_document, truncated) = (w.visited, w.saw_document, w.truncated);

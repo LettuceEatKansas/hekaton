@@ -1,7 +1,10 @@
 //! Times the window lookups the typing and pointer guards call (read-only, no input).
+#[cfg(target_os = "macos")]
 use std::time::Instant;
+#[cfg(target_os = "macos")]
 use wh_core::backend::Backend;
 
+#[cfg(target_os = "macos")]
 fn time<T>(label: &str, n: u32, f: impl Fn() -> T) {
     let t = Instant::now();
     for _ in 0..n {
@@ -10,6 +13,10 @@ fn time<T>(label: &str, n: u32, f: impl Fn() -> T) {
     println!("{label:<28} {:7.2} ms", t.elapsed().as_secs_f64() * 1000.0 / f64::from(n));
 }
 
+#[cfg(not(target_os = "macos"))]
+fn main() {}
+
+#[cfg(target_os = "macos")]
 fn main() {
     let b = wh_mac::MacBackend::new();
     b.init().unwrap();

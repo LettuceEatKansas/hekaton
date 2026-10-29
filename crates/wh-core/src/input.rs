@@ -30,6 +30,8 @@ pub struct TypeOptions {
     pub paste_over: usize,
     /// Which paste shortcut to press.
     pub platform: Platform,
+    /// Try the backend's direct insert first ([`Backend::insert_text`]).
+    pub direct: bool,
 }
 
 impl TypeOptions {
@@ -38,6 +40,7 @@ impl TypeOptions {
         Self {
             paste_over,
             platform: Platform::current(),
+            direct: true,
         }
     }
 }
@@ -49,6 +52,8 @@ pub enum TypeOutcome {
     Typed,
     /// Pasted from the clipboard.
     Pasted,
+    /// Written straight into the focused text control.
+    Inserted,
 }
 
 impl TypeOutcome {
@@ -57,6 +62,7 @@ impl TypeOutcome {
         match self {
             TypeOutcome::Typed => "",
             TypeOutcome::Pasted => " (pasted)",
+            TypeOutcome::Inserted => " (direct)",
         }
     }
 }
@@ -134,6 +140,9 @@ fn type_body(
     if text.is_empty() {
         return Ok(TypeOutcome::Typed);
     }
+    if options.direct && !text.contains('\r') && backend.insert_text(text)? {
+        return Ok(TypeOutcome::Inserted);
+    }
     if text.chars().count() <= options.paste_over {
         for ch in text.chars().filter(|&ch| ch != '\r') {
             if ch == '\n' {
@@ -175,6 +184,41 @@ mod tests {
     const OFF: Policy = Policy::REFUSE;
 
     #[test]
+    fn a_native_text_box_takes_the_text_directly_with_no_keys_or_clipboard() {
+        let backend = FakeBackend::new();
+        backend.set_direct_insert(true);
+        let out = type_text(&backend, OFF, "a long sentence, no paste", &TypeOptions::new(6)).unwrap();
+        assert_eq!(out, TypeOutcome::Inserted);
+        assert_eq!(out.note_suffix(), " (direct)");
+        assert_eq!(backend.inserted(), vec!["a long sentence, no paste".to_string()]);
+        assert!(backend.events().is_empty(), "no key events, no paste chord");
+    }
+
+    #[test]
+    fn a_trailing_newline_is_still_a_real_enter_after_a_direct_insert() {
+        let backend = FakeBackend::new();
+        backend.set_direct_insert(true);
+        type_text(&backend, OFF, "query\n", &TypeOptions::new(6)).unwrap();
+        assert_eq!(backend.inserted(), vec!["query".to_string()]);
+        let events = backend.events();
+        assert!(!events.is_empty(), "Enter was pressed");
+        assert!(
+            !events.iter().any(|e| matches!(e, InputEvent::Type(_))),
+            "no characters typed: {events:?}"
+        );
+    }
+
+    #[test]
+    fn direct_insert_is_skipped_when_switched_off() {
+        let backend = FakeBackend::new();
+        backend.set_direct_insert(true);
+        let mut opts = TypeOptions::new(6);
+        opts.direct = false;
+        assert_eq!(type_text(&backend, OFF, "abc", &opts).unwrap(), TypeOutcome::Typed);
+        assert!(backend.inserted().is_empty());
+    }
+
+    #[test]
     fn short_text_is_typed_key_by_key() {
         let backend = FakeBackend::new();
         let out = type_text(&backend, OFF, "abc", &TypeOptions::new(6)).unwrap();
@@ -212,6 +256,7 @@ mod tests {
         let opts = TypeOptions {
             paste_over: 6,
             platform: Platform::Windows,
+            direct: true,
         };
         let out = type_text(&backend, OFF, "a long sentence to paste", &opts).unwrap();
         assert_eq!(out, TypeOutcome::Pasted);
@@ -236,6 +281,7 @@ mod tests {
         let opts = TypeOptions {
             paste_over: 6,
             platform: Platform::Windows,
+            direct: true,
         };
         let out = type_text(&backend, OFF, "made-by-hekaton\n", &opts).unwrap();
         assert_eq!(out, TypeOutcome::Pasted);
@@ -274,6 +320,7 @@ mod tests {
         let opts = TypeOptions {
             paste_over: 2,
             platform: Platform::Mac,
+            direct: true,
         };
         type_text(&backend, OFF, "hello", &opts).unwrap();
         assert_eq!(backend.events()[0], InputEvent::KeyDown(Key::Meta));

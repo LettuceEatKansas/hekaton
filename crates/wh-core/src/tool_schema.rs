@@ -28,8 +28,8 @@ pub const TOOL_NAME: &str = "computer";
 pub const TOOL_DESCRIPTION: &str = r##"Use the Windows/macOS desktop. Acting calls settle, then return a screenshot; shot=false or compact=true returns short text only.
 Pointer: left_click right_click double_click triple_click middle_click mouse_move left_click_drag(start_coordinate) scroll(scroll_direction,scroll_amount) left_mouse_down left_mouse_up. coordinate=[x,y] in the last screenshot, or at=[fx, fy] (0..1 of window); keep shot_long the same. text on a click = held modifier.
 Keys: type(text) key(text "ctrl+s",repeat) hold_key(text,duration).
-Look: status screenshot(save_to) zoom(region) find_text read(text=window|ref,filter,limit; wake=true wakes an empty browser tree) read_field(text=label) read_text list_windows cursor_position.
-Do: click_text(text,nth,button,double) replace_word(old,new) open_app file_dialog(text=path) clipboard_get clipboard_set list_files(text=folder,filter,limit) window(op,window; move rect [x,y,w,h]) folder(path,view,sort,list=n).
+Look: status screenshot(save_to) zoom(region) find_text read(text=window|ref,filter,limit; wake=true wakes a browser tree) read_field(text=label) read_text list_windows cursor_position.
+Do: press(text=N from read, fastest) click_text(text,nth,button,double) replace_word(old,new) open_app file_dialog(text=path) clipboard_get clipboard_set list_files(text=folder,filter,limit) window(op,window; move rect [x,y,w,h]) folder(path,view,sort,list=n).
 Wait: wait(duration) wait_for_text(text,timeout) wait_for_file.
 Batch: actions=[{action,...}] max 50, one screenshot at the end, stops at the first FAIL; a step may carry expect, on_fail "skip", when {text|gone_text|title}.
 Excel (owner opt-in): excel(op=new|open|write|read|add_sheet|calc|save_as|close|format_conditional|chart|pivot, workbook, sheet, range, values=[[..]] "=f" is a formula, formulas, path, name, overwrite; rule,value,value2,color,kind,title,anchor,rows,sum_field,columns) edits a hidden workbook in bulk; prefer it to clicking cells.

@@ -219,3 +219,71 @@ pub(crate) fn focus_token() -> u64 {
     }
     focused_ax().map_or(0, |a| a.identity_hash())
 }
+
+/// Put `text` at the caret of the focused native text control through Accessibility, the way a
+/// paste lands but with no clipboard, no key events and no focus needed. Returns false, having
+/// changed nothing, when the control is not a plain native text box (web content, Electron, a
+/// password field, a single-line box asked for a newline) or the app ignored the write; the caller
+/// then types or pastes. 2026-10-29: 3 chars took 142 ms keyed, ~10 ms this way.
+pub(crate) fn insert_text(text: &str) -> BackendResult<bool> {
+    if text.is_empty() || !crate::ax::trusted() {
+        return Ok(false);
+    }
+    let Some(ax) = focused_ax() else {
+        return Ok(false);
+    };
+    let Ok(p) = ax.fetch() else {
+        return Ok(false);
+    };
+    if !matches!(
+        p.role.as_str(),
+        "AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox"
+    ) || is_secure_field(&p.role, p.subrole.as_deref())
+        || (text.contains('\n') && p.role != "AXTextArea")
+        || in_web_content(&ax)
+        || !ax.is_settable("AXSelectedText")
+    {
+        return Ok(false);
+    }
+    let count = |a: &Ax| {
+        a.copy("AXNumberOfCharacters")
+            .ok()
+            .and_then(|v| cf::i64_of(&v))
+    };
+    let Some(before) = count(&ax) else {
+        return Ok(false);
+    };
+    let selected = ax
+        .copy("AXSelectedTextRange")
+        .ok()
+        .and_then(|v| cf::ax_range(&v))
+        .map_or(0, |r| r.length as i64);
+    if ax.set_string("AXSelectedText", text) != objc2_application_services::AXError::Success {
+        return Ok(false);
+    }
+    let want = before - selected + crate::textops::utf16_len(text) as i64;
+    match count(&ax) {
+        Some(after) if after == want => Ok(true),
+        // Unchanged: the app took the write and dropped it (some custom views). Nothing went in, so
+        // the keyboard path is safe to try.
+        Some(after) if after == before && selected == 0 => Ok(false),
+        // Something changed: typing again would double it.
+        _ => Ok(true),
+    }
+}
+
+/// Is this element inside a web page (a browser tab, an Electron app)? Their editors take an
+/// `AXSelectedText` write without firing the page's input events, so they get real keys.
+fn in_web_content(ax: &Ax) -> bool {
+    let mut cur = ax.element("AXParent");
+    for _ in 0..20 {
+        let Some(el) = cur else {
+            return false;
+        };
+        if el.string("AXRole").as_deref() == Some("AXWebArea") {
+            return true;
+        }
+        cur = el.element("AXParent");
+    }
+    false
+}

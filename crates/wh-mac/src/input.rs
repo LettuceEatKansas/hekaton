@@ -130,6 +130,12 @@ impl Input {
         self.events.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Count an action done through Accessibility (a direct insert, a press) as input sent: it
+    /// changed the app as surely as a posted event.
+    pub(crate) fn count_ax_action(&self) {
+        self.events.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// How many events were posted since start.
     pub(crate) fn events(&self) -> u64 {
         self.events.load(Ordering::Relaxed)

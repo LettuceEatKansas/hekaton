@@ -429,6 +429,13 @@ pub trait Backend: Send + Sync {
     /// Replaces `core.py:send_unicode_text`.
     fn type_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()>;
 
+    /// Put `text` at the caret of the focused text control without key events or the clipboard
+    /// (macOS `AXSelectedText`). Ok(false) when this control cannot take it that way and nothing
+    /// changed; the caller then types or pastes.
+    fn insert_text(&self, _text: &str) -> BackendResult<bool> {
+        Ok(false)
+    }
+
     /// How many input batches this backend has injected since it started. A call that fails before
     /// any input went out can then be told from one that did.
     ///

@@ -89,6 +89,9 @@ struct State {
     capture_log: Vec<Rect>,
     trees: HashMap<WindowRef, Element>,
     performed: Vec<(ElementId, ElementAction)>,
+    /// `insert_text` succeeds (a native text box has focus) and what it inserted.
+    direct_insert: bool,
+    inserted: Vec<String>,
     focused: Option<Element>,
     documents: HashMap<WindowRef, String>,
     line_at: HashMap<(WindowRef, i32, i32), String>,
@@ -197,6 +200,8 @@ impl FakeBackend {
                 capture_log: Vec::new(),
                 trees: HashMap::new(),
                 performed: Vec::new(),
+                direct_insert: false,
+                inserted: Vec::new(),
                 focused: None,
                 documents: HashMap::new(),
                 line_at: HashMap::new(),
@@ -422,6 +427,16 @@ impl FakeBackend {
     /// Everything `perform` was asked to do.
     pub fn performed(&self) -> Vec<(ElementId, ElementAction)> {
         self.st().performed.clone()
+    }
+
+    /// Script whether the focused control takes text directly (`insert_text`).
+    pub fn set_direct_insert(&self, value: bool) {
+        self.st().direct_insert = value;
+    }
+
+    /// Texts written through `insert_text`.
+    pub fn inserted(&self) -> Vec<String> {
+        self.st().inserted.clone()
     }
 
     /// Give a window document text.
@@ -1368,6 +1383,16 @@ impl Backend for FakeBackend {
             s.events.push(InputEvent::Type(ch));
         }
         Ok(())
+    }
+
+    fn insert_text(&self, text: &str) -> BackendResult<bool> {
+        let mut s = self.st();
+        if !s.direct_insert {
+            return Ok(false);
+        }
+        s.batches += 1;
+        s.inserted.push(text.to_string());
+        Ok(true)
     }
 
     fn input_events(&self) -> u64 {

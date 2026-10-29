@@ -14,7 +14,7 @@ use super::error::{StepError, StepResult};
 use super::snapshot::WAKE_HINT;
 use super::{Ctx, secs};
 use crate::actions::{ACTIONS_SORTED, NO_TRAILING_SHOT, is_action, is_excel_read, is_passive};
-use crate::backend::{ClipboardContent, MouseButton, Point, Role, ScrollDirection};
+use crate::backend::{ClipboardContent, ElementAction, MouseButton, Point, Role, ScrollDirection};
 use crate::keys::{
     Key, Platform, is_calc_like, key_from_name, normalize_key_text, parse_key_combo,
 };
@@ -141,10 +141,13 @@ impl Ctx<'_> {
         if acts {
             self.wait_for_human()?;
             self.check_cancelled()?;
-            prefix = self.restore_target(matches!(
-                action.as_str(),
-                "key" | "type" | "hold_key" | "read_text"
-            ));
+            // press acts on the element itself, so its window may stay behind others.
+            if action != "press" {
+                prefix = self.restore_target(matches!(
+                    action.as_str(),
+                    "key" | "type" | "hold_key" | "read_text"
+                ));
+            }
         }
 
         let note: String = match action.as_str() {
@@ -461,6 +464,7 @@ impl Ctx<'_> {
                 }
             }
             "click_text" => self.click_text(step, &text)?,
+            "press" => self.press_ref(step, &text)?,
             "replace_word" => self.replace_word(step, &text)?,
             "type" | "key" | "hold_key" => self.keyboard(step, &action, &text)?,
             _ => self.pointer(
@@ -562,6 +566,58 @@ impl Ctx<'_> {
             py_repr(&c.label),
             c.source,
             self.pt(c.x, c.y)
+        ))
+    }
+
+    /// `press`: do an element's own action (AXPress, UIA Invoke) by its number in the last `read`,
+    /// without moving the mouse or raising the window. An element with no action is clicked at its
+    /// centre instead. 2026-10-29: computer-use presses by element at ~67 ms; a located click_text
+    /// cost ~270 ms before the click.
+    fn press_ref(&self, step: &Args, text: &str) -> StepResult<String> {
+        let raw = if text.is_empty() { text_arg(step, "ref") } else { text.to_string() };
+        let Ok(n) = raw.trim().parse::<usize>() else {
+            return Err(StepError::value(
+                "press needs text: an element number from read, e.g. 12",
+            ));
+        };
+        let window = text_arg(step, "window");
+        let scoped = if window.is_empty() {
+            None
+        } else {
+            Some(self.c.window_refs().resolve(Some(window.as_str()))?)
+        };
+        let Some(el) = self.c.element_refs().get(n, scoped) else {
+            return Err(StepError::target(format!(
+                "no element {n} in the last read of that window; read it first"
+            )));
+        };
+        if el.disabled {
+            return Err(StepError::target(format!(
+                "element {n} {} is disabled",
+                py_repr(&el.name)
+            )));
+        }
+        let host = self
+            .be()
+            .element_window(&el.id)
+            .map_err(|e| StepError::target(format!("element {n} is gone ({e}); read again")))?;
+        self.input_guard()?;
+        self.check_allowed(self.root_of(host))?;
+        let p = Point { x: el.center.0, y: el.center.1 };
+        self.check_irreversible(p, step)?;
+        if self.be().perform(&el.id, ElementAction::Press).unwrap_or(false) {
+            return Ok(format!("pressed {n} {} {}", el.native_role, py_repr(&el.name)));
+        }
+        self.set_last_point(p);
+        self.host_at(p)?;
+        self.be()
+            .mouse_click(p, MouseButton::Left, 1, &|| self.pointer_guard(p))
+            .map_err(StepError::from)?;
+        Ok(format!(
+            "clicked {n} {} {} at {} (it has no press action)",
+            el.native_role,
+            py_repr(&el.name),
+            self.pt(p.x, p.y)
         ))
     }
 

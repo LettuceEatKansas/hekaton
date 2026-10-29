@@ -169,6 +169,12 @@ impl Backend for MacBackend {
         self.capture_region_small(region, width, height)
     }
 
+    fn settle_in_background(&self) -> bool {
+        // ScreenCaptureKit answers on its own queue, so a second thread may watch the screen. A
+        // blind call returns ~300 ms sooner (2026-10-29). WINHANDS_SETTLE_SYNC=1 turns it off.
+        std::env::var_os("WINHANDS_SETTLE_SYNC").is_none()
+    }
+
     fn virtual_screen(&self) -> BackendResult<Rect> {
         Ok(displays::union(&displays::list()?))
     }
@@ -294,7 +300,12 @@ impl Backend for MacBackend {
     }
 
     fn perform(&self, id: &ElementId, action: ElementAction) -> BackendResult<bool> {
-        tree::perform(&self.registry, id, action)
+        let acts = !matches!(action, ElementAction::Focus);
+        let done = tree::perform(&self.registry, id, action)?;
+        if done && acts {
+            self.input.count_ax_action();
+        }
+        Ok(done)
     }
 
     fn find_file_dialog_field(&self, window: WindowRef) -> BackendResult<Option<ElementId>> {
@@ -389,6 +400,14 @@ impl Backend for MacBackend {
 
     fn key_up(&self, key: Key) -> BackendResult<()> {
         self.input.key_up(key)
+    }
+
+    fn insert_text(&self, text: &str) -> BackendResult<bool> {
+        let done = text::insert_text(text)?;
+        if done {
+            self.input.count_ax_action();
+        }
+        Ok(done)
     }
 
     fn type_text(&self, text: &str, guard: InputGuard<'_>) -> BackendResult<()> {
