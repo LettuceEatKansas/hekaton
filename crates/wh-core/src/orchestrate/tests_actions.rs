@@ -1326,19 +1326,137 @@ fn click_text_stays_ambiguous_between_two_controls() {
     );
 }
 
-// All static text: nothing to prefer, so the old refusal stands.
+// All static text and none of it exactly the words asked for: nothing to prefer, so the old refusal
+// stands. (With an exact "Save" among them, that one is chosen.)
 #[test]
 fn click_text_with_only_static_text_matches_stays_ambiguous() {
     let kit = Kit::new();
     app_with(
         &kit,
         &[
-            ("Save", Role::Text, Rect::new(10, 10, 50, 30)),
+            ("Save draft", Role::Text, Rect::new(10, 10, 50, 30)),
             ("Save As", Role::Text, Rect::new(60, 40, 100, 60)),
         ],
     );
     let err = err_of(kit.step(json!({"action": "click_text", "text": "save"})));
     assert!(err.message().starts_with("2 matches for 'save', ambiguous"));
+}
+
+/// OCR lines of one word each: `(text, left, top, right, bottom)`.
+fn ocr_text(kit: &Kit, lines: &[(&str, i32, i32, i32, i32)]) {
+    kit.fake.set_ocr(OcrResult {
+        lines: lines
+            .iter()
+            .map(|(t, l, tp, r, b)| ocr_line(vec![word(t, *l, *tp, *r, *b)]))
+            .collect(),
+        engine: "fake".into(),
+    });
+}
+
+// 2026-10-30: "Check All" matched an instruction sentence and the real link, both read by OCR (which
+// cannot tell a link from text), and click_text refused. The line that is exactly the words wins.
+#[test]
+fn click_text_prefers_the_exact_label_over_a_sentence_that_contains_it() {
+    let kit = Kit::new();
+    app_with(&kit, &[]);
+    ocr_text(
+        &kit,
+        &[
+            ("Click Check All to select every box", 10, 10, 200, 30),
+            ("Check All", 10, 60, 70, 80),
+        ],
+    );
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "check all"}))
+        .unwrap();
+    assert_eq!(note, "clicked 'Check All' (ocr) at [40, 70]");
+    // nth still counts both, in reading order
+    kit.step(json!({"action": "click_text", "text": "check all", "nth": 1}))
+        .unwrap();
+    assert_eq!(clicks(&kit)[1].0, Point::new(105, 20));
+}
+
+// The tree has the sentence only (the link is drawn, not exposed): OCR is asked too and its exact
+// line joins, so the link is clicked and not the sentence.
+#[test]
+fn click_text_adds_an_exact_ocr_line_when_the_tree_has_only_a_sentence() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[(
+            "Click Check All to select every box",
+            Role::Text,
+            Rect::new(10, 10, 200, 30),
+        )],
+    );
+    ocr_text(&kit, &[("Check All", 10, 60, 70, 80)]);
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "Check All"}))
+        .unwrap();
+    assert_eq!(note, "clicked 'Check All' (ocr) at [40, 70]");
+    // OCR with no exact line adds nothing: the lone sentence is clicked as it always was
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[(
+            "Click Check All to select every box",
+            Role::Text,
+            Rect::new(10, 10, 200, 30),
+        )],
+    );
+    ocr_text(&kit, &[("Then Check All again", 10, 60, 170, 80)]);
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "Check All"}))
+        .unwrap();
+    assert!(
+        note.starts_with("clicked 'Click Check All to select every box' (uia)"),
+        "{note}"
+    );
+}
+
+// A control from the tree wins whatever OCR sees, and OCR is not even asked.
+#[test]
+fn click_text_with_a_tree_control_never_asks_ocr() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            (
+                "Click Check All to select every box",
+                Role::Text,
+                Rect::new(10, 10, 200, 30),
+            ),
+            ("Check All", Role::Hyperlink, Rect::new(10, 60, 70, 80)),
+        ],
+    );
+    ocr_text(&kit, &[("Check All", 10, 100, 70, 120)]);
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "Check All"}))
+        .unwrap();
+    assert_eq!(note, "clicked 'Check All' (uia) at [40, 70]");
+    assert_eq!(kit.fake.ocr_calls(), 0);
+}
+
+// An exact label in the tree settles it too, over a sentence also in the tree.
+#[test]
+fn click_text_prefers_an_exact_tree_label_over_a_sentence() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            (
+                "Click Check All to select every box",
+                Role::Text,
+                Rect::new(10, 10, 200, 30),
+            ),
+            ("Check All", Role::Text, Rect::new(10, 60, 70, 80)),
+        ],
+    );
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "Check All"}))
+        .unwrap();
+    assert_eq!(note, "clicked 'Check All' (uia) at [40, 70]");
+    assert_eq!(kit.fake.ocr_calls(), 0);
 }
 
 // Ported from test_click_text_no_match_refused.

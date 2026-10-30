@@ -594,7 +594,7 @@ impl Ctx<'_> {
                 "click_text needs text: the words to click",
             ));
         }
-        let cands = self.locate_text(text)?;
+        let cands = self.locate_click_text(text)?;
         if cands.is_empty() {
             return Err(StepError::target(format!(
                 "no text on screen matches {} (tried UIA then OCR); zoom or find_text first to see \
@@ -604,7 +604,7 @@ impl Ctx<'_> {
         }
         let nth_arg = get(step, "nth");
         // no nth: controls beat static text, and only several controls stay ambiguous
-        let choices = super::find::click_choices(&cands);
+        let choices = super::find::click_choices(&cands, text);
         if nth_arg.is_none() && choices.len() > 1 {
             let labels = choices
                 .iter()

@@ -61,15 +61,37 @@ pub(crate) struct Cand {
     pub actionable: bool,
 }
 
-/// Which candidates a click_text with no `nth` may choose between: the actionable ones when there are
-/// any (2026-10-30 unattended run: a common word matched body text and a link and click_text refused),
-/// else all of them. Indexes into `cands`, so the numbers `nth` takes stay the same.
-pub(crate) fn click_choices(cands: &[Cand]) -> Vec<usize> {
+/// A label or query as the words it carries: case folded, whitespace runs as one space, a trailing
+/// colon or full stop dropped. "Check All" and "check  all:" are the same words.
+pub(crate) fn words_of(s: &str) -> String {
+    let t = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    t.trim_end_matches([':', '.']).trim_end().to_string()
+}
+
+/// Which candidates a click_text with no `nth` may choose between. Controls first, whatever found
+/// them (2026-10-30 unattended run: a common word matched body text and a link and click_text
+/// refused). Without a control, a label that is exactly the words asked for beats one that only
+/// contains them inside a longer sentence (2026-10-30 later run: "Check All" matched an instruction
+/// sentence and the real link, both read off the screen, where nothing says which is the link, and it
+/// still refused). Several controls stay ambiguous, as before. Indexes into `cands`, so the numbers
+/// `nth` takes stay the same.
+pub(crate) fn click_choices(cands: &[Cand], query: &str) -> Vec<usize> {
     let actionable: Vec<usize> = (0..cands.len()).filter(|&i| cands[i].actionable).collect();
-    if actionable.is_empty() {
+    if !actionable.is_empty() {
+        return actionable;
+    }
+    let q = words_of(query);
+    let exact: Vec<usize> = (0..cands.len())
+        .filter(|&i| words_of(&cands[i].label) == q)
+        .collect();
+    if exact.is_empty() {
         (0..cands.len()).collect()
     } else {
-        actionable
+        exact
     }
 }
 
@@ -504,6 +526,11 @@ impl Ctx<'_> {
         if !cands.is_empty() {
             return Ok(cands);
         }
+        Ok(self.ocr_cands(&q))
+    }
+
+    /// The OCR matches for `q` (lowercase, trimmed) on the whole display.
+    fn ocr_cands(&self, q: &str) -> Vec<Cand> {
         let display = self.display_rect();
         let rows = self
             .grab(display)
@@ -519,7 +546,7 @@ impl Ctx<'_> {
         let mut out = Vec::new();
         for row in rows {
             let word = row.text.trim();
-            if word.to_lowercase().contains(&q) {
+            if word.to_lowercase().contains(q) {
                 let mx = f64::from(row.rect.left + row.rect.right) / 2.0 / scale;
                 let my = f64::from(row.rect.top + row.rect.bottom) / 2.0 / scale;
                 out.push(Cand {
@@ -531,7 +558,28 @@ impl Ctx<'_> {
                 });
             }
         }
-        Ok(out)
+        out
+    }
+
+    /// [`Self::locate_text`] for a click. When the accessibility tree has the words only inside longer
+    /// text (an instruction sentence) and no control or exact label, the real control may be drawn
+    /// rather than exposed to accessibility, so OCR is asked too and its exact-label lines join the
+    /// list, after the tree's matches. 2026-10-30: "Check All" was clicked as the sentence around it.
+    pub(crate) fn locate_click_text(&self, query: &str) -> StepResult<Vec<Cand>> {
+        let mut cands = self.locate_text(query)?;
+        let q = words_of(query);
+        let settled = cands
+            .iter()
+            .any(|c| c.actionable || words_of(&c.label) == q);
+        if cands.is_empty() || settled || cands.iter().any(|c| c.source != "uia") {
+            return Ok(cands);
+        }
+        for extra in self.ocr_cands(query.trim().to_lowercase().as_str()) {
+            if words_of(&extra.label) == q {
+                cands.push(extra);
+            }
+        }
+        Ok(cands)
     }
 
     /// Verify an action's effect: `expect={"text":.., "gone_text":.., "title":..}`. Any mismatch is a
