@@ -37,7 +37,7 @@ unsafe extern "C" {
 }
 
 /// The attributes one multi-fetch asks for, in order.
-const FETCH: [&str; 15] = [
+const FETCH: [&str; 16] = [
     "AXRole",
     "AXSubrole",
     "AXTitle",
@@ -53,6 +53,7 @@ const FETCH: [&str; 15] = [
     "AXIdentifier",
     "AXPlaceholderValue",
     "AXChildren",
+    "AXRoleDescription",
 ];
 
 /// Everything one multi-fetch returns about an element.
@@ -72,6 +73,9 @@ pub(crate) struct Props {
     pub(crate) identifier: Option<String>,
     pub(crate) placeholder: Option<String>,
     pub(crate) children: Vec<Ax>,
+    /// What the app calls the role in words ("dialog", "alert dialog"): a browser's ARIA dialog is
+    /// an `AXGroup` that only says so here and in its subrole.
+    pub(crate) role_description: Option<String>,
 }
 
 impl Props {
@@ -237,6 +241,7 @@ impl Ax {
             identifier: string(12),
             placeholder: string(13),
             children,
+            role_description: string(15),
         })
     }
 

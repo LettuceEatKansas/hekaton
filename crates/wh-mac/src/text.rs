@@ -11,9 +11,9 @@ use crate::ax::Ax;
 use crate::cf;
 use crate::geom::rect_from_f64;
 use crate::perm;
-use crate::roles::{is_secure_field, is_text_input};
+use crate::roles::{is_dialog_like, is_secure_field, is_text_input};
 use crate::textops::{
-    WebNode, find_matches_checked, line_range, remaining_budget, slice16, web_lines,
+    WebNode, find_matches_checked, line_range, page_with_dialogs, remaining_budget, slice16,
 };
 use crate::tree::{ax_window, find_first, focused_ax, window_of};
 use crate::wininfo::window_parts;
@@ -63,8 +63,16 @@ const WEB_TEXT_BUDGET: Duration = Duration::from_millis(3000);
 /// Most elements of a web page read as text.
 const WEB_TEXT_NODES: usize = 60_000;
 
-/// One element and its children as a [`WebNode`], `None` when the budget ran out.
-fn web_node(ax: &Ax, deadline: Instant, seen: &mut usize) -> Option<WebNode> {
+/// One element and its children as a [`WebNode`], `None` when the budget ran out. A dialog, sheet or
+/// alert found on the way is not left in the page: it goes into `dialogs` (once, outermost only) and
+/// the page gets an empty node in its place.
+fn web_node(
+    ax: &Ax,
+    deadline: Instant,
+    seen: &mut usize,
+    dialogs: &mut Vec<WebNode>,
+    in_dialog: bool,
+) -> Option<WebNode> {
     if Instant::now() >= deadline || *seen >= WEB_TEXT_NODES {
         return None;
     }
@@ -73,9 +81,10 @@ fn web_node(ax: &Ax, deadline: Instant, seen: &mut usize) -> Option<WebNode> {
     if is_secure_field(&p.role, p.subrole.as_deref()) {
         return Some(WebNode::default());
     }
+    let dialog = is_dialog_like(&p.role, p.subrole.as_deref(), p.role_description.as_deref());
     let mut children = Vec::with_capacity(p.children.len());
     for c in &p.children {
-        children.push(web_node(c, deadline, seen)?);
+        children.push(web_node(c, deadline, seen, dialogs, in_dialog || dialog)?);
     }
     // static text keeps its value; a control or a leaf speaks through its label
     let text = if p.role == "AXStaticText" {
@@ -89,17 +98,43 @@ fn web_node(ax: &Ax, deadline: Instant, seen: &mut usize) -> Option<WebNode> {
             .or_else(|| p.description.clone())
             .or_else(|| p.value_text())
     };
-    Some(WebNode {
+    let node = WebNode {
         role: p.role,
         text,
         children,
-    })
+    };
+    if dialog && !in_dialog {
+        dialogs.push(node);
+        return Some(WebNode::default());
+    }
+    Some(node)
 }
 
-/// The text of the page in the window's web view, read from the accessibility tree. Selecting the
+/// Dialogs, sheets and alerts under `ax` that are outside the page (a browser's own sheet, a
+/// permission bubble), found without going into a web view or into a dialog. Outermost first.
+fn outside_dialogs(ax: &Ax, depth: u32, deadline: Instant, found: &mut Vec<Ax>) {
+    if depth > 10 || Instant::now() >= deadline {
+        return;
+    }
+    let Ok(p) = ax.fetch() else { return };
+    if p.role == "AXWebArea" {
+        return;
+    }
+    if depth > 0 && is_dialog_like(&p.role, p.subrole.as_deref(), p.role_description.as_deref()) {
+        found.push(ax.clone());
+        return;
+    }
+    for c in &p.children {
+        outside_dialogs(c, depth + 1, deadline, found);
+    }
+}
+
+/// The text of the page in the window's web view, read from the accessibility tree, with any open
+/// dialog, sheet or alert listed first (in the page or around it). Selecting the
 /// page and copying it leaves the whole page highlighted (2026-10-30 unattended run: an agent clicked
-/// blank space to clear that and flipped a radio answer). `None` when the window has no web view,
-/// the view exposes no text, or the walk ran out of time.
+/// blank space to clear that and flipped a radio answer). 2026-10-30: the same run missed a "Goal
+/// Complete" modal that was on screen, because only the web view's plain content was read. `None`
+/// when the window has no web view, the view exposes no text, or the walk ran out of time.
 fn web_text(window: WindowRef, displays: &[Rect]) -> BackendResult<Option<String>> {
     let win = ax_window(window, displays)?;
     let deadline = Instant::now() + WEB_TEXT_BUDGET;
@@ -109,10 +144,21 @@ fn web_text(window: WindowRef, displays: &[Rect]) -> BackendResult<Option<String
         return Ok(None);
     };
     let mut seen = 0;
-    let Some(root) = web_node(&area, deadline, &mut seen) else {
+    let mut dialogs = Vec::new();
+    let Some(root) = web_node(&area, deadline, &mut seen, &mut dialogs, false) else {
         return Ok(None);
     };
-    let text = web_lines(&root);
+    // a dialog drawn outside the web view (the browser's own, or an AXSheet on the window)
+    let mut outer = Vec::new();
+    outside_dialogs(&win, 0, deadline, &mut outer);
+    let mut all = Vec::new();
+    for ax in &outer {
+        if let Some(n) = web_node(ax, deadline, &mut seen, &mut Vec::new(), true) {
+            all.push(n);
+        }
+    }
+    all.extend(dialogs);
+    let text = page_with_dialogs(&all, &root);
     Ok((!text.trim().is_empty()).then_some(text))
 }
 

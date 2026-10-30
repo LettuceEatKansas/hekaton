@@ -47,6 +47,25 @@ pub(crate) fn role_from_ax(role: &str, subrole: Option<&str>, disclosing: bool) 
     }
 }
 
+/// A dialog, sheet or alert: a native `AXSheet`, a subrole naming a dialog or alert (`AXSystemDialog`,
+/// a browser's `AXApplicationDialog` / `AXApplicationAlertDialog`), or a role description that says
+/// so ("dialog", "alert dialog"). In a browser an ARIA dialog is an ordinary `AXGroup`, so the role
+/// alone does not tell.
+pub(crate) fn is_dialog_like(
+    role: &str,
+    subrole: Option<&str>,
+    role_description: Option<&str>,
+) -> bool {
+    role == "AXSheet"
+        || subrole.is_some_and(|s| s.contains("Dialog") || s.contains("Alert"))
+        || role_description.is_some_and(|d| {
+            matches!(
+                d.trim().to_lowercase().as_str(),
+                "dialog" | "alert dialog" | "alert" | "modal dialog" | "sheet"
+            )
+        })
+}
+
 /// A secure (password) text field.
 pub(crate) fn is_secure_field(role: &str, subrole: Option<&str>) -> bool {
     role == "AXSecureTextField" || subrole == Some("AXSecureTextField")
@@ -232,5 +251,26 @@ mod tests {
         );
         assert_eq!(window_kind(None, 20, "com.apple.dock"), WindowKind::Taskbar);
         assert_eq!(window_kind(None, 101, "com.foo"), WindowKind::PopupMenu);
+    }
+
+    #[test]
+    fn dialogs_sheets_and_alerts_are_told_by_role_subrole_or_description() {
+        assert!(is_dialog_like("AXSheet", None, None));
+        assert!(is_dialog_like(
+            "AXGroup",
+            Some("AXApplicationDialog"),
+            Some("dialog")
+        ));
+        assert!(is_dialog_like(
+            "AXGroup",
+            Some("AXApplicationAlertDialog"),
+            None
+        ));
+        assert!(is_dialog_like("AXGroup", None, Some("Dialog")));
+        assert!(is_dialog_like("AXGroup", None, Some("alert dialog")));
+        assert!(is_dialog_like("AXGroup", Some("AXSystemDialog"), None));
+        assert!(!is_dialog_like("AXGroup", None, Some("group")));
+        assert!(!is_dialog_like("AXButton", None, Some("button")));
+        assert!(!is_dialog_like("AXWebArea", None, Some("HTML content")));
     }
 }

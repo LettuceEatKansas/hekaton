@@ -415,6 +415,25 @@ pub(crate) fn web_lines(root: &WebNode) -> String {
     lines.join("\n")
 }
 
+/// A page's text with its open dialogs first, each after a `(dialog)` line: a modal sits on top of
+/// the page and is what a person reads first, and a `read_text` that left it out made an agent look
+/// for a "Goal Complete" box it could not see in the words (2026-10-30). The page's own lines follow.
+pub(crate) fn page_with_dialogs(dialogs: &[WebNode], page: &WebNode) -> String {
+    let mut out = Vec::new();
+    for d in dialogs {
+        let text = web_lines(d);
+        if !text.trim().is_empty() {
+            out.push("(dialog)".to_string());
+            out.push(text);
+        }
+    }
+    let body = web_lines(page);
+    if !body.trim().is_empty() {
+        out.push(body);
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -770,5 +789,32 @@ mod tests {
     #[test]
     fn an_empty_page_reads_as_nothing() {
         assert_eq!(web_lines(&node("AXWebArea", None, vec![])), "");
+    }
+
+    #[test]
+    fn dialogs_come_before_the_page_and_an_empty_one_is_left_out() {
+        let page = node(
+            "AXWebArea",
+            None,
+            vec![
+                node("AXStaticText", Some("Question 3"), vec![]),
+                node("AXRadioButton", Some("Paris"), vec![]),
+            ],
+        );
+        let goal = node(
+            "AXGroup",
+            None,
+            vec![
+                node("AXStaticText", Some("Goal Complete"), vec![]),
+                node("AXButton", Some("Continue"), vec![]),
+            ],
+        );
+        let empty = node("AXGroup", None, vec![node("AXImage", Some("x"), vec![])]);
+        assert_eq!(
+            page_with_dialogs(&[goal, empty], &page),
+            "(dialog)\nGoal Complete\nContinue\nQuestion 3\nParis"
+        );
+        // no dialog: just the page, as before
+        assert_eq!(page_with_dialogs(&[], &page), web_lines(&page));
     }
 }
