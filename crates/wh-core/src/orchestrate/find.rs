@@ -1330,6 +1330,13 @@ impl Ctx<'_> {
         limit: usize,
     ) -> StepResult<String> {
         const MAX_CHARS: usize = 6000;
+        // 2026-10-30: read_text cut every long line to 200 characters and the whole output to 6000
+        // even when the caller passed max_chars=40000, and a quiz page's question came back with "...".
+        // A caller who names a budget gets whole lines, and only an output that passes it is cut.
+        // Room is kept for the header and notes, which the call's own cut would otherwise eat.
+        let explicit = self.o.max_chars;
+        let budget = explicit.map_or(MAX_CHARS, |n| n.saturating_sub(400).max(128));
+        let line_cap = if explicit.is_some() { budget } else { 200 };
         let fg = self.fg_root();
         let root = if window.trim().is_empty() {
             fg
@@ -1412,8 +1419,12 @@ impl Ctx<'_> {
                 .filter(|(_, ln)| ln.to_lowercase().contains(&q))
                 .map(|(i, ln)| {
                     let ln = ln.trim();
-                    let mut row = if ln.chars().count() > 200 {
-                        format!("{}: {}...", i + 1, ln.chars().take(200).collect::<String>())
+                    let mut row = if ln.chars().count() > line_cap {
+                        format!(
+                            "{}: {}...",
+                            i + 1,
+                            ln.chars().take(line_cap).collect::<String>()
+                        )
                     } else {
                         format!("{}: {}", i + 1, ln)
                     };
@@ -1430,7 +1441,7 @@ impl Ctx<'_> {
                             .find(|(_, n)| !n.trim().is_empty())
                         && !next.to_lowercase().contains(&q)
                     {
-                        let next: String = next.trim().chars().take(200).collect();
+                        let next: String = next.trim().chars().take(line_cap).collect();
                         row.push_str(&format!("\n   {}: {next}", j + 1));
                     }
                     row
@@ -1446,7 +1457,7 @@ impl Ctx<'_> {
             let mut shown = 0;
             let mut used = 0;
             for row in found.iter().take(limit) {
-                if shown > 0 && used + row.chars().count() > MAX_CHARS {
+                if shown > 0 && used + row.chars().count() > budget {
                     break;
                 }
                 used += row.chars().count() + 1;
@@ -1480,12 +1491,12 @@ impl Ctx<'_> {
             .map(|(i, ln)| format!("{}: {}", i + 1, ln.trim_end()))
             .collect();
         let total: usize = rows.iter().map(|r| r.chars().count() + 1).sum();
-        if total <= MAX_CHARS {
+        if total <= budget {
             return Ok(format!("{head}:\n{}", rows.join("\n")));
         }
         // 2026-10-29 leads rerun: a web page's pop-up (YouTube's About box) comes last in its copied
         // text, past the cut. Keep the start and the end; the middle is what gets cut.
-        let (head_budget, tail_budget) = (MAX_CHARS * 2 / 3, MAX_CHARS / 3);
+        let (head_budget, tail_budget) = (budget * 2 / 3, budget / 3);
         let mut first = 0;
         let mut used = 0;
         for r in &rows {

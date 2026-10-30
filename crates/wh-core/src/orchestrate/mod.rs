@@ -374,6 +374,9 @@ pub(crate) struct CallOpts {
     /// Set when a step returned cells of the owner's spreadsheet; the audit log then keeps a fixed
     /// line instead of the call's output.
     pub private_output: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The call's `max_chars`, when it passed one (128 to 64000). `read_text` then cuts nothing it
+    /// prints until the whole output would pass it.
+    pub max_chars: Option<usize>,
     /// The step after the running one sends input without looking first. A `wait` then runs its
     /// full time instead of returning once the screen looks calm (2026-10-28: a `wait 1.5` cut to
     /// 0.6 s pasted a table into Excel's start screen while the blank workbook was still loading).

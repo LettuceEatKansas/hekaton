@@ -662,6 +662,73 @@ fn a_long_document_is_cut_with_a_pointer_to_the_search() {
     );
 }
 
+// 2026-10-30: a long line was cut to 200 characters with "..." even when the caller passed a large
+// max_chars. A named budget gets whole lines; no budget keeps the old short cut.
+#[test]
+fn read_text_does_not_cut_a_line_below_the_callers_max_chars() {
+    let (kit, w) = tk_kit();
+    let question = format!(
+        "Question 4: which of these is the needle? {}",
+        "word ".repeat(300)
+    );
+    kit.fake
+        .set_document(w, &format!("Quiz\n{question}\nAnswer a\nAnswer b"));
+    let short = kit.ctx(json!({})).read_text("needle", "").unwrap();
+    assert!(
+        short.contains("...") && !short.contains(question.trim()),
+        "{short}"
+    );
+    let whole = kit
+        .ctx(json!({"max_chars": 20000}))
+        .read_text("needle", "")
+        .unwrap();
+    assert!(
+        whole.contains(question.trim()) && !whole.contains("..."),
+        "{whole}"
+    );
+    // and without a query too: the whole page, no line cut
+    let page = kit
+        .ctx(json!({"max_chars": 20000}))
+        .read_text("", "")
+        .unwrap();
+    assert!(page.contains(question.trim()), "{page}");
+}
+
+// Only an output that passes the budget is cut, and then the middle goes, not the middle of a line
+// that fits.
+#[test]
+fn read_text_cuts_only_when_the_whole_output_passes_the_budget() {
+    let (kit, w) = tk_kit();
+    let doc: String = (1..=40)
+        .map(|i| format!("{i:02} {}\n", "y".repeat(300)))
+        .collect();
+    kit.fake.set_document(w, &doc);
+    // 40 lines of ~305 characters is ~12300: more than the 6000 default, less than 20000
+    let small = kit.ctx(json!({})).read_text("", "").unwrap();
+    assert!(
+        small.contains("lines cut from the middle"),
+        "{}",
+        small.len()
+    );
+    let big = kit
+        .ctx(json!({"max_chars": 20000}))
+        .read_text("", "")
+        .unwrap();
+    assert!(!big.contains("lines cut"), "{}", big.len());
+    assert!(big.contains(&format!("40: 40 {}", "y".repeat(300))));
+    // a budget smaller than the output cuts the middle again
+    let tight = kit
+        .ctx(json!({"max_chars": 4000}))
+        .read_text("", "")
+        .unwrap();
+    assert!(
+        tight.contains("lines cut from the middle"),
+        "{}",
+        tight.len()
+    );
+    assert!(tight.chars().count() < 4000, "{}", tight.chars().count());
+}
+
 #[test]
 fn read_text_counts_extra_matches() {
     let (kit, w) = tk_kit();

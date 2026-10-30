@@ -183,6 +183,10 @@ impl CallOpts {
             input_follows: Default::default(),
             copied_text: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
+            max_chars: args
+                .get("max_chars")
+                .and_then(Value::as_u64)
+                .map(|n| n.clamp(128, 64_000) as usize),
             read_only: args.get("read_only").is_some_and(truthy) || truthy(&c.cfg.get("read_only")),
             helper_images: args.get("max_images").is_none_or(|v| v.as_u64() != Some(0))
                 && !args.get("compact").is_some_and(truthy),
@@ -209,6 +213,7 @@ impl CallOpts {
             input_follows: Default::default(),
             copied_text: Default::default(),
             deadline: None,
+            max_chars: None,
             read_only: false,
             helper_images: true,
             coords: Coords::from_name(&cfg.coords()),
