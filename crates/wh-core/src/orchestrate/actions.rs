@@ -707,7 +707,9 @@ impl Ctx<'_> {
                 py_repr(&live.name)
             )));
         }
-        if el.disabled {
+        // 2026-10-30 (quiz run): press refused a Submit button as "disabled" after the page had
+        // enabled it (a radio was chosen). The state in the list is as old as the read; ask now.
+        if !live.enabled {
             return Err(StepError::target(format!(
                 "element {n} {} is disabled",
                 py_repr(&el.name)
@@ -720,29 +722,32 @@ impl Ctx<'_> {
         })?;
         self.input_guard()?;
         self.check_allowed(self.root_of(host))?;
-        let p = Point {
-            x: el.center.0,
-            y: el.center.1,
-        };
+        // where it is now (the page may have scrolled since the read), else where the read saw it
+        let (cx, cy) = live
+            .rect
+            .filter(|r| !r.is_empty())
+            .map_or(el.center, |r| (r.center().x, r.center().y));
+        let p = Point { x: cx, y: cy };
         self.check_irreversible(p, step)?;
-        if self
-            .be()
-            .perform(&el.id, ElementAction::Press)
-            .unwrap_or(false)
-        {
-            return Ok(format!(
-                "pressed {n} {} {}",
-                el.native_role,
-                py_repr(&el.name)
-            ));
-        }
+        let why = match self.be().perform(&el.id, ElementAction::Press) {
+            Ok(true) => {
+                return Ok(format!(
+                    "pressed {n} {} {}",
+                    el.native_role,
+                    py_repr(&el.name)
+                ));
+            }
+            Ok(false) => "it has no press action".to_string(),
+            // a browser can refuse AXPress on a control a click still reaches
+            Err(e) => format!("its press action was refused: {e}"),
+        };
         self.set_last_point(p);
         self.host_at(p)?;
         self.be()
             .mouse_click(p, MouseButton::Left, 1, &|| self.pointer_guard(p))
             .map_err(StepError::from)?;
         Ok(format!(
-            "clicked {n} {} {} at {} (it has no press action)",
+            "clicked {n} {} {} at {} ({why})",
             el.native_role,
             py_repr(&el.name),
             self.pt(p.x, p.y)

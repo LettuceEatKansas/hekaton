@@ -1986,7 +1986,10 @@ fn press_refuses_an_element_whose_label_changed_since_read() {
     let err = err_of(kit.step(json!({"action": "press", "text": "1"})));
     let m = err.message();
     assert!(m.starts_with("page changed since read"), "{m}");
-    assert!(m.contains("'Paris'") && m.contains("'Rome'") && m.contains("read again"), "{m}");
+    assert!(
+        m.contains("'Paris'") && m.contains("'Rome'") && m.contains("read again"),
+        "{m}"
+    );
     assert!(kit.fake.performed().is_empty(), "nothing was pressed");
     assert!(clicks(&kit).is_empty(), "nothing was clicked");
 }
@@ -2027,6 +2030,72 @@ fn press_still_works_when_the_page_is_what_read_listed() {
     let (note, _) = kit.step(json!({"action": "press", "text": "1"})).unwrap();
     assert!(note.starts_with("pressed 1 "), "{note}");
     assert_eq!(kit.fake.performed().len(), 1);
+}
+
+// 2026-10-30 (quiz run): Submit was refused as "disabled" after the page had enabled it.
+#[test]
+fn press_asks_for_the_enabled_state_now_not_the_one_read_listed() {
+    let kit = Kit::new();
+    let w = kit.front("Quiz", "brave.exe", 50);
+    let page = |enabled: bool| {
+        let mut submit =
+            Element::new("submit", Role::Button, "Submit").at(Rect::new(10, 10, 90, 30));
+        submit.affordances.push(crate::backend::Affordance::Invoke);
+        submit.enabled = enabled;
+        kit.fake.set_tree(
+            w,
+            Element::new("root", Role::Window, "Quiz").with_child(submit),
+        );
+    };
+    page(false);
+    kit.step(json!({"action": "read", "text": "Quiz", "filter": "Submit"}))
+        .unwrap();
+    // a radio was chosen: the page enables it
+    page(true);
+    let (note, _) = kit.step(json!({"action": "press", "text": "0"})).unwrap();
+    assert!(note.starts_with("pressed 0 "), "{note}");
+    assert_eq!(kit.fake.performed().len(), 1);
+    // and the other way round: listed enabled, disabled by the time of the press
+    page(true);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    page(false);
+    let err = err_of(kit.step(json!({"action": "press", "text": "0"})));
+    assert!(err.message().contains("is disabled"), "{}", err.message());
+    assert_eq!(
+        kit.fake.performed().len(),
+        1,
+        "a disabled button is not pressed"
+    );
+}
+
+#[test]
+fn a_refused_press_action_falls_back_to_a_click_at_the_elements_centre_now() {
+    let kit = Kit::new();
+    let w = kit.front("Quiz", "brave.exe", 50);
+    let page = |top: i32| {
+        let mut submit =
+            Element::new("submit", Role::Button, "Submit").at(Rect::new(10, top, 90, top + 20));
+        submit.affordances.push(crate::backend::Affordance::Invoke);
+        kit.fake.set_tree(
+            w,
+            Element::new("root", Role::Window, "Quiz").with_child(submit),
+        );
+    };
+    page(10);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    // the page scrolled, and the app answers the press action with an error
+    page(110);
+    kit.fake
+        .set_perform_error(Some("the app did not answer the press"));
+    let (note, _) = kit.step(json!({"action": "press", "text": "0"})).unwrap();
+    assert!(note.contains("its press action was refused"), "{note}");
+    let c = clicks(&kit);
+    assert_eq!(c.len(), 1);
+    assert_eq!(
+        c[0].0,
+        Point { x: 50, y: 120 },
+        "the centre where it is now"
+    );
 }
 
 #[test]

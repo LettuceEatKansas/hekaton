@@ -91,6 +91,8 @@ struct State {
     capture_log: Vec<Rect>,
     trees: HashMap<WindowRef, Element>,
     performed: Vec<(ElementId, ElementAction)>,
+    /// `perform` fails with this OS error (an app that refuses the press action).
+    perform_error: Option<String>,
     /// `insert_text` succeeds (a native text box has focus) and what it inserted.
     direct_insert: bool,
     inserted: Vec<String>,
@@ -204,6 +206,7 @@ impl FakeBackend {
                 capture_log: Vec::new(),
                 trees: HashMap::new(),
                 performed: Vec::new(),
+                perform_error: None,
                 direct_insert: false,
                 inserted: Vec::new(),
                 focused: None,
@@ -432,6 +435,11 @@ impl FakeBackend {
     /// Everything `perform` was asked to do.
     pub fn performed(&self) -> Vec<(ElementId, ElementAction)> {
         self.st().performed.clone()
+    }
+
+    /// Make every `perform` fail with this OS error, or work again with `None`.
+    pub fn set_perform_error(&self, error: Option<&str>) {
+        self.st().perform_error = error.map(str::to_string);
     }
 
     /// Script whether the focused control takes text directly (`insert_text`).
@@ -1240,6 +1248,9 @@ impl Backend for FakeBackend {
     fn perform(&self, id: &ElementId, action: ElementAction) -> BackendResult<bool> {
         let mut s = self.st();
         s.performed.push((id.clone(), action.clone()));
+        if let Some(e) = s.perform_error.clone() {
+            return Err(BackendError::Os(e));
+        }
         let tree = s
             .trees
             .values_mut()
