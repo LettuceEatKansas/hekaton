@@ -716,6 +716,37 @@ fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
     assert_eq!(kit.fake.clipboard_text().unwrap(), "jon's text");
 }
 
+// 2026-10-30: a read of a browser page by select-all + copy sent Left afterwards (it does not clear a
+// page's highlight and moves a focused radio button's choice) and told the agent to click. It sends
+// no key and does not say click; a document exposed through accessibility needs neither.
+#[test]
+fn read_text_by_copy_in_a_browser_sends_no_arrow_key_and_does_not_say_click() {
+    let kit = plain_kit();
+    let w = kit.front("Quiz - Brave", "brave.exe", 4);
+    kit.fake
+        .update_window(w, |i| i.class = "Chrome_WidgetWin_1".into());
+    let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<Key>>::new()));
+    let seen = sink.clone();
+    kit.fake.set_chord_hook(move |fake, keys| {
+        seen.lock().unwrap().push(keys.to_vec());
+        if keys == [cmd_key(), Key::Char('c')] {
+            fake.set_clipboard(ClipboardContent::Text("Question 1\nParis\nRome".into()));
+        }
+    });
+    let out = kit.ctx(json!({})).read_text("", "").unwrap();
+    assert!(out.contains("Question 1") && out.contains("Rome"), "{out}");
+    assert!(!out.to_lowercase().contains("next click"), "{out}");
+    assert!(out.contains("do not click the page"), "{out}");
+    assert_eq!(
+        sink.lock().unwrap().clone(),
+        vec![
+            vec![cmd_key(), Key::Char('a')],
+            vec![cmd_key(), Key::Char('c')],
+        ],
+        "no Left, no Escape, no click"
+    );
+}
+
 #[test]
 fn read_text_refuses_when_the_clipboard_holds_files_and_when_nothing_comes_back() {
     let (kit, _w) = tk_kit();

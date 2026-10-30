@@ -1215,7 +1215,12 @@ impl Ctx<'_> {
     /// Select all + copy in the front window, read the clipboard, put the old clipboard text back and
     /// clear the selection (so a later keystroke cannot replace the whole document). Python
     /// `_doc_text_by_copy`.
-    fn doc_text_by_copy(&self) -> StepResult<String> {
+    ///
+    /// `collapse` false (a browser page) sends no Left key afterwards: it does not clear a page's
+    /// highlight, and with a radio button focused an arrow key moves the choice (2026-10-30: a quiz
+    /// answer flipped after a read). The page stays highlighted; that is harmless and no mouse click
+    /// or key is a safe way to clear it.
+    fn doc_text_by_copy(&self, collapse: bool) -> StepResult<String> {
         if matches!(self.be().clipboard()?, ClipboardContent::Files(_)) {
             return Err(StepError::target(
                 "read_text needs the clipboard, which holds copied files right now; paste them first, \
@@ -1241,7 +1246,11 @@ impl Ctx<'_> {
         })();
         // put the owner's clipboard back and drop the select-all, whatever happened
         let _ = self.be().set_clipboard_text(&prior);
-        let dropped = self.send_combo("left", 1);
+        let dropped = if collapse {
+            self.send_combo("left", 1)
+        } else {
+            Ok(())
+        };
         let text = copied?;
         dropped?;
         Ok(text)
@@ -1313,7 +1322,7 @@ impl Ctx<'_> {
             text = match cached {
                 Some(t) => t,
                 None => {
-                    let t = self.doc_text_by_copy()?;
+                    let t = self.doc_text_by_copy(!self.is_browser(root))?;
                     if !t.trim().is_empty() {
                         *self.o.copied_text.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some((root, t.clone()));
@@ -1323,8 +1332,10 @@ impl Ctx<'_> {
             };
             // 2026-10-29 Mac demo: a web page's select-all is not dropped by the arrow key (only an
             // editable box's is), so the page stayed highlighted while the note said "cleared".
+            // 2026-10-30: the note must not invite a click (one flipped a quiz answer).
             source = if self.is_browser(root) {
-                "select-all + copy; the page stays highlighted until the next click"
+                "select-all + copy; the page may stay highlighted, which is harmless: do not click \
+                 the page to clear it"
             } else {
                 "select-all + copy; selection cleared"
             };

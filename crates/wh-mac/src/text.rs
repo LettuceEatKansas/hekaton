@@ -12,7 +12,9 @@ use crate::cf;
 use crate::geom::rect_from_f64;
 use crate::perm;
 use crate::roles::{is_secure_field, is_text_input};
-use crate::textops::{find_matches_checked, line_range, remaining_budget, slice16};
+use crate::textops::{
+    WebNode, find_matches_checked, line_range, remaining_budget, slice16, web_lines,
+};
 use crate::tree::{ax_window, find_first, focused_ax, window_of};
 use crate::wininfo::window_parts;
 use crate::winlist;
@@ -54,6 +56,66 @@ fn text_element(
     Ok(found.and_then(|(ax, p)| p.value_text().map(|t| (ax, t))))
 }
 
+/// How long the walk of a web page's tree may take. A page is thousands of elements; past this the
+/// caller falls back to select-all + copy rather than get half a page.
+const WEB_TEXT_BUDGET: Duration = Duration::from_millis(3000);
+
+/// Most elements of a web page read as text.
+const WEB_TEXT_NODES: usize = 60_000;
+
+/// One element and its children as a [`WebNode`], `None` when the budget ran out.
+fn web_node(ax: &Ax, deadline: Instant, seen: &mut usize) -> Option<WebNode> {
+    if Instant::now() >= deadline || *seen >= WEB_TEXT_NODES {
+        return None;
+    }
+    *seen += 1;
+    let p = ax.fetch().ok()?;
+    if is_secure_field(&p.role, p.subrole.as_deref()) {
+        return Some(WebNode::default());
+    }
+    let mut children = Vec::with_capacity(p.children.len());
+    for c in &p.children {
+        children.push(web_node(c, deadline, seen)?);
+    }
+    // static text keeps its value; a control or a leaf speaks through its label
+    let text = if p.role == "AXStaticText" {
+        p.value_text().or_else(|| p.title.clone())
+    } else if is_text_input(&p.role) {
+        // a field's label, never what was typed into it
+        p.title.clone().or_else(|| p.description.clone())
+    } else {
+        p.title
+            .clone()
+            .or_else(|| p.description.clone())
+            .or_else(|| p.value_text())
+    };
+    Some(WebNode {
+        role: p.role,
+        text,
+        children,
+    })
+}
+
+/// The text of the page in the window's web view, read from the accessibility tree. Selecting the
+/// page and copying it leaves the whole page highlighted (2026-10-30 unattended run: an agent clicked
+/// blank space to clear that and flipped a radio answer). `None` when the window has no web view,
+/// the view exposes no text, or the walk ran out of time.
+fn web_text(window: WindowRef, displays: &[Rect]) -> BackendResult<Option<String>> {
+    let win = ax_window(window, displays)?;
+    let deadline = Instant::now() + WEB_TEXT_BUDGET;
+    let Some((area, _)) = find_first(&win, 14, Duration::from_millis(900), &|p| {
+        p.role == "AXWebArea"
+    }) else {
+        return Ok(None);
+    };
+    let mut seen = 0;
+    let Some(root) = web_node(&area, deadline, &mut seen) else {
+        return Ok(None);
+    };
+    let text = web_lines(&root);
+    Ok((!text.trim().is_empty()).then_some(text))
+}
+
 /// The window's document text, capped at `max_chars`.
 pub(crate) fn document_text(
     window: WindowRef,
@@ -61,12 +123,16 @@ pub(crate) fn document_text(
     displays: &[Rect],
 ) -> BackendResult<Option<String>> {
     perm::require_accessibility("read document text")?;
-    Ok(text_element(
+    let text = match text_element(
         window,
         displays,
         Instant::now() + Duration::from_millis(1500),
-    )?
-    .map(|(_, t)| t.chars().take(max_chars.min(MAX_DOC_CHARS)).collect()))
+    )? {
+        Some((_, t)) => Some(t),
+        // a browser page: its words are in the web view's tree, not in a text area
+        None => web_text(window, displays)?,
+    };
+    Ok(text.map(|t| t.chars().take(max_chars.min(MAX_DOC_CHARS)).collect()))
 }
 
 fn visible_rect(ax: &Ax, location: usize, length: usize, win: Rect) -> Option<Rect> {

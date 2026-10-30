@@ -347,18 +347,98 @@ pub(crate) fn drag_path(from: Point, to: Point) -> Vec<Point> {
         .collect()
 }
 
+/// One element of a web page's accessibility tree, reduced to what reading the page as text needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WebNode {
+    /// `AXRole` ("AXStaticText", "AXGroup", ...).
+    pub role: String,
+    /// The text this element carries itself: a static text's value, a control's title or label.
+    pub text: Option<String>,
+    pub children: Vec<WebNode>,
+}
+
+/// Roles whose text runs on inside a line; every other role starts a new line.
+fn is_inline_web_role(role: &str) -> bool {
+    matches!(role, "AXStaticText" | "AXLink" | "AXText")
+}
+
+/// Roles that carry no readable words (pictures, bars, separators).
+fn is_silent_web_role(role: &str) -> bool {
+    matches!(
+        role,
+        "AXImage" | "AXScrollBar" | "AXSplitter" | "AXValueIndicator" | "AXIncrementor"
+    )
+}
+
+fn push_web_text(node: &WebNode, line: &mut String, lines: &mut Vec<String>) {
+    if is_silent_web_role(&node.role) {
+        return;
+    }
+    let block = !is_inline_web_role(&node.role);
+    if block {
+        flush_web_line(line, lines);
+    }
+    // a container's own words are its children's; a leaf (a button, a radio, a field) speaks for itself
+    if node.children.is_empty()
+        && let Some(t) = &node.text
+    {
+        line.push_str(t);
+    }
+    for c in &node.children {
+        push_web_text(c, line, lines);
+    }
+    if block {
+        flush_web_line(line, lines);
+    }
+}
+
+fn flush_web_line(line: &mut String, lines: &mut Vec<String>) {
+    let t = strip_bidi(line)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !t.is_empty() {
+        lines.push(t);
+    }
+    line.clear();
+}
+
+/// A web page's text the way it reads: inline pieces (static text, links) run together on one line,
+/// each block (group, heading, list item, control) is its own line, blank lines dropped. Lets
+/// `read_text` take a page from the accessibility tree instead of select-all + copy, which leaves the
+/// whole page highlighted.
+pub(crate) fn web_lines(root: &WebNode) -> String {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    push_web_text(root, &mut line, &mut lines);
+    flush_web_line(&mut line, &mut lines);
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn chromium_electron_and_gecko_apps_have_their_own_text_engine() {
         let fw = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(own_text_engine("com.brave.Browser", fw(&["Brave Browser Framework.framework"])));
-        assert!(own_text_engine("com.google.Chrome", fw(&["Google Chrome Framework.framework"])));
-        assert!(own_text_engine("com.tinyspeck.slackmacgap", fw(&["Electron Framework.framework", "Squirrel.framework"])));
+        assert!(own_text_engine(
+            "com.brave.Browser",
+            fw(&["Brave Browser Framework.framework"])
+        ));
+        assert!(own_text_engine(
+            "com.google.Chrome",
+            fw(&["Google Chrome Framework.framework"])
+        ));
+        assert!(own_text_engine(
+            "com.tinyspeck.slackmacgap",
+            fw(&["Electron Framework.framework", "Squirrel.framework"])
+        ));
         assert!(own_text_engine("org.mozilla.firefox", fw(&[])));
         assert!(!own_text_engine("com.apple.TextEdit", fw(&[])));
         assert!(!own_text_engine("com.apple.Safari", fw(&[])));
-        assert!(!own_text_engine("com.example.app", fw(&["Sparkle.framework"])));
+        assert!(!own_text_engine(
+            "com.example.app",
+            fw(&["Sparkle.framework"])
+        ));
     }
 
     use super::*;
@@ -637,5 +717,58 @@ mod tests {
         assert_eq!(strip_bidi("\u{200E}753"), "753");
         assert_eq!(strip_bidi("a\u{202B}b\u{2069}c"), "abc");
         assert_eq!(strip_bidi("plain é"), "plain é");
+    }
+
+    fn node(role: &str, text: Option<&str>, children: Vec<WebNode>) -> WebNode {
+        WebNode {
+            role: role.into(),
+            text: text.map(Into::into),
+            children,
+        }
+    }
+
+    #[test]
+    fn a_page_reads_as_lines_with_inline_pieces_run_together() {
+        let page = node(
+            "AXWebArea",
+            None,
+            vec![
+                node(
+                    "AXHeading",
+                    None,
+                    vec![node("AXStaticText", Some("Quiz"), vec![])],
+                ),
+                node(
+                    "AXGroup",
+                    None,
+                    vec![
+                        node("AXStaticText", Some("Click "), vec![]),
+                        node(
+                            "AXLink",
+                            None,
+                            vec![node("AXStaticText", Some("here"), vec![])],
+                        ),
+                        node("AXStaticText", Some(" to continue"), vec![]),
+                    ],
+                ),
+                node("AXImage", Some("a picture"), vec![]),
+                node("AXRadioButton", Some("Paris"), vec![]),
+                node("AXRadioButton", Some("Rome"), vec![]),
+                node(
+                    "AXGroup",
+                    None,
+                    vec![node("AXStaticText", Some("  "), vec![])],
+                ),
+            ],
+        );
+        assert_eq!(
+            web_lines(&page),
+            "Quiz\nClick here to continue\nParis\nRome"
+        );
+    }
+
+    #[test]
+    fn an_empty_page_reads_as_nothing() {
+        assert_eq!(web_lines(&node("AXWebArea", None, vec![])), "");
     }
 }
