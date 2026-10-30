@@ -1103,20 +1103,24 @@ fn open_url_in_an_already_front_browser_waits_for_the_title_to_change() {
     assert!(note.contains("Example Domain - Brave"), "{note}");
 }
 
-// A browser that adds a tab and changes nothing the core can see is not an error: say it may be loading.
+// A browser in front whose title never changes did not navigate: that is an error that says so, and
+// the error names the title it still shows.
 #[test]
-fn open_url_in_a_front_browser_that_shows_no_change_says_it_may_still_be_loading() {
+fn open_url_in_a_front_browser_that_shows_no_change_is_an_error() {
     let d = Desk::new();
     let b = d.add("New Tab - Brave", "brave.exe", "Chrome_WidgetWin_1");
     d.kit.fake.set_foreground(Some(b));
-    let note = d
+    let e = d
         .kit
         .ctx(json!({}))
         .open_url("https://example.com", 2.0)
-        .unwrap();
+        .unwrap_err();
     assert!(
-        note.starts_with("sent https://example.com to the browser in front"),
-        "{note}"
+        e.message()
+            .starts_with("sent https://example.com to the browser in front, but")
+            && e.message().contains("'New Tab - Brave' after 2s")
+            && e.message().contains("did not navigate"),
+        "{e}"
     );
 }
 

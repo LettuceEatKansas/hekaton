@@ -806,11 +806,18 @@ impl Ctx<'_> {
                 found.process
             ));
         }
-        if self.fg_root().is_some_and(|w| self.is_browser(w)) {
-            return Ok(format!(
-                "sent {url} to the browser in front; its title has not changed yet, so it may \
-                 still be loading (wait_for_text or wait)"
-            ));
+        // 2026-10-30: an unattended run lost steps to navigation that silently did nothing. A browser
+        // in front whose title never changed is not "probably loading": say it did not navigate.
+        if let Some(fg) = self.fg_root().filter(|w| self.is_browser(*w)) {
+            let title = self.info(fg).map(|i| i.title).unwrap_or_default();
+            return Err(StepError::target(format!(
+                "sent {url} to the browser in front, but its window title is still {} after {}s, so \
+                 it did not navigate. If that page was already showing, nothing is wrong; otherwise \
+                 screenshot to see what the browser did (a dialog, a blocked pop-up, no network) and \
+                 do not assume the page loaded",
+                py_repr(&title),
+                fmt_g(wait)
+            )));
         }
         Err(StepError::target(format!(
             "started {url} but no browser window came to the front within {}s; list_windows or \
