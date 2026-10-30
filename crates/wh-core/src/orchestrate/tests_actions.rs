@@ -96,16 +96,67 @@ fn err_of(r: Result<(String, Option<String>), StepError>) -> StepError {
 fn a_screenshot_says_what_space_its_coordinates_are_in() {
     let kit = Kit::new();
     let (note, img) = kit.step(json!({"action": "screenshot"})).unwrap();
-    assert_eq!(
-        note,
-        format!("screenshot; give coordinates in pixels of this {W}x{H} image")
+    assert!(
+        note.starts_with(&format!(
+            "screenshot; give coordinates in pixels of this {W}x{H} image\n"
+        )),
+        "{note}"
     );
     assert!(img.is_some());
     let norm = kit.ctx(json!({"coords": "norm1000"}));
     let (note, _) = norm
         .run(&Kit::args(json!({"action": "screenshot"})))
         .unwrap();
-    assert_eq!(note, "screenshot; give coordinates in 0-1000 on both axes");
+    assert!(
+        note.starts_with("screenshot; give coordinates in 0-1000 on both axes\n"),
+        "{note}"
+    );
+    assert!(note.contains("not pixels"), "{note}");
+}
+
+// 2026-10-30: a 0.6-scale screenshot reported a 1024x576 frame and agents clicked in screen points.
+// Every screenshot reply now says in one plain line which frame clicks use and its scale against the
+// screen's own points. The coordinates themselves are read exactly as before.
+#[test]
+fn a_scaled_screenshot_says_its_click_frame_and_scale_in_one_line() {
+    let kit = Kit::new();
+    let ctx = kit.ctx(json!({"shot_long": 192}));
+    let (sw, sh) = ctx.scale().shot_size();
+    let d = ctx.scale().display;
+    let (note, _) = ctx
+        .run(&Kit::args(json!({"action": "screenshot"})))
+        .unwrap();
+    let line = note.lines().nth(1).unwrap_or_default();
+    assert_eq!(note.lines().count(), 2, "{note}");
+    let f = ctx.scale().factor();
+    assert!(f < 1.0, "the test needs a scaled shot: {f}");
+    assert_eq!(
+        line,
+        format!(
+            "click frame: {sw}x{sh} px, {f:.2}x of the screen's {}x{} points",
+            d.width(),
+            d.height()
+        )
+    );
+    // unscaled: says it is the same as the screen's points
+    let full = kit.ctx(json!({"shot_long": 4000}));
+    let (note, _) = full
+        .run(&Kit::args(json!({"action": "screenshot"})))
+        .unwrap();
+    assert!(
+        note.contains("px, the same as the screen's points"),
+        "{note}"
+    );
+    // the trailing picture of a batch carries the same line in its tag
+    let out = kit.computer.execute(
+        &json!({"actions": [{"action": "left_click", "coordinate": [1, 1]}], "shot_long": 192}),
+        &kit.who,
+    );
+    let said = out.result.clone().unwrap_or_default();
+    assert!(
+        said.contains(&format!("[image 1: full screen; click frame: {sw}x{sh} px")),
+        "{said}"
+    );
 }
 
 // Ported from test_zoom_accepts_box_sent_as_coordinate (h-clockdate) and

@@ -377,7 +377,13 @@ fn without_scope_the_trailing_line_still_says_full_screen() {
         &w,
         json!({"action": "left_click", "coordinate": [500, 500], "coords": "norm1000"}),
     );
-    assert!(out.text.contains("[image 1: full screen]"), "{}", out.text);
+    assert!(
+        out.text.contains(
+            "[image 1: full screen; click frame: 0-1000 on both axes, not pixels; the screen's 640x360 points]"
+        ),
+        "{}",
+        out.text
+    );
 }
 
 #[test]
@@ -549,7 +555,12 @@ fn a_step_may_set_its_own_scope_for_that_step_only() {
             {"action": "screenshot", "scope": GAME},
             {"action": "screenshot"}]}),
     );
-    let lines: Vec<&str> = out.text.lines().collect();
+    // each screenshot reply is its note plus one click-frame line
+    let lines: Vec<&str> = out
+        .text
+        .lines()
+        .filter(|l| l.starts_with("screenshot"))
+        .collect();
     assert!(
         lines[0].starts_with("screenshot of window \"Notepad\" (292x256)"),
         "{}",

@@ -453,7 +453,13 @@ fn the_default_attaches_a_screenshot() {
     let kit = Kit::new();
     let out = kit.run(click(1, 1)).unwrap();
     assert_eq!(out.images.len(), 1);
-    assert!(out.text.contains("[image 1: full screen]"), "{}", out.text);
+    assert!(
+        out.text.contains(
+            "[image 1: full screen; click frame: 320x180 px, the same as the screen's points]"
+        ),
+        "{}",
+        out.text
+    );
     assert!(out.text.starts_with("left click at [1, 1]"), "{}", out.text);
 }
 
@@ -1005,7 +1011,8 @@ fn the_display_follows_the_foreground_window() {
         .unwrap();
     assert_eq!(
         note,
-        "screenshot; give coordinates in pixels of this 192x108 image"
+        "screenshot; give coordinates in pixels of this 192x108 image\n\
+         click frame: 192x108 px, the same as the screen's points"
     );
     // a call's own display wins, and so does a configured one
     let chosen = kit.ctx(json!({"display": 1}));

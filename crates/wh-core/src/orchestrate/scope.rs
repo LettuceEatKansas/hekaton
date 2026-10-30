@@ -337,14 +337,43 @@ impl Ctx<'_> {
     /// space. Python `_image_tag`.
     pub(crate) fn image_tag(&self) -> String {
         if !self.scoped() {
-            return "full screen".to_string();
+            return format!("full screen; {}", self.frame_line());
         }
         let (sw, sh) = self.scale().shot_size();
+        // 0-1000 already says everything; a pixel frame also needs its scale against the window
+        let frame = if self.o.coords == crate::scale::Coords::Norm1000 {
+            String::new()
+        } else {
+            format!("; {}", self.frame_line())
+        };
         format!(
-            "{} ({sw}x{sh}); coordinates in {}",
+            "{} ({sw}x{sh}); coordinates in {}{frame}",
             self.scope_name(),
             self.this_image_space()
         )
+    }
+
+    /// One plain line saying which coordinate frame clicks use and how it relates to the screen's own
+    /// points. 2026-10-30: a 0.6-scale screenshot reported a 1024x576 frame and agents clicked in
+    /// screen points. Only wording: the coordinates themselves are read exactly as before.
+    pub(crate) fn frame_line(&self) -> String {
+        let scale = self.scale();
+        let (sw, sh) = scale.shot_size();
+        let (dw, dh) = (scale.display.width(), scale.display.height());
+        let of = if self.scoped() {
+            "the window's"
+        } else {
+            "the screen's"
+        };
+        if self.o.coords == crate::scale::Coords::Norm1000 {
+            return format!("click frame: 0-1000 on both axes, not pixels; {of} {dw}x{dh} points");
+        }
+        let f = scale.factor();
+        if (f - 1.0).abs() < 0.005 {
+            format!("click frame: {sw}x{sh} px, the same as {of} points")
+        } else {
+            format!("click frame: {sw}x{sh} px, {f:.2}x of {of} {dw}x{dh} points")
+        }
     }
 
     /// How coordinates are read against a scoped picture.

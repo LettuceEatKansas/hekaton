@@ -199,9 +199,10 @@ impl Ctx<'_> {
                     // say what the picture is, so the model knows its coordinate space is the window
                     return Ok((
                         format!(
-                            "screenshot of {} ({sw}x{sh}); give coordinates in {}",
+                            "screenshot of {} ({sw}x{sh}); give coordinates in {}\n{}",
                             self.scope_name(),
-                            self.this_image_space()
+                            self.this_image_space(),
+                            self.frame_line()
                         ),
                         Some(self.screenshot_b64(None)?),
                     ));
@@ -212,7 +213,10 @@ impl Ctx<'_> {
                     format!("pixels of this {sw}x{sh} image")
                 };
                 return Ok((
-                    format!("screenshot; give coordinates in {space}"),
+                    format!(
+                        "screenshot; give coordinates in {space}\n{}",
+                        self.frame_line()
+                    ),
                     Some(self.screenshot_b64(None)?),
                 ));
             }

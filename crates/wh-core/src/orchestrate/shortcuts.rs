@@ -734,6 +734,12 @@ impl Ctx<'_> {
         } else {
             None
         };
+        // the picture that comes back uses the call's frame, so say which
+        let note = if shot.is_some() {
+            format!("{note}\n{}", self.frame_line())
+        } else {
+            note
+        };
         Ok((note, shot))
     }
 
