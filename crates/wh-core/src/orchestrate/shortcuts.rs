@@ -750,6 +750,7 @@ impl Ctx<'_> {
     /// Open an http(s) URL in the default browser and wait until a browser window is in front and has
     /// changed (a new window, or a new page title). Only plain web addresses come here. Python
     /// `shortcuts.open_url`.
+    #[cfg(test)]
     pub(crate) fn open_url(&self, text: &str, wait: f64) -> StepResult<String> {
         self.open_url_in(text, wait, None)
     }
