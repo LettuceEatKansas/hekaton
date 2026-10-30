@@ -222,6 +222,8 @@ struct Node {
     el: Element,
     ax: Ax,
     kept: bool,
+    /// The element is a web view or inside one: the page, not the browser's own chrome.
+    web: bool,
     kids: Vec<Node>,
 }
 
@@ -347,20 +349,28 @@ impl Walk<'_> {
         if kept {
             self.kept += 1;
         }
-        Some(Node { el, ax, kept, kids })
+        Some(Node {
+            el,
+            ax,
+            kept,
+            web: web || self.web_depth > 0,
+            kids,
+        })
     }
 }
 
-fn collect_flat(node: Node, reg: &Registry, window: WindowRef, out: &mut Vec<Element>) {
+/// Kept elements in document order, each with whether it belongs to a web page.
+fn collect_flat(node: Node, reg: &Registry, window: WindowRef, out: &mut Vec<(Element, bool)>) {
     let Node {
         mut el,
         ax,
         kept,
+        web,
         kids,
     } = node;
     if kept {
         el.id = reg.insert(ax, Some(window));
-        out.push(el);
+        out.push((el, web));
     }
     for k in kids {
         collect_flat(k, reg, window, out);
@@ -373,6 +383,7 @@ fn prune(node: Node, reg: &Registry, window: WindowRef) -> Option<Element> {
         ax,
         kept,
         kids,
+        ..
     } = node;
     let children: Vec<Element> = kids
         .into_iter()
@@ -394,6 +405,8 @@ struct Walked {
     /// A web or document area was seen (a Chromium tree without one has not woken up).
     saw_document: bool,
     truncated: bool,
+    /// With a flat walk and a web view: how many leading elements are the page's.
+    web_items: Option<usize>,
 }
 
 fn walk_window(
@@ -426,12 +439,21 @@ fn walk_window(
     } = root;
     el.id = reg.insert(ax, Some(window));
     el.role = Role::Window;
+    let mut web_items = None;
     if limits.flatten {
         let mut flat = Vec::new();
         for k in kids {
             collect_flat(k, reg, window, &mut flat);
         }
-        el.children = flat;
+        // The page first, then the browser's own chrome (tab strip, toolbar): a model reading a
+        // browser wants the page, and Brave lists every open tab as a radio button (2026-10-30), which
+        // leaked other sites' titles and shifted every index.
+        if flat.iter().any(|(_, web)| *web) {
+            let (page, chrome): (Vec<_>, Vec<_>) = flat.into_iter().partition(|(_, web)| *web);
+            web_items = Some(page.len());
+            flat = page.into_iter().chain(chrome).collect();
+        }
+        el.children = flat.into_iter().map(|(e, _)| e).collect();
     } else {
         el.children = kids
             .into_iter()
@@ -443,6 +465,7 @@ fn walk_window(
         visited,
         saw_document,
         truncated,
+        web_items,
     })
 }
 
@@ -513,6 +536,7 @@ pub(crate) fn element_tree(
         root: walked.root,
         truncated: walked.truncated,
         wake_hint,
+        web_items: walked.web_items,
     })
 }
 

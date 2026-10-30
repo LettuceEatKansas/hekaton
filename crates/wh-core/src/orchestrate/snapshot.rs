@@ -20,6 +20,10 @@ pub use super::refs::{WindowLine, format_windows};
 
 /// What `read` appends when a Chromium window looks empty and was left alone
 /// (`core.WAKE_HINT`).
+/// The line `read` ends with when a browser's chrome (tab strip, toolbar) was left out. It starts
+/// this way so the trimming in [`render_snapshot`] keeps it whatever the filter and cap.
+pub(crate) const CHROME_NOTE_PREFIX: &str = "(browser chrome";
+
 pub const WAKE_HINT: &str = "(accessibility tree looks empty: pass wake=true to wake this window's \
 accessibility tree; it is brought to the front briefly)";
 
@@ -103,9 +107,14 @@ pub(crate) fn render_snapshot(
         .filter(|l| l.starts_with("window "))
         .take(1)
         .collect();
+    let notes: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with(CHROME_NOTE_PREFIX))
+        .collect();
     let mut body: Vec<&String> = lines
         .iter()
         .filter(|l| !l.starts_with("window ") && l.as_str() != "(truncated)")
+        .filter(|l| !l.starts_with(CHROME_NOTE_PREFIX))
         .filter(|l| !JUNK.is_match(l) && !MAC_EMPTY_CONTAINER.is_match(l))
         .collect();
     if !filter.is_empty() {
@@ -120,6 +129,7 @@ pub(crate) fn render_snapshot(
             body.len() - max_items
         ));
     }
+    out.extend(notes.iter().map(|s| (*s).clone()));
     if body.is_empty() && filter.is_empty() {
         out.push(
             "(this app exposes no clickable elements to Windows: it is drawn by a game engine or an \
@@ -149,6 +159,7 @@ impl Ctx<'_> {
         spec: Option<&str>,
         max_items: usize,
         wake: bool,
+        chrome: bool,
     ) -> StepResult<(Vec<String>, bool)> {
         let refs = self.c.window_refs();
         let wins = refs.list(true)?;
@@ -166,7 +177,14 @@ impl Ctx<'_> {
             WakePolicy::Never
         };
         let tree = self.be().element_tree(window, &limits)?;
-        let items = &tree.root.children;
+        // A browser's tab strip and toolbar come after the page's own elements (the backend orders
+        // them so). 2026-10-30: Brave lists every open tab as a radio button, so a read of a quiz page
+        // showed other sites' tab titles and shifted the numbers. They stay out unless chrome=true.
+        let page = tree.web_items.filter(|n| *n < tree.root.children.len());
+        let items = match page {
+            Some(n) if !chrome => &tree.root.children[..n],
+            _ => &tree.root.children[..],
+        };
         let mut lines = vec![format!("window \"{title}\"")];
         let mut cached = Vec::with_capacity(items.len());
         for (i, e) in items.iter().enumerate() {
@@ -187,6 +205,22 @@ impl Ctx<'_> {
         if tree.truncated {
             lines.push("(truncated)".to_string());
         }
+        if let Some(n) = page {
+            let hidden = tree.root.children.len() - n;
+            lines.push(if chrome {
+                format!(
+                    "{CHROME_NOTE_PREFIX}: items {n} to {} are the browser's own tabs and toolbar, \
+                     the page ends at {})",
+                    tree.root.children.len() - 1,
+                    n - 1
+                )
+            } else {
+                format!(
+                    "{CHROME_NOTE_PREFIX}: {hidden} tab strip and toolbar items left out; pass \
+                     chrome=true to list them)"
+                )
+            });
+        }
         Ok((lines, !wake && tree.wake_hint))
     }
 
@@ -198,6 +232,7 @@ impl Ctx<'_> {
         filter: &str,
         coords: bool,
         wake: bool,
+        chrome: bool,
     ) -> StepResult<(String, bool)> {
         let max_items = max_items.max(1) as usize;
         let ask = if filter.is_empty() {
@@ -205,7 +240,7 @@ impl Ctx<'_> {
         } else {
             500
         };
-        let (lines, hint) = self.snapshot_lines(spec, ask, wake)?;
+        let (lines, hint) = self.snapshot_lines(spec, ask, wake, chrome)?;
         Ok((render_snapshot(&lines, max_items, filter, coords), hint))
     }
 }
@@ -226,7 +261,7 @@ impl Computer {
     ) -> Result<String, StepError> {
         let who = crate::caller::Caller::unknown();
         let ctx = self.read_ctx(&who);
-        let (mut text, hint) = ctx.do_snapshot(window, max_items, filter, coords, wake)?;
+        let (mut text, hint) = ctx.do_snapshot(window, max_items, filter, coords, wake, true)?;
         if hint {
             text.push('\n');
             text.push_str(WAKE_HINT);
@@ -247,6 +282,7 @@ mod tests {
     use super::*;
     use crate::backend::{Affordance, Expand, Rect, Role, Toggle, WindowInfo};
     use crate::orchestrate::testkit::Kit;
+    use serde_json::json;
 
     // ---- ported from tests/test_20260919_fixes.py ----
 
@@ -411,6 +447,99 @@ mod tests {
         assert_eq!(
             narrowed,
             "window \"Notepad\"\n1 Edit \"File name\" =\"a.txt\""
+        );
+    }
+
+    /// A browser as Brave shows it on the Mac: its tab strip and toolbar come before the page in the
+    /// tree, and every open tab is a radio button.
+    fn brave(kit: &Kit) -> WindowRef {
+        let w = kit.fake.add_window(WindowInfo::basic(
+            "Quiz - Brave",
+            "brave.exe",
+            5,
+            Rect::from_xywh(0, 0, 800, 600),
+        ));
+        let at = |y: i32| Rect::new(10, y, 200, y + 20);
+        let tree = Element::new("root", Role::Window, "Quiz - Brave")
+            .with_child(
+                Element::new("tab1", Role::RadioButton, "Inbox (178) - Memory usage").at(at(5)),
+            )
+            .with_child(Element::new("tab2", Role::RadioButton, "Quiz - Brave").at(at(30)))
+            .with_child(Element::new("back", Role::Button, "Back").at(at(55)))
+            .with_child(
+                Element::new("page", Role::Document, "Quiz")
+                    .at(Rect::new(0, 80, 800, 600))
+                    .with_child(Element::new("a", Role::RadioButton, "Paris").at(at(100)))
+                    .with_child(Element::new("b", Role::RadioButton, "Rome").at(at(130))),
+            );
+        kit.fake.set_tree(w, tree);
+        w
+    }
+
+    // 2026-10-30: read filter=radio listed the page's radios and the browser's tabs, which leaked other
+    // sites' titles and shifted every index. The page comes first and the chrome stays out.
+    #[test]
+    fn read_in_a_browser_lists_the_page_and_leaves_the_tab_strip_out() {
+        let kit = Kit::new();
+        let w = brave(&kit);
+        kit.fake.set_foreground(Some(w));
+        let (out, _) = kit
+            .step(json!({"action": "read", "filter": "radio"}))
+            .unwrap();
+        assert!(out.contains("0 RadioButton \"Paris\""), "{out}");
+        assert!(out.contains("1 RadioButton \"Rome\""), "{out}");
+        assert!(!out.contains("Inbox (178)"), "{out}");
+        assert!(
+            out.contains(
+                "(browser chrome: 3 tab strip and toolbar items left out; pass chrome=true"
+            ),
+            "{out}"
+        );
+        // press-by-number targets the page's first radio
+        assert_eq!(
+            kit.computer.element_refs().get(0, Some(w)).unwrap().name,
+            "Paris"
+        );
+    }
+
+    #[test]
+    fn read_in_a_browser_with_chrome_true_lists_the_page_first_then_the_chrome() {
+        let kit = Kit::new();
+        let w = brave(&kit);
+        kit.fake.set_foreground(Some(w));
+        let (out, _) = kit
+            .step(json!({"action": "read", "filter": "radio", "chrome": true}))
+            .unwrap();
+        let at = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {out}"))
+        };
+        assert!(
+            at("Paris") < at("Rome") && at("Rome") < at("Inbox (178)"),
+            "{out}"
+        );
+        assert!(out.contains("(browser chrome: items 2 to 4"), "{out}");
+    }
+
+    // a window with no web view is listed as before, no note
+    #[test]
+    fn a_native_window_has_no_browser_chrome_note() {
+        let kit = Kit::new();
+        let w = kit.fake.add_window(WindowInfo::basic(
+            "App",
+            "app.exe",
+            5,
+            Rect::from_xywh(0, 0, 80, 60),
+        ));
+        kit.fake.set_tree(
+            w,
+            Element::new("root", Role::Window, "App")
+                .with_child(Element::new("ok", Role::Button, "OK").at(Rect::new(0, 0, 10, 10))),
+        );
+        let (out, _) = kit.step(json!({"action": "read", "text": "App"})).unwrap();
+        assert!(
+            out.contains("0 Button \"OK\"") && !out.contains("browser chrome"),
+            "{out}"
         );
     }
 

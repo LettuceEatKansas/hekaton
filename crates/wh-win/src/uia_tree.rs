@@ -104,6 +104,7 @@ pub(crate) fn element_tree(window: WindowRef, limits: &TreeLimits) -> BackendRes
     } = read;
     root.children = items;
     Ok(TreeSnapshot {
+        web_items: None,
         window,
         title,
         root,

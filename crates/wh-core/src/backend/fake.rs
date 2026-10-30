@@ -787,6 +787,24 @@ fn without_children(e: &Element) -> Element {
     }
 }
 
+/// The ids of everything inside a `Document` (a page), `None` when the tree has none.
+fn web_ids_of(root: &Element) -> Option<Vec<ElementId>> {
+    fn go(e: &Element, in_web: bool, seen_doc: &mut bool, out: &mut Vec<ElementId>) {
+        let web = in_web || e.role == Role::Document;
+        *seen_doc |= e.role == Role::Document;
+        if web {
+            out.push(e.id.clone());
+        }
+        for c in &e.children {
+            go(c, web, seen_doc, out);
+        }
+    }
+    let mut ids = Vec::new();
+    let mut seen = false;
+    go(root, false, &mut seen, &mut ids);
+    seen.then_some(ids)
+}
+
 fn limit_walk(
     node: &Element,
     depth: u32,
@@ -1129,6 +1147,7 @@ impl Backend for FakeBackend {
                     root: Element::new(&format!("win-{}", window.raw()), Role::Window, &title),
                     truncated: false,
                     wake_hint: true,
+                    web_items: None,
                 });
             }
             s.chromium_empty.retain(|w| *w != window);
@@ -1138,9 +1157,17 @@ impl Backend for FakeBackend {
             Element::new(&format!("win-{}", window.raw()), Role::Window, &title)
         });
         let mut truncated = false;
+        let mut web_items = None;
         let root = if limits.flatten {
             let mut kept = Vec::new();
             limit_walk(&tree, 0, limits, &mut kept, &mut truncated);
+            // like the Mac backend: a page's elements (under a Document) first, browser chrome after
+            if let Some(web_ids) = web_ids_of(&tree) {
+                let (web, chrome): (Vec<Element>, Vec<Element>) =
+                    kept.into_iter().partition(|e| web_ids.contains(&e.id));
+                web_items = Some(web.len());
+                kept = web.into_iter().chain(chrome).collect();
+            }
             Element {
                 children: kept,
                 ..without_children(&tree)
@@ -1155,6 +1182,7 @@ impl Backend for FakeBackend {
             root,
             truncated,
             wake_hint: false,
+            web_items,
         })
     }
 

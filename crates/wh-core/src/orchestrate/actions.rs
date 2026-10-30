@@ -286,8 +286,10 @@ impl Ctx<'_> {
                 let wake = flag(step.get("wake"), false);
                 let limit = int_or(step, "limit", 40)?;
                 let filter = text_arg(step, "filter");
+                // a browser's tab strip and toolbar are left out unless asked for (chrome=true)
+                let chrome = flag(step.get("chrome"), false);
                 let (mut out, hint) =
-                    self.do_snapshot(Some(&hwnd.spec()), limit, &filter, false, wake)?;
+                    self.do_snapshot(Some(&hwnd.spec()), limit, &filter, false, wake, chrome)?;
                 if hint {
                     out.push('\n');
                     out.push_str(WAKE_HINT);

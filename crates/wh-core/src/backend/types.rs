@@ -902,6 +902,11 @@ pub struct TreeSnapshot {
     /// The window looked like an empty Chromium tree that [`WakePolicy::Never`] left alone, and
     /// raising it would help (`core.WAKE_HINT`).
     pub wake_hint: bool,
+    /// With `flatten` and a web view in the window: how many of the leading children are the page's
+    /// own elements. The rest are the browser's chrome (tab strip, toolbar), listed after the page.
+    /// `None` when the window has no web view, or the backend does not tell.
+    #[serde(default)]
+    pub web_items: Option<usize>,
 }
 
 /// An element found at a screen point, with its ancestors (nearest first).

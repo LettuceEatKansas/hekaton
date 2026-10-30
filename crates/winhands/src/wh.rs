@@ -71,10 +71,11 @@ pub const NUM_KEYS: [&str; 19] = [
 ];
 
 /// Keys that accept true/false/yes/no/on/off/1/0.
-pub const BOOL_KEYS: [&str; 16] = [
+pub const BOOL_KEYS: [&str; 17] = [
     "shot",
     "wake",
     "new_only",
+    "chrome",
     "double",
     "enter",
     "clear",
