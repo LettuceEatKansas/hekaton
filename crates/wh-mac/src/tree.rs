@@ -254,6 +254,47 @@ fn keeps(el: &Element, filter: ElementFilter) -> bool {
     }
 }
 
+/// Roles whose empty name is filled with the first text inside them (a web radio button is a group
+/// holding a label). The tree walk and a fresh `element` read must agree on it, or a name listed by
+/// `read` would not match the live element when `press` checks it.
+fn takes_child_text(role: &Role) -> bool {
+    matches!(
+        role,
+        Role::ListItem
+            | Role::DataItem
+            | Role::TreeItem
+            | Role::TabItem
+            | Role::Button
+            | Role::CheckBox
+            | Role::RadioButton
+            | Role::Hyperlink
+            | Role::MenuItem
+    )
+}
+
+/// [`first_text`] for live elements: the first static text under `kids`, at most four levels down
+/// and `budget` elements read.
+fn live_first_text(kids: &[Ax], depth: u32, budget: &mut u32) -> Option<String> {
+    if depth > 3 {
+        return None;
+    }
+    for k in kids {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let Ok(p) = k.fetch() else { continue };
+        let e = make_element(ElementId(String::new()), &p, None);
+        if e.role == Role::Text && !e.name.is_empty() {
+            return Some(e.name);
+        }
+        if let Some(t) = live_first_text(&p.children, depth + 1, budget) {
+            return Some(t);
+        }
+    }
+    None
+}
+
 /// The first text found under a node, for items whose own name is empty.
 fn first_text(kids: &[Node], depth: u32) -> Option<String> {
     if depth > 3 {
@@ -304,18 +345,7 @@ impl Walk<'_> {
             self.truncated = true;
         }
         if el.name.is_empty()
-            && matches!(
-                el.role,
-                Role::ListItem
-                    | Role::DataItem
-                    | Role::TreeItem
-                    | Role::TabItem
-                    | Role::Button
-                    | Role::CheckBox
-                    | Role::RadioButton
-                    | Role::Hyperlink
-                    | Role::MenuItem
-            )
+            && takes_child_text(&el.role)
             && let Some(t) = first_text(&kids, 0)
         {
             el.name = t;
@@ -545,7 +575,16 @@ pub(crate) fn element(reg: &Registry, id: &ElementId) -> BackendResult<Element> 
     let (ax, window) = reg.get(id).ok_or(BackendError::ElementGone)?;
     let props = ax.fetch().map_err(map_err)?;
     let _ = window;
-    Ok(make_element(id.clone(), &props, None))
+    let mut el = make_element(id.clone(), &props, None);
+    // 2026-10-30: the tree walk names a button or radio from the text inside it when it has no label
+    // of its own; do the same here, so `press` can compare the live name with the one `read` listed.
+    if el.name.is_empty()
+        && takes_child_text(&el.role)
+        && let Some(t) = live_first_text(&props.children, 0, &mut 40)
+    {
+        el.name = t;
+    }
+    Ok(el)
 }
 
 /// The window an element lives in.

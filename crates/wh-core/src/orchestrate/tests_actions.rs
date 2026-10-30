@@ -1959,6 +1959,76 @@ fn press_clicks_the_centre_of_an_element_with_no_action() {
     assert_eq!(c[0].0, Point { x: 120, y: 30 });
 }
 
+/// A quiz page: a question and three options, the third one's id and label chosen by the caller.
+fn quiz_page(kit: &Kit, w: WindowRef, third_id: &str, third_label: &str, role: Role) {
+    let mut a = Element::new("opt_a", Role::RadioButton, "Berlin").at(Rect::new(10, 10, 90, 30));
+    a.affordances.push(crate::backend::Affordance::Select);
+    let mut c = Element::new(third_id, role, third_label).at(Rect::new(10, 50, 90, 70));
+    c.affordances.push(crate::backend::Affordance::Select);
+    kit.fake.set_tree(
+        w,
+        Element::new("root", Role::Window, "Quiz")
+            .with_child(a)
+            .with_child(c),
+    );
+}
+
+// 2026-10-30 (quiz run): the page moved to the next question and `press 1` acted on option c of the
+// previous page. A number from `read` is only good for the element that was listed.
+#[test]
+fn press_refuses_an_element_whose_label_changed_since_read() {
+    let kit = Kit::new();
+    let w = kit.front("Quiz", "brave.exe", 50);
+    quiz_page(&kit, w, "opt_c", "Paris", Role::RadioButton);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    // next question: the same slot, a different answer
+    quiz_page(&kit, w, "opt_c", "Rome", Role::RadioButton);
+    let err = err_of(kit.step(json!({"action": "press", "text": "1"})));
+    let m = err.message();
+    assert!(m.starts_with("page changed since read"), "{m}");
+    assert!(m.contains("'Paris'") && m.contains("'Rome'") && m.contains("read again"), "{m}");
+    assert!(kit.fake.performed().is_empty(), "nothing was pressed");
+    assert!(clicks(&kit).is_empty(), "nothing was clicked");
+}
+
+#[test]
+fn press_refuses_an_element_that_is_gone_or_changed_kind() {
+    let kit = Kit::new();
+    let w = kit.front("Quiz", "brave.exe", 50);
+    quiz_page(&kit, w, "opt_c", "Paris", Role::RadioButton);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    // the old page's elements are gone (new ids)
+    quiz_page(&kit, w, "next_c", "Paris", Role::RadioButton);
+    let err = err_of(kit.step(json!({"action": "press", "text": "1"})));
+    assert!(
+        err.message().starts_with("page changed since read") && err.message().contains("is gone"),
+        "{}",
+        err.message()
+    );
+    // same id and label but it is a button now
+    quiz_page(&kit, w, "opt_c", "Paris", Role::RadioButton);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    quiz_page(&kit, w, "opt_c", "Paris", Role::Button);
+    let err = err_of(kit.step(json!({"action": "press", "text": "1"})));
+    assert!(
+        err.message().starts_with("page changed since read"),
+        "{}",
+        err.message()
+    );
+    assert!(kit.fake.performed().is_empty() && clicks(&kit).is_empty());
+}
+
+#[test]
+fn press_still_works_when_the_page_is_what_read_listed() {
+    let kit = Kit::new();
+    let w = kit.front("Quiz", "brave.exe", 50);
+    quiz_page(&kit, w, "opt_c", "Paris", Role::RadioButton);
+    kit.step(json!({"action": "read", "text": "Quiz"})).unwrap();
+    let (note, _) = kit.step(json!({"action": "press", "text": "1"})).unwrap();
+    assert!(note.starts_with("pressed 1 "), "{note}");
+    assert_eq!(kit.fake.performed().len(), 1);
+}
+
 #[test]
 fn press_needs_a_number_from_a_read() {
     let kit = Kit::new();

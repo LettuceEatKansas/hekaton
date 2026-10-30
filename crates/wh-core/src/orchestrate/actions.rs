@@ -26,6 +26,11 @@ const COPY_COMBOS: [&str; 3] = ["ctrl+c", "ctrl+x", "ctrl+insert"];
 /// A step's result: the note and, when the step produced one, a base64 picture.
 pub(crate) type StepOut = (String, Option<String>);
 
+/// Do two element labels read the same? Whitespace runs and the ends do not count.
+fn same_label(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
+}
+
 /// `_wait_timeout`: `max(0.1, min(float(timeout or 10), 120.0))`.
 fn wait_timeout(args: &Args) -> StepResult<f64> {
     Ok(float_or(args, "timeout", 10.0)?.clamp(0.1, 120.0))
@@ -682,16 +687,37 @@ impl Ctx<'_> {
                 "no element {n} in the last read of that window; read it first"
             )));
         };
+        // 2026-10-30 (quiz run): the page moved to the next question and `press 3` acted on option c
+        // of the PREVIOUS page. A number from `read` is a promise about what was listed, so look at
+        // the element now: it must still exist and still be the same kind of thing with the same
+        // label. Anything else means the page changed, and pressing "whatever has that number now"
+        // could do the wrong thing, so refuse and say to read again.
+        let live = self.be().element(&el.id).map_err(|e| {
+            StepError::target(format!(
+                "page changed since read: element {n} {} is gone ({e}); read again",
+                py_repr(&el.name)
+            ))
+        })?;
+        if live.native_role != el.native_role || !same_label(&live.name, &el.name) {
+            return Err(StepError::target(format!(
+                "page changed since read: element {n} was {} {} and is now {} {}; read again",
+                el.native_role,
+                py_repr(&el.name),
+                live.native_role,
+                py_repr(&live.name)
+            )));
+        }
         if el.disabled {
             return Err(StepError::target(format!(
                 "element {n} {} is disabled",
                 py_repr(&el.name)
             )));
         }
-        let host = self
-            .be()
-            .element_window(&el.id)
-            .map_err(|e| StepError::target(format!("element {n} is gone ({e}); read again")))?;
+        let host = self.be().element_window(&el.id).map_err(|e| {
+            StepError::target(format!(
+                "page changed since read: element {n} has no window now ({e}); read again"
+            ))
+        })?;
         self.input_guard()?;
         self.check_allowed(self.root_of(host))?;
         let p = Point {
