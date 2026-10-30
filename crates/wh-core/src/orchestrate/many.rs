@@ -150,7 +150,15 @@ impl CallOpts {
     /// second monitor leaked that choice into a later call from a different caller).
     pub(crate) fn from_args(c: &Computer, args: &Args, policy: Policy) -> StepResult<Self> {
         let budget_ms = match args.get("budget_ms") {
-            None => 60_000,
+            // 2026-10-30: a lone `wait` that names a duration gets the time to wait it (a 60 s wait
+            // under the 60 s default budget could never finish).
+            None => {
+                let wait_s = (args.get("action").and_then(Value::as_str) == Some("wait"))
+                    .then(|| args.get("duration").and_then(Value::as_f64))
+                    .flatten()
+                    .unwrap_or(0.0);
+                (((wait_s.clamp(0.0, 115.0) + 5.0) * 1000.0) as u64).clamp(60_000, 120_000)
+            }
             Some(v) => v
                 .as_u64()
                 .filter(|n| (1..=120_000).contains(n))

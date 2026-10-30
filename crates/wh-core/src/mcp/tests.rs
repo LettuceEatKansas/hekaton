@@ -189,6 +189,18 @@ fn a_bare_call_is_a_screenshot_with_the_fixed_fields_only() {
     );
 }
 
+// 2026-10-30: a bare `wait` must not look like a named one, or the daemon sleeps the shim's 1.0 in
+// full instead of returning when the screen settles.
+#[test]
+fn a_wait_sends_its_duration_only_when_the_caller_named_one() {
+    let bare = payload(json!({"action": "wait"}));
+    assert!(!bare.contains_key("duration"), "{bare:?}");
+    let named = payload(json!({"action": "wait", "duration": 60}));
+    assert_eq!(named["duration"], json!(60.0));
+    let other = payload(json!({"action": "hold_key", "text": "a"}));
+    assert_eq!(other["duration"], json!(1.0));
+}
+
 #[test]
 fn unset_extras_are_not_sent_so_old_payloads_are_unchanged() {
     let p = payload(json!({"action": "left_click", "coordinate": [5, 6]}));

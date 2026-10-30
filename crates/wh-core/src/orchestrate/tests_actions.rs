@@ -987,27 +987,59 @@ fn clipboard_set_is_capped_and_needs_text() {
 // ---------------------------------------------------------------------------- waiting
 
 #[test]
-fn wait_asks_the_screen_not_the_clock() {
+fn wait_with_no_duration_asks_the_screen_not_the_clock() {
+    let kit = Kit::new();
+    let (note, _) = kit.step(json!({"action": "wait"})).unwrap();
+    assert!(
+        note.starts_with("waited ") && note.ends_with("s (asked 1s, screen settled)"),
+        "{note}"
+    );
+    assert!(
+        kit.clock.now() < Duration::from_millis(700),
+        "a static screen settles after the 40 percent grace"
+    );
+}
+
+// 2026-10-30: wait(duration=60) returned after 12 s because the screen settled.
+#[test]
+fn wait_with_a_duration_waits_all_of_it_on_a_calm_screen() {
     let kit = Kit::new();
     let (note, _) = kit
         .step(json!({"action": "wait", "duration": 2.5}))
         .unwrap();
+    assert_eq!(note, "waited 2.5s (asked 2.5s)");
     assert!(
-        note.starts_with("waited ") && note.ends_with("s (asked 2.5s, screen settled)"),
-        "{note}"
-    );
-    assert!(
-        kit.clock.now() < Duration::from_millis(1100),
-        "a static screen settles after the 40 percent grace"
+        kit.clock.now() >= Duration::from_millis(2500),
+        "a named duration is slept in full, settled screen or not"
     );
     let (note, _) = kit
         .step(json!({"action": "wait", "duration": 0.2}))
         .unwrap();
-    assert_eq!(note, "waited 0.2s (asked 0.2s, screen settled)");
-    let (note, _) = kit.step(json!({"action": "wait", "duration": 99})).unwrap();
-    assert!(note.contains("(asked 30s,"), "{note}");
-    let (note, _) = kit.step(json!({"action": "wait"})).unwrap();
-    assert!(note.contains("(asked 1s,"), "{note}");
+    assert_eq!(note, "waited 0.2s (asked 0.2s)");
+    // Inside a batch the default 60 s budget stays, so a longer wait says how to get the time.
+    let err = kit
+        .step(json!({"action": "wait", "duration": 99}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("budget_ms"), "{err}");
+    // A lone wait that names a duration gets the time to wait it, up to 115 s.
+    let before = kit.clock.now();
+    let out = kit.computer.execute(
+        &json!({"action": "wait", "duration": 99, "shot": false}),
+        &kit.who,
+    );
+    assert!(out.ok, "{:?}", out.error);
+    assert!(kit.clock.now() - before >= Duration::from_secs(99));
+    assert!(
+        out.result
+            .unwrap_or_default()
+            .contains("waited 99.0s (asked 99s)"),
+    );
+    let out = kit.computer.execute(
+        &json!({"action": "wait", "duration": 500, "shot": false}),
+        &kit.who,
+    );
+    assert!(out.result.unwrap_or_default().contains("(asked 115s)"));
 }
 
 // Ported from test_wait_for_text_found and test_wait_for_text_timeout.
@@ -1811,10 +1843,7 @@ fn expect_is_appended_to_the_steps_note() {
     let (note, _) = kit
         .step(json!({"action": "wait", "duration": 0.1, "expect": {"text": "Saved"}}))
         .unwrap();
-    assert_eq!(
-        note,
-        "waited 0.1s (asked 0.1s, screen settled); expect: PASS"
-    );
+    assert_eq!(note, "waited 0.1s (asked 0.1s); expect: PASS");
     let error = kit
         .step(json!({"action": "left_click", "coordinate": [1, 1], "expect": {"text": "Nope"}}))
         .unwrap_err();

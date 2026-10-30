@@ -360,24 +360,43 @@ impl Ctx<'_> {
                 return Ok((out, None));
             }
             "wait" => {
-                let d = float_or(step, "duration", 1.0)?.clamp(0.0, 30.0);
-                // A model asks to "wait 2.5 s" because it expects an animation. Wait for the
-                // animation instead: return once the screen settles, after at least 40% of the time
-                // asked (enemy turns pause between attacks). In a first Gemini run, 56% of all acting
-                // time was waits it added itself (66 of 117 s).
-                // ... unless the next step acts blind: then a calm screen may only mean the app has
-                // not started drawing what comes next, so the full time is waited.
-                let blind_next = self
-                    .o
-                    .input_follows
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let took = if d > 0.3 && !blind_next {
-                    self.settle(Some(d), 0.4 * d, 2)?
+                // 2026-10-30: wait(duration=60) returned after 12 s because the screen settled. A
+                // duration the caller names is waited in full (up to 115 s, inside the 120 s call maximum); the early return on a
+                // calm screen is for a wait with no duration, which is "give it a moment".
+                let named = is_truthy(step, "duration");
+                if named {
+                    let d = float_or(step, "duration", 1.0)?.clamp(0.0, 115.0);
+                    if let Some(deadline) = self.o.deadline {
+                        let left = deadline.saturating_sub(self.clock().now()).as_secs_f64();
+                        if d > left {
+                            return Err(StepError::value(format!(
+                                "wait of {}s is longer than the {left:.0}s left in this call; pass \
+                                 budget_ms (up to 120000) to wait that long",
+                                fmt_g(d)
+                            )));
+                        }
+                    }
+                    self.sleep_checked(d)?;
+                    format!("waited {d:.1}s (asked {}s)", fmt_g(d))
                 } else {
-                    self.sleep(d);
-                    d
-                };
-                format!("waited {took:.1}s (asked {}s, screen settled)", fmt_g(d))
+                    let d = 1.0;
+                    // Wait for the animation instead of the clock: return once the screen settles,
+                    // after at least 40% of the time. In a first Gemini run, 56% of all acting time
+                    // was waits it added itself (66 of 117 s).
+                    // ... unless the next step acts blind: then a calm screen may only mean the app
+                    // has not started drawing what comes next, so the full time is waited.
+                    let blind_next = self
+                        .o
+                        .input_follows
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let took = if !blind_next {
+                        self.settle(Some(d), 0.4 * d, 2)?
+                    } else {
+                        self.sleep(d);
+                        d
+                    };
+                    format!("waited {took:.1}s (asked {}s, screen settled)", fmt_g(d))
+                }
             }
             "read_text" => {
                 // Sends select-all / copy only when the app exposes no text to UIA, so it is an

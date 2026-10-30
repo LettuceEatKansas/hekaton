@@ -516,8 +516,7 @@ fn shot_false_with_a_passive_last_step_does_no_settle_at_all() {
     assert!(out.images.is_empty());
     assert_eq!(kit.fake.capture_count(), 0);
     assert!(
-        out.text
-            .starts_with("waited 0.1s (asked 0.1s, screen settled)"),
+        out.text.starts_with("waited 0.1s (asked 0.1s)"),
         "{}",
         out.text
     );
@@ -1192,19 +1191,19 @@ fn a_wait_before_blind_input_runs_its_full_time() {
     kit.front("Editor", "notepad.exe", 7);
     let start = kit.clock.now();
     let out = kit.computer.execute(
-        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "key", "text": "a"}], "shot": false}),
+        &json!({"actions": [{"action": "wait"}, {"action": "key", "text": "a"}], "shot": false}),
         &kit.who,
     );
     assert!(out.ok, "{:?}", out.error);
     assert!(
-        kit.clock.now() - start >= Duration::from_secs(2),
+        kit.clock.now() - start >= Duration::from_secs(1),
         "{:?}",
         out.result
     );
 
     let start = kit.clock.now();
     let out = kit.computer.execute(
-        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "screenshot"}]}),
+        &json!({"actions": [{"action": "wait"}, {"action": "screenshot"}]}),
         &kit.who,
     );
     assert!(out.ok, "{:?}", out.error);
@@ -1216,13 +1215,13 @@ fn a_wait_before_blind_input_runs_its_full_time() {
 
     // read_text sends select-all + copy, but only to look
     let out = kit.computer.execute(
-        &json!({"actions": [{"action": "wait", "duration": 2.0}, {"action": "read_text"}], "shot": false}),
+        &json!({"actions": [{"action": "wait"}, {"action": "read_text"}], "shot": false}),
         &kit.who,
     );
     assert!(out.ok, "{:?}", out.error);
     let said = out.result.unwrap_or_default();
     assert!(
-        !said.starts_with("waited 2.0s"),
+        !said.starts_with("waited 1.0s"),
         "a wait before read_text may end early: {said}"
     );
 }

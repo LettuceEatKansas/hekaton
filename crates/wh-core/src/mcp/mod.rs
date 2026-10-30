@@ -232,10 +232,13 @@ pub fn build_payload(
         "scroll_amount".into(),
         Value::from(opt_int(args, "scroll_amount")?.unwrap_or(3)),
     );
-    payload.insert(
-        "duration".into(),
-        Value::from(opt_float(args, "duration")?.unwrap_or(1.0)),
-    );
+    // 2026-10-30: a `wait` with no duration is "give it a moment" (it may end when the screen
+    // settles); one with a duration is waited in full. The default 1.0 would make every wait look
+    // like a named one, so a bare wait sends none.
+    let duration = opt_float(args, "duration")?;
+    if action != "wait" || duration.is_some() {
+        payload.insert("duration".into(), Value::from(duration.unwrap_or(1.0)));
+    }
     payload.insert(
         "repeat".into(),
         Value::from(opt_int(args, "repeat")?.unwrap_or(1)),
