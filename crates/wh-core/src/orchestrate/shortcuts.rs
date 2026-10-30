@@ -751,9 +751,37 @@ impl Ctx<'_> {
     /// changed (a new window, or a new page title). Only plain web addresses come here. Python
     /// `shortcuts.open_url`.
     pub(crate) fn open_url(&self, text: &str, wait: f64) -> StepResult<String> {
+        self.open_url_in(text, wait, None)
+    }
+
+    /// [`Self::open_url`] in a named browser (an app name or bundle id) instead of the system default.
+    /// 2026-10-30: with Safari in front and Brave the default, every URL opened in Brave and the
+    /// agent lost its Safari session.
+    pub(crate) fn open_url_in(
+        &self,
+        text: &str,
+        wait: f64,
+        browser: Option<&str>,
+    ) -> StepResult<String> {
         let url = text.trim();
         // the owner's hard line
         self.o.policy.check_command(url, "the URL")?;
+        let (target, args) = match browser.map(str::trim).filter(|b| !b.is_empty()) {
+            Some(name) => {
+                self.o.policy.check_command(name, "the browser")?;
+                match self.be().resolve_app(name).ok().flatten() {
+                    Some(t) if !matches!(t, AppTarget::Other(_)) => (t, url.to_string()),
+                    _ => {
+                        return Err(StepError::target(format!(
+                            "no browser named {} (an app name like Safari, or a bundle id); \
+                             leave browser out to use the system default",
+                            py_repr(name)
+                        )));
+                    }
+                }
+            }
+            None => (AppTarget::Other(url.to_string()), String::new()),
+        };
         let fg0 = self.fg_root();
         let before: HashMap<WindowRef, String> = self
             .c
@@ -769,8 +797,8 @@ impl Ctx<'_> {
         // the default browser must not run with the daemon's admin rights: `deelevate` starts it at
         // the user's normal level
         self.be().launch(&LaunchSpec {
-            target: AppTarget::Other(url.to_string()),
-            args: String::new(),
+            target,
+            args,
             deelevate: true,
         })?;
         let arrived = || -> Option<StepResult<Target>> {

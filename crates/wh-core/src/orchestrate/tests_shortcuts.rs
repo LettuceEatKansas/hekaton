@@ -1053,6 +1053,66 @@ fn open_app_routes_urls_to_the_browser_and_starts_it_de_elevated() {
     );
 }
 
+// 2026-10-30: with Safari holding the session and Brave the system default, open_app on a URL always
+// went to Brave. `browser` names the one to use; the default is unchanged (the test above).
+#[test]
+fn open_app_on_a_url_with_browser_opens_it_in_that_browser() {
+    let d = Desk::new();
+    d.add("terminal", "terminal.exe", "t");
+    let safari = AppTarget::Shortcut("/Applications/Safari.app".into());
+    d.kit.fake.set_app("Safari", safari.clone());
+    browser_hook(&d, "Example Domain - Brave");
+    let (note, _) = d
+        .kit
+        .step(json!({"action": "open_app", "text": "https://example.com", "browser": "Safari"}))
+        .unwrap();
+    assert!(
+        note.starts_with("opened https://example.com in w"),
+        "{note}"
+    );
+    assert_eq!(
+        d.kit.fake.launches(),
+        [LaunchSpec {
+            target: safari,
+            args: "https://example.com".into(),
+            deelevate: true
+        }]
+    );
+}
+
+#[test]
+fn open_app_on_a_url_with_an_unknown_browser_is_an_error_and_starts_nothing() {
+    let d = Desk::new();
+    d.add("terminal", "terminal.exe", "t");
+    let e = d
+        .kit
+        .step(json!({"action": "open_app", "text": "https://example.com", "browser": "NoSuchBrowser"}))
+        .unwrap_err();
+    assert!(
+        e.message().contains("no browser named 'NoSuchBrowser'"),
+        "{e}"
+    );
+    assert!(d.kit.fake.launches().is_empty());
+}
+
+#[test]
+fn a_named_browser_is_checked_against_the_allowlist_not_the_url() {
+    let d = Desk::new();
+    d.kit.fake.set_app(
+        "Safari",
+        AppTarget::Shortcut("/Applications/Safari.app".into()),
+    );
+    let e = d
+        .kit
+        .step_only(
+            &["notepad.exe"],
+            json!({"action": "open_app", "text": "https://example.com", "browser": "Safari"}),
+        )
+        .unwrap_err();
+    assert!(e.message().contains("not an app this task may open"), "{e}");
+    assert!(d.kit.fake.launches().is_empty());
+}
+
 // Ported from test_a_url_is_refused_under_an_allowlist_before_any_browser_starts.
 #[test]
 fn a_url_is_refused_under_an_allowlist_before_any_browser_starts() {

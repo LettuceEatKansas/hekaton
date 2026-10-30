@@ -364,12 +364,19 @@ impl Ctx<'_> {
                     ));
                 }
                 let text = super::open::repair_escapes(&text, &|p| Path::new(p).is_file());
-                self.check_launch_allowed(&text)?;
-                let mut note = if super::shortcuts::is_url(&text) {
+                let is_url = super::shortcuts::is_url(&text);
+                let browser = text_arg(step, "browser");
+                // a URL sent to a named browser is checked as that browser; otherwise as the URL
+                self.check_launch_allowed(if is_url && !browser.trim().is_empty() {
+                    &browser
+                } else {
+                    &text
+                })?;
+                let mut note = if is_url {
                     // 2026-10-08: a web address starts the default browser and waits for its window;
                     // the old route waited for a NEW window and failed when the browser just added a
-                    // tab
-                    self.open_url(&text, 8.0)?
+                    // tab. 2026-10-30: `browser` names another one (the one holding the session).
+                    self.open_url_in(&text, 8.0, Some(browser.as_str()))?
                 } else {
                     // A plain name that matches an open window's title focuses that window
                     // (2026-09-21: Search Console open in a browser as "Overview - Brave" sat behind

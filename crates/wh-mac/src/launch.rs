@@ -11,7 +11,8 @@ use objc2_foundation::{NSBundle, NSString};
 use wh_core::backend::{AppTarget, BackendError, BackendResult, LaunchOutcome, LaunchSpec};
 
 use crate::launchutil::{
-    app_search_dirs, looks_like_bundle_id, looks_like_url, match_app_name, split_args,
+    app_search_dirs, looks_like_bundle_id, looks_like_url, match_app_name, open_app_args,
+    split_args,
 };
 
 const OPEN: &str = "/usr/bin/open";
@@ -182,22 +183,12 @@ pub(crate) fn launch(spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
             Ok(LaunchOutcome { pid: Some(pid) })
         }
         AppTarget::Shortcut(path) => {
-            let mut cmd = vec!["-a".to_string(), path.clone()];
-            if !args.is_empty() {
-                cmd.push("--args".to_string());
-                cmd.extend(args);
-            }
-            run_open(&cmd)?;
+            run_open(&open_app_args("-a", path, &args))?;
             let pid = bundle_id_of_path(path).and_then(|id| pid_for_bundle(&id));
             Ok(LaunchOutcome { pid })
         }
         AppTarget::Packaged(id) => {
-            let mut cmd = vec!["-b".to_string(), id.clone()];
-            if !args.is_empty() {
-                cmd.push("--args".to_string());
-                cmd.extend(args);
-            }
-            run_open(&cmd)?;
+            run_open(&open_app_args("-b", id, &args))?;
             Ok(LaunchOutcome {
                 pid: pid_for_bundle(id),
             })

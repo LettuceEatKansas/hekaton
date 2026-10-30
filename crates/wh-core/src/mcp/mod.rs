@@ -282,6 +282,7 @@ pub fn build_payload(
         "wake",
         opt_bool(args, "wake")?.filter(|b| *b).map(Value::from),
     );
+    put("browser", truthy_str("browser")?);
     put(
         "chrome",
         opt_bool(args, "chrome")?.filter(|b| *b).map(Value::from),

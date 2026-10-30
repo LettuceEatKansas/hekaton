@@ -50,6 +50,22 @@ pub(crate) fn looks_like_bundle_id(s: &str) -> bool {
         && !s.ends_with('.')
 }
 
+/// The arguments of `open` that start an app (`flag` is `-a` or `-b`). A lone URL is something for
+/// the app to open (`open -a Safari https://...`, the page opens in that browser); anything else is
+/// the app's own command line, after `--args`.
+pub(crate) fn open_app_args(flag: &str, app: &str, args: &[String]) -> Vec<String> {
+    let mut cmd = vec![flag.to_string(), app.to_string()];
+    match args {
+        [] => {}
+        [url] if looks_like_url(url) => cmd.push(url.clone()),
+        _ => {
+            cmd.push("--args".to_string());
+            cmd.extend(args.iter().cloned());
+        }
+    }
+    cmd
+}
+
 /// A URL the system can open (`https://`, `mailto:`, `tel:`, any `scheme://`).
 pub(crate) fn looks_like_url(s: &str) -> bool {
     let s = s.trim();
@@ -185,6 +201,41 @@ mod tests {
         assert!(!looks_like_url("C:\\Windows"));
         assert!(!looks_like_url("hello world: x"));
         assert!(!looks_like_url("notes"));
+    }
+
+    #[test]
+    fn a_lone_url_is_opened_by_the_app_and_other_args_go_after_args() {
+        let s = |v: &[&str]| v.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            open_app_args(
+                "-a",
+                "/Applications/Safari.app",
+                &s(&["https://example.com"])
+            ),
+            ["-a", "/Applications/Safari.app", "https://example.com"]
+        );
+        assert_eq!(
+            open_app_args(
+                "-b",
+                "com.apple.Safari",
+                &s(&["--flag", "https://example.com"])
+            ),
+            [
+                "-b",
+                "com.apple.Safari",
+                "--args",
+                "--flag",
+                "https://example.com"
+            ]
+        );
+        assert_eq!(
+            open_app_args("-a", "/Applications/TextEdit.app", &s(&["notes.txt"])),
+            ["-a", "/Applications/TextEdit.app", "--args", "notes.txt"]
+        );
+        assert_eq!(
+            open_app_args("-b", "com.apple.Safari", &[]),
+            ["-b", "com.apple.Safari"]
+        );
     }
 
     #[test]
