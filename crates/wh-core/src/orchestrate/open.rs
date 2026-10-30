@@ -21,7 +21,7 @@ use super::files::expand_vars;
 use super::guard::basename;
 use super::refs::WindowLine;
 use crate::backend::{
-    AppTarget, BackendError, BackendResult, ElementAction, LaunchSpec, Point, WindowRef,
+    AppTarget, BackendError, BackendResult, ElementAction, ElementId, LaunchSpec, Point, WindowRef,
 };
 use crate::textutil::py_repr;
 
@@ -683,21 +683,38 @@ impl Ctx<'_> {
         let deadline = self.now() + 3.0;
         let mut edit = None;
         let mut dlg_root: Option<WindowRef> = None;
+        let started = self.now();
+        let mut open_panel = false;
         while self.now() < deadline && edit.is_none() {
             let fg = self.be().foreground_window().ok().flatten();
             dlg_root = fg;
             if let Some(fg) = fg {
                 edit = self.be().find_file_dialog_field(fg).ok().flatten();
+                // 2026-10-30: the macOS Open panel has no name box at all, only Save has one; do not
+                // wait the full 3 s for a box that will not come
+                open_panel = edit.is_none() && !cfg!(windows) && self.is_mac_open_panel(fg);
+                if open_panel && self.now() - started >= 0.6 {
+                    break;
+                }
             }
             if edit.is_none() {
                 self.sleep(0.05);
             }
         }
         let Some(edit) = edit else {
-            return Err(StepError::target(
+            if open_panel && let Some(dialog) = dlg_root {
+                drop(find_span);
+                return self.open_panel_by_go_to_folder(dialog, &path);
+            }
+            let (save, open) = if cfg!(windows) {
+                ("ctrl+shift+s", "ctrl+o")
+            } else {
+                ("cmd+shift+s", "cmd+o")
+            };
+            return Err(StepError::target(format!(
                 "no Save As / Open dialog with a 'File name' box is in front; open it first (e.g. \
-                 ctrl+shift+s or ctrl+o)",
-            ));
+                 {save} or {open})"
+            )));
         };
         drop(find_span);
         let fill_span = crate::prof::span("dialog_fill");
@@ -781,8 +798,20 @@ impl Ctx<'_> {
         drop(fill_span);
         let _confirm_span = crate::prof::span("dialog_confirm");
         self.send_combo("enter", 1)?;
-        // Wait for the dialog to go. A new standard popup (#32770) of the same program means a
-        // question like "already exists, replace?" or "not valid": report its text, never answer it.
+        self.after_dialog_confirm(dialog, Some(&edit), &path, true)
+    }
+
+    /// Wait for a file dialog to go after its confirming Enter. A new standard popup (#32770) of the
+    /// same program means a question like "already exists, replace?" or "not valid": report its text,
+    /// never answer it. `edit` is the name box, whose disappearance also means the dialog is gone;
+    /// `save` records the path as one the task wrote.
+    fn after_dialog_confirm(
+        &self,
+        dialog: WindowRef,
+        edit: Option<&ElementId>,
+        path: &str,
+        save: bool,
+    ) -> StepResult<String> {
         let end = self.now() + 3.0;
         while self.now() < end {
             self.sleep(0.04);
@@ -805,11 +834,11 @@ impl Ctx<'_> {
                     py_repr(&text)
                 ));
             }
-            let gone =
-                self.info(dialog).is_none_or(|i| i.hidden) || self.be().element(&edit).is_err();
+            let gone = self.info(dialog).is_none_or(|i| i.hidden)
+                || edit.is_some_and(|e| self.be().element(e).is_err());
             if gone {
-                if let Ok(mut saved) = self.o.saved_paths.lock() {
-                    saved.push(path.clone());
+                if save && let Ok(mut saved) = self.o.saved_paths.lock() {
+                    saved.push(path.to_string());
                 }
                 return Ok(format!("file dialog: entered {path} and confirmed"));
             }
@@ -818,6 +847,106 @@ impl Ctx<'_> {
             "file dialog: entered {path} and pressed Enter, but a dialog is still open (maybe 'already \
              exists, replace?' or an invalid name): look at the screenshot"
         ))
+    }
+
+    /// Is this window a macOS Open (or Import, Choose File, ...) panel, which has no name box? Save
+    /// panels are not: they have one and take the normal route.
+    fn is_mac_open_panel(&self, w: WindowRef) -> bool {
+        self.info(w).is_some_and(|i| {
+            matches!(
+                i.title.trim().to_lowercase().as_str(),
+                "open"
+                    | "import"
+                    | "choose"
+                    | "choose file"
+                    | "choose a file"
+                    | "select"
+                    | "attach"
+            )
+        })
+    }
+
+    /// `file_dialog` on a macOS Open panel: Go to the Folder (cmd+shift+g) takes a whole file path, and
+    /// Return there selects the file; a second Return presses Open. Found 2026-10-30: TextEdit,
+    /// cmd+o, file_dialog said no box was in front. A question the panel asks afterwards is reported,
+    /// never answered.
+    fn open_panel_by_go_to_folder(&self, dialog: WindowRef, path: &str) -> StepResult<String> {
+        self.check_allowed(self.root_of(dialog))?;
+        if !(path.starts_with('/') || path.starts_with('~')) {
+            return Err(StepError::value(format!(
+                "file_dialog on a Mac Open panel needs the full path (like /Users/me/file.txt), got {}",
+                py_repr(path)
+            )));
+        }
+        self.send_combo("cmd+shift+g", 1)?;
+        // the Go to the folder box takes focus when its sheet opens
+        let (goto, _) = self.poll(
+            || self.be().find_file_dialog_field(dialog).ok().flatten(),
+            2.0,
+            0.05,
+        );
+        let Some(goto) = goto else {
+            return Ok(format!(
+                "file dialog: the Open panel is in front but its Go to the folder box did not appear \
+                 after cmd+shift+g, so {} was not entered; look at the screenshot",
+                py_repr(path)
+            ));
+        };
+        self.sleep(0.1);
+        let mut shown = String::new();
+        let mut landed = false;
+        for _ in 0..2 {
+            self.send_combo(self.select_all(), 1)?;
+            self.type_text(path)?;
+            let (matched, _) = self.poll(
+                || {
+                    shown = match self.be().element(&goto) {
+                        Ok(el) => el.value.unwrap_or_default().trim().to_string(),
+                        // a box the panel's own process owns may not be readable: trust the typing
+                        Err(_) => path.to_string(),
+                    };
+                    (shown == path).then_some(())
+                },
+                0.3,
+                0.03,
+            );
+            if matched.is_some() {
+                landed = true;
+                break;
+            }
+        }
+        if !landed {
+            return Ok(format!(
+                "file dialog: could not get {} into the Go to the folder box (it shows {}); nothing \
+                 was confirmed",
+                py_repr(path),
+                py_repr(&shown)
+            ));
+        }
+        // Return: go there and select the file. The sheet closes; a box that stays means the path is
+        // not one the panel accepts.
+        self.send_combo("enter", 1)?;
+        let (closed, _) = self.poll(
+            || self.be().element(&goto).is_err().then_some(()),
+            1.5,
+            0.05,
+        );
+        if closed.is_none() {
+            return Ok(format!(
+                "file dialog: the Open panel's Go to the folder box did not accept {} (is the path \
+                 right?); nothing was opened. Look at the screenshot",
+                py_repr(path)
+            ));
+        }
+        self.sleep(0.3);
+        // if Return already opened the file the panel is gone, and a second Return would go to the
+        // app behind it (a new line in the document just opened)
+        let still_open = self.info(dialog).is_some_and(|i| !i.hidden)
+            && self.be().foreground_window().ok().flatten() == Some(dialog);
+        if still_open {
+            self.send_combo("enter", 1)?;
+        }
+        self.after_dialog_confirm(dialog, None, path, false)
     }
 
     fn same_pid(&self, a: WindowRef, b: WindowRef) -> bool {

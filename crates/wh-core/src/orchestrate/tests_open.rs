@@ -583,6 +583,152 @@ fn file_dialog_does_not_press_enter_on_a_box_that_did_not_take_the_path() {
     assert_eq!(kit.fake.typed_text(), "C:\\x\\y.txt");
 }
 
+// ---- the macOS Open panel has no File name box: file_dialog goes through Go to the folder
+
+const GOTO: &str = "goto";
+const PANEL_PATH: &str = "/Users/jon/Documents/hekaton-test/open-me.txt";
+
+fn panel_root(with_sheet: bool) -> Element {
+    let root = Element::new("root", Role::Window, "Open");
+    if with_sheet {
+        root.with_child(
+            Element::new(GOTO, Role::Edit, "Go to the folder:")
+                .at(Rect::new(10, 10, 200, 30))
+                .valued(""),
+        )
+    } else {
+        root
+    }
+}
+
+/// An Open panel in front with no name box. cmd+shift+g opens the Go to the folder sheet; the first
+/// Return closes the sheet (when `sheet_closes`), the second runs `on_open`.
+fn open_panel_kit(
+    sheet_closes: bool,
+    on_open: impl Fn(&FakeBackend, WindowRef) + Send + Sync + 'static,
+) -> (
+    Kit,
+    WindowRef,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let kit = Kit::new();
+    let dlg = kit.front("Open", "TextEdit", 7);
+    kit.fake.set_tree(dlg, panel_root(false));
+    let enters = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = enters.clone();
+    kit.fake.set_chord_hook(move |fake, keys| {
+        if keys.last() == Some(&Key::Char('g')) {
+            fake.set_tree(dlg, panel_root(true));
+            fake.set_file_dialog_field(dlg, ElementId(GOTO.into()));
+        }
+        if keys == [cmd_key(), Key::Char('v')] {
+            let text = crate::backend::Backend::clipboard_text(fake).unwrap();
+            fake.set_element_value(&ElementId(GOTO.into()), &text);
+        }
+        if keys == [Key::Enter] {
+            let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 && sheet_closes {
+                fake.set_tree(dlg, panel_root(false));
+            } else if n == 2 {
+                on_open(fake, dlg);
+            }
+        }
+    });
+    (kit, dlg, enters)
+}
+
+#[cfg(not(windows))]
+#[test]
+fn file_dialog_on_the_mac_open_panel_goes_to_the_folder_and_opens_the_file() {
+    use std::sync::atomic::Ordering;
+    let (kit, dlg, enters) = open_panel_kit(true, |fake, dlg| fake.close_window(dlg));
+    kit.fake
+        .set_clipboard(ClipboardContent::Text("mine".into()));
+    let (note, _) = kit
+        .step(json!({"action": "file_dialog", "text": PANEL_PATH}))
+        .unwrap();
+    assert_eq!(
+        note,
+        format!("file dialog: entered {PANEL_PATH} and confirmed")
+    );
+    assert_eq!(enters.load(Ordering::SeqCst), 2, "go there, then Open");
+    assert!(!kit.fake.window_exists(dlg));
+    use crate::backend::Backend;
+    assert_eq!(kit.fake.clipboard_text().unwrap(), "mine");
+    assert!(
+        kit.clock.now() < std::time::Duration::from_secs(3),
+        "it did not wait 3 s for a name box that never comes"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn file_dialog_on_the_mac_open_panel_says_when_go_to_the_folder_refuses_the_path() {
+    use std::sync::atomic::Ordering;
+    let (kit, dlg, enters) = open_panel_kit(false, |fake, dlg| fake.close_window(dlg));
+    let (note, _) = kit
+        .step(json!({"action": "file_dialog", "text": PANEL_PATH}))
+        .unwrap();
+    assert!(note.contains("did not accept"), "{note}");
+    assert_eq!(enters.load(Ordering::SeqCst), 1, "no second Return");
+    assert!(kit.fake.window_exists(dlg));
+}
+
+// If the first Return already opened the file, a second one would land in the document just opened.
+#[cfg(not(windows))]
+#[test]
+fn file_dialog_on_the_mac_open_panel_does_not_press_return_into_the_app_behind() {
+    use std::sync::atomic::Ordering;
+    let (kit, dlg, enters) = open_panel_kit(true, |_, _| {});
+    // the panel is gone as soon as the sheet closes
+    let count = enters.clone();
+    kit.fake.set_chord_hook(move |fake, keys| {
+        if keys.last() == Some(&Key::Char('g')) {
+            fake.set_tree(dlg, panel_root(true));
+            fake.set_file_dialog_field(dlg, ElementId(GOTO.into()));
+        }
+        if keys == [cmd_key(), Key::Char('v')] {
+            let text = crate::backend::Backend::clipboard_text(fake).unwrap();
+            fake.set_element_value(&ElementId(GOTO.into()), &text);
+        }
+        if keys == [Key::Enter] {
+            count.fetch_add(1, Ordering::SeqCst);
+            fake.set_tree(dlg, panel_root(false));
+            fake.close_window(dlg);
+        }
+    });
+    let (note, _) = kit
+        .step(json!({"action": "file_dialog", "text": PANEL_PATH}))
+        .unwrap();
+    assert_eq!(
+        note,
+        format!("file dialog: entered {PANEL_PATH} and confirmed")
+    );
+    assert_eq!(enters.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn file_dialog_on_the_mac_open_panel_needs_a_full_path_and_honours_the_allowlist() {
+    let (kit, _dlg, enters) = open_panel_kit(true, |_, _| {});
+    let err = kit
+        .step(json!({"action": "file_dialog", "text": "open-me.txt"}))
+        .unwrap_err();
+    assert!(err.message().contains("needs the full path"), "{err}");
+    let err = kit
+        .step_only(
+            &["calc"],
+            json!({"action": "file_dialog", "text": PANEL_PATH}),
+        )
+        .unwrap_err();
+    assert!(
+        err.message().starts_with("refused: that window belongs to"),
+        "{err}"
+    );
+    assert_eq!(enters.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 #[test]
 fn file_dialog_needs_a_dialog_a_path_and_a_safe_place() {
     let kit = Kit::new();
@@ -590,9 +736,17 @@ fn file_dialog_needs_a_dialog_a_path_and_a_safe_place() {
     let err = kit
         .step(json!({"action": "file_dialog", "text": "C:\\x\\y.txt"}))
         .unwrap_err();
+    // the hint names the keys of the OS it runs on
+    let keys = if cfg!(windows) {
+        "ctrl+shift+s or ctrl+o"
+    } else {
+        "cmd+shift+s or cmd+o"
+    };
     assert_eq!(
         err.message(),
-        "no Save As / Open dialog with a 'File name' box is in front; open it first (e.g. ctrl+shift+s or ctrl+o)"
+        format!(
+            "no Save As / Open dialog with a 'File name' box is in front; open it first (e.g. {keys})"
+        )
     );
     assert!(matches!(err, StepError::Target(_)));
     assert!(
