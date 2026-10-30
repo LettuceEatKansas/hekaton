@@ -182,11 +182,7 @@ impl Input {
             // kCGAnyInputEventType is (CGEventType)~0.
             CGEventType(u32::MAX),
         );
-        if secs.is_finite() && secs >= 0.0 {
-            Duration::from_secs_f64(secs.min(1.0e9))
-        } else {
-            Duration::ZERO
-        }
+        idle_from_secs(secs)
     }
 
     /// Move the pointer. A held button turns the move into a drag event.
@@ -445,5 +441,28 @@ impl Input {
             sleep(TYPE_GAP);
         }
         Ok(())
+    }
+}
+
+/// The OS counter's reading as a duration. An unreadable counter (NaN, negative) is not "a person
+/// just touched the mouse": reading it as zero idle refused every acting step (2026-10-30).
+fn idle_from_secs(secs: f64) -> Duration {
+    if secs.is_finite() && secs >= 0.0 {
+        Duration::from_secs_f64(secs.min(1.0e9))
+    } else {
+        Duration::from_secs(3600)
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_idle_reading_is_not_a_person() {
+        assert_eq!(idle_from_secs(f64::NAN), Duration::from_secs(3600));
+        assert_eq!(idle_from_secs(-1.0), Duration::from_secs(3600));
+        assert_eq!(idle_from_secs(f64::INFINITY), Duration::from_secs(3600));
+        assert_eq!(idle_from_secs(0.25), Duration::from_millis(250));
     }
 }

@@ -35,7 +35,9 @@ impl fmt::Display for HumanActive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
             "a person is using the mouse or keyboard right now; waited 6 s for them to stop. \
-             Try again shortly",
+             Try again shortly. If nobody is at this machine (another tool or a remote session is \
+             sending input), set the config key human_pause to false (or WINHANDS_HUMAN_PAUSE=0) to \
+             turn this check off; the strict safety profile keeps it on",
         )
     }
 }
@@ -52,6 +54,15 @@ impl HumanGate {
     /// A gate that has not injected anything yet. Until it does, any input counts as a person's.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Has this gate been told about any input of ours? For tests of the places that must tell it.
+    #[cfg(test)]
+    pub(crate) fn has_marked(&self) -> bool {
+        self.last_ours
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
     }
 
     /// Record that we just injected input. Python `_mark_ours`.

@@ -187,7 +187,9 @@ impl Ctx<'_> {
             self.wait_for_human()?;
             self.check_cancelled()?;
             waited = true;
-            self.be().restore_window(window, Duration::from_secs(2))?;
+            let restored = self.be().restore_window(window, Duration::from_secs(2));
+            self.mark_ours();
+            restored?;
             if self.state_of(window)? == WindowState::Minimized {
                 return Err(StepError::target(format!(
                     "scope {label} is minimized and could not be restored, so there is nothing to \
@@ -206,7 +208,9 @@ impl Ctx<'_> {
                 self.wait_for_human()?;
             }
             self.check_cancelled()?;
-            if let Err(e) = self.be().bring_to_foreground(window) {
+            let raised = self.be().bring_to_foreground(window);
+            self.mark_ours();
+            if let Err(e) = raised {
                 return Err(StepError::target(format!(
                     "scope {label} is covered by another window and could not be brought to the \
                      front: {e}"

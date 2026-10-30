@@ -41,10 +41,41 @@ fn click_button(name: &str) -> StepResult<MouseButton> {
     }
 }
 
+/// Can this action put input events into the OS? Reads and waits cannot; `excel` and the recipe
+/// calls reach other things (a workbook; the steps a recipe expands to, each run through `run`).
+fn sends_input(action: &str) -> bool {
+    is_action(action)
+        && !is_passive(action)
+        && !matches!(action, "excel" | "recipe" | "recipe_save")
+}
+
 impl Ctx<'_> {
     /// Do one action. Returns the result text and, for `screenshot`, `zoom` and the find actions, a
     /// picture. Python `run(args)`.
     pub(crate) fn run(&self, step: &Args) -> StepResult<StepOut> {
+        let result = self.run_one(step);
+        // 2026-10-30: an unattended Mac run was refused with "a person is using the mouse" and nobody
+        // there. The mark that tells the gate "that input was ours" used to run only on the success
+        // path of a step, so a step that sent keys or clicks and then failed (and left_mouse_up, and
+        // the window restores before a step) left its own input looking like a person's to the next
+        // step. Mark on every way out of a step that can send input.
+        let action = step
+            .get("action")
+            .map(|v| crate::textutil::py_str(v).trim().to_string())
+            .unwrap_or_default();
+        // A refusal or a bad argument (Value, Permission, Target) sent nothing, so it must not hide
+        // a real person's input behind a fresh mark; a failed OS call or a missed postcondition did.
+        let sent = match &result {
+            Ok(_) => true,
+            Err(e) => !e.is_validation(),
+        };
+        if sent && sends_input(&action) {
+            self.mark_ours();
+        }
+        result
+    }
+
+    fn run_one(&self, step: &Args) -> StepResult<StepOut> {
         let action = match step.get("action") {
             None => String::new(),
             Some(v) => crate::textutil::py_str(v).trim().to_string(),

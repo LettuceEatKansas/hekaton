@@ -281,6 +281,53 @@ fn human_pause_can_be_turned_off_for_a_benchmark_harness() {
     assert!(out.text.starts_with("left click at [5, 5]"), "{}", out.text);
 }
 
+// 2026-10-30: an unattended run was refused with "a person is using the mouse" and nobody there.
+// Input of ours that the gate was never told about reads as a person's.
+#[test]
+fn a_step_that_sent_input_and_then_failed_still_tells_the_gate_it_was_ours() {
+    let kit = Kit::with_env(no_shot_env());
+    assert!(!kit.computer.human.has_marked());
+    let err = kit
+        .step(json!({"action": "left_click", "coordinate": [1, 1], "expect": {"text": "Nope"}}))
+        .unwrap_err();
+    assert!(matches!(err, StepError::Expectation(_)), "{err}");
+    assert!(kit.computer.human.has_marked(), "the click went out");
+}
+
+#[test]
+fn a_refused_step_that_sent_nothing_does_not_mark_the_gate() {
+    let kit = Kit::with_env(no_shot_env());
+    kit.step(json!({"action": "key"})).unwrap_err();
+    assert!(
+        !kit.computer.human.has_marked(),
+        "a bad argument must not hide a person's input"
+    );
+}
+
+#[test]
+fn left_mouse_up_marks_the_gate_even_though_it_skips_the_pause() {
+    let kit = Kit::with_env(no_shot_env());
+    kit.step(json!({"action": "left_mouse_up"})).unwrap();
+    assert!(kit.computer.human.has_marked());
+}
+
+#[test]
+fn the_refusal_names_the_human_pause_switch() {
+    let kit = Kit::with_env(no_shot_env());
+    kit.fake.set_human_idle(Duration::from_millis(10));
+    let err = kit.run(click(5, 5)).unwrap().text;
+    assert!(err.contains("human_pause"), "{err}");
+    assert!(err.contains("WINHANDS_HUMAN_PAUSE=0"), "{err}");
+}
+
+#[test]
+fn with_the_pause_off_the_input_idle_time_is_never_read() {
+    let kit = Kit::with_env(no_shot_env().with("WINHANDS_HUMAN_PAUSE", "0"));
+    kit.fake.set_human_idle(Duration::from_millis(10));
+    kit.run(click(5, 5)).unwrap();
+    assert_eq!(kit.fake.human_idle_reads(), 0);
+}
+
 // ---------------------------------------------------------------------------- per-call options
 
 // Ported from test_only_apps_is_set_fresh_every_call and test_only_apps_keeps_regex_scope_case.

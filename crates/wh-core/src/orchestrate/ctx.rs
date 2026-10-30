@@ -352,7 +352,9 @@ impl<'a> Ctx<'a> {
                 self.be().bring_to_foreground(target)?;
                 Ok(())
             };
-            if go().is_ok() {
+            let went = go();
+            self.mark_ours();
+            if went.is_ok() {
                 self.sleep(0.25);
                 return "restored the app window first; ".to_string();
             }
