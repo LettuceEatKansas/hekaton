@@ -430,9 +430,25 @@ impl Ctx<'_> {
                     ));
                 }
                 let timeout = wait_timeout(step)?;
+                // new_only: what matches now was there before the wait began (the page's own
+                // instructions); only a match that was not, or one in another window, counts
+                let new_only = flag(step.get("new_only"), false);
+                let (start_fg, before) = if new_only {
+                    (self.fg_root(), self.locate_text(&text)?)
+                } else {
+                    (None, Vec::new())
+                };
                 let mut failure: Option<StepError> = None;
                 let (found, took) = self.poll(
                     || match self.locate_text(&text) {
+                        Ok(c) if new_only => {
+                            let c = if self.fg_root() == start_fg {
+                                super::find::new_since(&before, c)
+                            } else {
+                                c
+                            };
+                            (!c.is_empty()).then_some(c)
+                        }
                         Ok(c) if !c.is_empty() => Some(c),
                         Ok(_) => None,
                         Err(e) => {
@@ -448,9 +464,16 @@ impl Ctx<'_> {
                 }
                 match found {
                     Some(c) => format!(
-                        "wait_for_text: {} appeared after {took:.1}s ({})",
+                        "wait_for_text: {} appeared after {took:.1}s ({}{})",
                         py_repr(&text),
-                        c[0].source
+                        c[0].source,
+                        if new_only { ", new" } else { "" }
+                    ),
+                    None if new_only => format!(
+                        "wait_for_text: no new {} appeared within {}s ({} already on screen when the wait began)",
+                        py_repr(&text),
+                        fmt_g(timeout),
+                        before.len()
                     ),
                     None => format!(
                         "wait_for_text: {} did not appear within {}s",

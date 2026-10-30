@@ -282,6 +282,10 @@ pub fn build_payload(
         "wake",
         opt_bool(args, "wake")?.filter(|b| *b).map(Value::from),
     );
+    put(
+        "new_only",
+        opt_bool(args, "new_only")?.filter(|b| *b).map(Value::from),
+    );
     let timeout = opt_float(args, "timeout")?.unwrap_or(10.0);
     put(
         "timeout",

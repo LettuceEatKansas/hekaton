@@ -91,6 +91,20 @@ pub(crate) fn one_per_spot(cands: Vec<Cand>) -> Vec<Cand> {
     kept
 }
 
+/// The matches in `now` that were not already in `before`: a label seen at about the same spot at the
+/// start of a `wait_for_text new_only` wait is old. A match that moved more than a few lines is new.
+pub(crate) fn new_since(before: &[Cand], now: Vec<Cand>) -> Vec<Cand> {
+    now.into_iter()
+        .filter(|c| {
+            !before.iter().any(|b| {
+                (b.x - c.x).abs() <= 24
+                    && (b.y - c.y).abs() <= 24
+                    && b.label.eq_ignore_ascii_case(&c.label)
+            })
+        })
+        .collect()
+}
+
 /// One line of a zoom's text: `(cy, cx, height, label)`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RowItem {

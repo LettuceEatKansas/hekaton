@@ -66,6 +66,8 @@ pub type LaunchHook = Arc<dyn Fn(&FakeBackend, &LaunchSpec) + Send + Sync>;
 /// Called after a click is recorded, with where it landed, so a test can script what the click does
 /// (a column header re-sorting a list).
 pub type ClickHook = Arc<dyn Fn(&FakeBackend, Point) + Send + Sync>;
+/// A scripted change of the fake desktop.
+pub type TreeHook = Arc<dyn Fn(&FakeBackend) + Send + Sync>;
 
 struct State {
     windows: Vec<WindowInfo>,
@@ -123,6 +125,8 @@ struct State {
     chord_hook: Option<ChordHook>,
     launch_hook: Option<LaunchHook>,
     click_hook: Option<ClickHook>,
+    /// Hooks that run at the start of an `element_tree` read once their countdown of reads is over.
+    tree_hooks: Vec<(u32, TreeHook)>,
     popup_delay: u32,
     menu_delay: u32,
     doc_rects: HashMap<(WindowRef, usize), (Rect, Rect)>,
@@ -232,6 +236,7 @@ impl FakeBackend {
                 chord_hook: None,
                 launch_hook: None,
                 click_hook: None,
+                tree_hooks: Vec::new(),
                 popup_delay: 0,
                 menu_delay: 0,
                 doc_rects: HashMap::new(),
@@ -603,6 +608,12 @@ impl FakeBackend {
     /// Script what a click does: `hook` runs after each recorded click.
     pub fn set_click_hook(&self, hook: impl Fn(&FakeBackend, Point) + Send + Sync + 'static) {
         self.st().click_hook = Some(Arc::new(hook));
+    }
+
+    /// Script a screen that changes mid-wait: `hook` runs just before the `reads`-th next accessibility
+    /// tree read (1 = the very next one).
+    pub fn set_tree_hook(&self, reads: u32, hook: impl Fn(&FakeBackend) + Send + Sync + 'static) {
+        self.st().tree_hooks.push((reads, Arc::new(hook)));
     }
 
     /// Make `popup_menus` answer empty for its next `polls` calls, as a menu that opens late.
@@ -1087,6 +1098,21 @@ impl Backend for FakeBackend {
     }
 
     fn element_tree(&self, window: WindowRef, limits: &TreeLimits) -> BackendResult<TreeSnapshot> {
+        let due: Vec<TreeHook> = {
+            let mut s = self.st();
+            let mut due = Vec::new();
+            s.tree_hooks.retain_mut(|(n, hook)| {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    due.push(hook.clone());
+                }
+                *n > 0
+            });
+            due
+        };
+        for hook in due {
+            hook(self);
+        }
         let mut s = self.st();
         let info = s
             .windows

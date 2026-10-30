@@ -71,9 +71,10 @@ pub const NUM_KEYS: [&str; 19] = [
 ];
 
 /// Keys that accept true/false/yes/no/on/off/1/0.
-pub const BOOL_KEYS: [&str; 15] = [
+pub const BOOL_KEYS: [&str; 16] = [
     "shot",
     "wake",
+    "new_only",
     "double",
     "enter",
     "clear",
@@ -566,7 +567,9 @@ pub fn run(
 
 /// Remove this client's own pictures (`winhands-shot<stamp>-<i>.jpg|png`) older than ten minutes.
 fn prune_old_shots(temp_dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(temp_dir) else { return };
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return;
+    };
     let cutoff = std::time::Duration::from_secs(600);
     for e in entries.flatten() {
         let name = e.file_name();

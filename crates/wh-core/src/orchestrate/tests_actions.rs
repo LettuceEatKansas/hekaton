@@ -12,7 +12,7 @@ use super::testkit::{H, Kit, W, cmd_key, png_size};
 use crate::backend::fake::InputEvent;
 use crate::backend::{
     ClipboardContent, Element, MenuItem, MouseButton, OcrLine, OcrResult, OcrWord, Point, Rect,
-    Role, ScrollDirection, WindowRef,
+    Role, ScrollDirection, WindowInfo, WindowRef,
 };
 use crate::clock::Clock;
 use crate::env::MapEnv;
@@ -1034,6 +1034,64 @@ fn wait_for_text_finds_it_or_times_out() {
         .step(json!({"action": "wait_for_text", "text": "Never", "timeout": 9999}))
         .unwrap();
     assert!(note.ends_with("did not appear within 120s"), "{note}");
+}
+
+// 2026-10-30 unattended run: wait_for_text matched the page's own instruction text instead of the
+// popup that appeared later. new_only waits for a match that was not there when the wait began.
+#[test]
+fn wait_for_text_new_only_ignores_what_was_already_there() {
+    let kit = Kit::new();
+    let w = app_with(&kit, &[("Done", Role::Text, Rect::new(10, 10, 50, 30))]);
+    // the plain wait is satisfied at once by the old text
+    let (note, _) = kit
+        .step(json!({"action": "wait_for_text", "text": "Done", "timeout": 2}))
+        .unwrap();
+    assert!(note.contains("appeared after 0.0s"), "{note}");
+    // new_only is not: nothing new shows up
+    let (note, _) = kit
+        .step(json!({"action": "wait_for_text", "text": "Done", "timeout": 2, "new_only": true}))
+        .unwrap();
+    assert_eq!(
+        note,
+        "wait_for_text: no new 'Done' appeared within 2s (1 already on screen when the wait began)"
+    );
+    // a second 'Done' appears further down the page: that one counts
+    kit.fake.set_tree_hook(3, move |f| {
+        let root = Element::new("root", Role::Window, "App")
+            .with_child(Element::new("c0", Role::Text, "Done").at(Rect::new(10, 10, 50, 30)))
+            .with_child(Element::new("c1", Role::Button, "Done").at(Rect::new(10, 100, 50, 120)));
+        f.set_tree(w, root);
+    });
+    let (note, _) = kit
+        .step(json!({"action": "wait_for_text", "text": "Done", "timeout": 5, "new_only": true}))
+        .unwrap();
+    assert!(
+        note.starts_with("wait_for_text: 'Done' appeared after 0.") && note.ends_with("(uia, new)"),
+        "{note}"
+    );
+}
+
+// A match in a window that did not exist at the start is new even at the old text's own spot.
+#[test]
+fn wait_for_text_new_only_counts_a_match_in_a_new_window() {
+    let kit = Kit::new();
+    app_with(&kit, &[("Allow", Role::Text, Rect::new(10, 10, 50, 30))]);
+    kit.fake.set_tree_hook(3, |f| {
+        let popup = f.add_window(WindowInfo::basic(
+            "Popup",
+            "app.exe",
+            11,
+            Rect::from_xywh(0, 0, W, H),
+        ));
+        f.set_foreground(Some(popup));
+        let root = Element::new("root", Role::Window, "Popup")
+            .with_child(Element::new("p0", Role::Button, "Allow").at(Rect::new(10, 10, 50, 30)));
+        f.set_tree(popup, root);
+    });
+    let (note, _) = kit
+        .step(json!({"action": "wait_for_text", "text": "Allow", "timeout": 5, "new_only": true}))
+        .unwrap();
+    assert!(note.ends_with("(uia, new)"), "{note}");
 }
 
 // Ported from test_wait_for_file_found and the missing-file case.
