@@ -535,23 +535,27 @@ impl Ctx<'_> {
             )));
         }
         let nth_arg = get(step, "nth");
-        if nth_arg.is_none() && cands.len() > 1 {
-            let labels = cands
+        // no nth: controls beat static text, and only several controls stay ambiguous
+        let choices = super::find::click_choices(&cands);
+        if nth_arg.is_none() && choices.len() > 1 {
+            let labels = choices
                 .iter()
                 .take(8)
-                .enumerate()
-                .map(|(i, c)| format!("{}: {}@{}", i + 1, py_repr(&c.label), self.pt(c.x, c.y)))
+                .map(|&i| {
+                    let c = &cands[i];
+                    format!("{}: {}@{}", i + 1, py_repr(&c.label), self.pt(c.x, c.y))
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(StepError::target(format!(
                 "{} matches for {}, ambiguous: {labels}. Pass nth to pick one",
-                cands.len(),
+                choices.len(),
                 py_repr(text)
             )));
         }
         let nth = match nth_arg {
             Some(v) if crate::config::truthy(v) => to_int(v)?,
-            _ => 1,
+            _ => choices.first().map_or(1, |&i| i as i64 + 1),
         };
         if !(1..=cands.len() as i64).contains(&nth) {
             return Err(StepError::target(format!(

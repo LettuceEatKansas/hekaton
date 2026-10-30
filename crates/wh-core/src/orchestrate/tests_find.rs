@@ -217,7 +217,8 @@ fn locate_text_prefers_uia_over_ocr() {
             x: 30,
             y: 20,
             source: "uia",
-            label: "Save".into()
+            label: "Save".into(),
+            actionable: false
         }]
     );
     assert_eq!(kit.fake.ocr_calls(), 0);
@@ -236,7 +237,8 @@ fn locate_text_falls_back_to_ocr_words() {
             x: 120,
             y: 110,
             source: "ocr",
-            label: "Save".into()
+            label: "Save".into(),
+            actionable: false
         }]
     );
     // a blank query finds nothing; text that is not there finds nothing

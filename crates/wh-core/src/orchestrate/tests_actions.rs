@@ -1200,6 +1200,89 @@ fn click_text_with_two_matches_lists_them_and_nth_picks_one() {
     );
 }
 
+// 2026-10-30 unattended run: a common word matched body text and a link. The link wins.
+#[test]
+fn click_text_prefers_the_control_over_static_text() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            (
+                "Continue reading below",
+                Role::Text,
+                Rect::new(10, 10, 50, 30),
+            ),
+            ("Continue", Role::Hyperlink, Rect::new(60, 40, 100, 60)),
+        ],
+    );
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "continue"}))
+        .unwrap();
+    assert_eq!(note, "clicked 'Continue' (uia) at [80, 50]");
+    assert_eq!(
+        clicks(&kit),
+        vec![(Point::new(80, 50), MouseButton::Left, 1)]
+    );
+}
+
+// nth still counts every match in the original order, controls or not.
+#[test]
+fn click_text_nth_still_counts_every_match() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            (
+                "Continue reading below",
+                Role::Text,
+                Rect::new(10, 10, 50, 30),
+            ),
+            ("Continue", Role::Button, Rect::new(60, 40, 100, 60)),
+        ],
+    );
+    kit.step(json!({"action": "click_text", "text": "continue", "nth": 1}))
+        .unwrap();
+    assert_eq!(
+        clicks(&kit),
+        vec![(Point::new(30, 20), MouseButton::Left, 1)]
+    );
+}
+
+// Two controls and some text: still ambiguous, but only the controls are listed (numbered as nth
+// counts them).
+#[test]
+fn click_text_stays_ambiguous_between_two_controls() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            ("Next steps", Role::Text, Rect::new(10, 10, 50, 30)),
+            ("Next", Role::Button, Rect::new(60, 40, 100, 60)),
+            ("Next page", Role::Hyperlink, Rect::new(110, 70, 150, 90)),
+        ],
+    );
+    let err = err_of(kit.step(json!({"action": "click_text", "text": "next"})));
+    assert_eq!(
+        err.message(),
+        "2 matches for 'next', ambiguous: 2: 'Next'@[80, 50], 3: 'Next page'@[130, 80]. Pass nth to pick one"
+    );
+}
+
+// All static text: nothing to prefer, so the old refusal stands.
+#[test]
+fn click_text_with_only_static_text_matches_stays_ambiguous() {
+    let kit = Kit::new();
+    app_with(
+        &kit,
+        &[
+            ("Save", Role::Text, Rect::new(10, 10, 50, 30)),
+            ("Save As", Role::Text, Rect::new(60, 40, 100, 60)),
+        ],
+    );
+    let err = err_of(kit.step(json!({"action": "click_text", "text": "save"})));
+    assert!(err.message().starts_with("2 matches for 'save', ambiguous"));
+}
+
 // Ported from test_click_text_no_match_refused.
 #[test]
 fn click_text_with_no_match_is_refused() {

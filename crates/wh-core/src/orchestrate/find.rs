@@ -13,7 +13,9 @@ use regex::Regex;
 
 use super::error::{StepError, StepResult};
 use super::{Ctx, secs};
-use crate::backend::{ClipboardContent, Element, MenuItem, Point, Rect, TreeLimits, WindowRef};
+use crate::backend::{
+    ClipboardContent, Element, MenuItem, Point, Rect, Role, TreeLimits, WindowRef,
+};
 use crate::textutil::py_repr;
 
 // ------------------------------------------------------------------------------------ element names
@@ -25,6 +27,26 @@ pub(crate) struct UiaElem {
     pub rect: Rect,
     pub value: Option<String>,
     pub has_value: bool,
+    /// A kind a person presses (button, link, menu item, tab, ...), not static text.
+    pub actionable: bool,
+}
+
+/// The kinds click_text prefers when a word matches both body text and a control: things a click
+/// does something to. Static text, panes and edit fields are not in it.
+pub(crate) fn is_actionable(role: &Role) -> bool {
+    matches!(
+        role,
+        Role::Button
+            | Role::Hyperlink
+            | Role::MenuItem
+            | Role::TabItem
+            | Role::RadioButton
+            | Role::CheckBox
+            | Role::ListItem
+            | Role::TreeItem
+            | Role::ComboBox
+            | Role::SplitButton
+    )
 }
 
 /// A place on screen that matches a query (Python `(cx, cy, source, label)`).
@@ -34,6 +56,21 @@ pub(crate) struct Cand {
     pub y: i32,
     pub source: &'static str,
     pub label: String,
+    /// Known to be a control (an accessibility button, link, menu item, ...). OCR and document-text
+    /// hits are never known to be.
+    pub actionable: bool,
+}
+
+/// Which candidates a click_text with no `nth` may choose between: the actionable ones when there are
+/// any (2026-10-30 unattended run: a common word matched body text and a link and click_text refused),
+/// else all of them. Indexes into `cands`, so the numbers `nth` takes stay the same.
+pub(crate) fn click_choices(cands: &[Cand]) -> Vec<usize> {
+    let actionable: Vec<usize> = (0..cands.len()).filter(|&i| cands[i].actionable).collect();
+    if actionable.is_empty() {
+        (0..cands.len()).collect()
+    } else {
+        actionable
+    }
 }
 
 /// Drop a candidate with the same label at the same spot as an earlier one. 2026-10-28 Mac stress
@@ -76,6 +113,7 @@ fn keep(e: &Element, out: &mut Vec<UiaElem>) {
         rect,
         value: e.value.clone(),
         has_value: e.value.is_some() || e.affordances.contains(&crate::backend::Affordance::Value),
+        actionable: is_actionable(&e.role),
     });
 }
 
@@ -399,6 +437,7 @@ impl Ctx<'_> {
                         y: c.y,
                         source: "menu",
                         label: m.name.clone(),
+                        actionable: true,
                     }
                 })
                 .collect();
@@ -422,6 +461,7 @@ impl Ctx<'_> {
                     y: c.y,
                     source: "uia",
                     label: e.name,
+                    actionable: e.actionable,
                 }
             })
             .collect();
@@ -443,6 +483,7 @@ impl Ctx<'_> {
                     y: c.y,
                     source: "uia",
                     label: query.trim().to_string(),
+                    actionable: false,
                 }
             })
             .collect();
@@ -472,6 +513,7 @@ impl Ctx<'_> {
                     y: origin.y + my as i32,
                     source: "ocr",
                     label: word.to_string(),
+                    actionable: false,
                 });
             }
         }
