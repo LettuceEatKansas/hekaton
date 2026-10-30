@@ -1024,3 +1024,49 @@ fn read_text_steps_in_one_batch_copy_the_page_once() {
     );
     assert_eq!(copies.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
+
+// 2026-10-30: `radio|Submit` matched nothing because the query was one literal string. A `|` lists
+// alternatives; a query without one is matched exactly as before.
+#[test]
+fn read_text_takes_alternatives_split_by_a_bar() {
+    let (kit, w) = tk_kit();
+    kit.fake
+        .set_document(w, "Quiz\nPick a Radio button\nunrelated\nSubmit\nfooter");
+    let both = kit.ctx(json!({})).read_text("radio|submit", "").unwrap();
+    assert!(both.contains(", 2 contain "), "{both}");
+    assert!(both.contains("2: Pick a Radio button"), "{both}");
+    assert!(both.contains("4: Submit"), "{both}");
+    assert!(!both.contains("unrelated"), "{both}");
+    // spaces around a bar and empty alternatives are ignored
+    let spaced = kit
+        .ctx(json!({}))
+        .read_text(" radio | | Submit ", "")
+        .unwrap();
+    assert!(
+        spaced.contains("2: ") && spaced.contains("4: Submit"),
+        "{spaced}"
+    );
+    // a plain query still means the one literal string
+    let plain = kit.ctx(json!({})).read_text("submit", "").unwrap();
+    assert!(
+        plain.contains("4: Submit") && !plain.contains("2: "),
+        "{plain}"
+    );
+    // nothing but bars falls back to the literal text
+    let none = kit.ctx(json!({})).read_text("|", "").unwrap();
+    assert!(none.contains("no line contains"), "{none}");
+}
+
+#[test]
+fn read_text_accepts_filter_as_the_query_when_text_is_empty() {
+    let (kit, w) = tk_kit();
+    kit.fake
+        .set_document(w, "Quiz\nPick a Radio button\nunrelated\nSubmit\nfooter");
+    let (out, _) = kit
+        .step(json!({"action": "read_text", "filter": "radio|submit"}))
+        .unwrap();
+    assert!(
+        out.contains("2: Pick a Radio button") && out.contains("4: Submit"),
+        "{out}"
+    );
+}

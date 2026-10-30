@@ -16,7 +16,7 @@ use super::{Ctx, secs};
 use crate::backend::{
     ClipboardContent, Element, MenuItem, Point, Rect, Role, TreeLimits, WindowRef,
 };
-use crate::textutil::py_repr;
+use crate::textutil::{filter_terms, py_repr};
 
 // ------------------------------------------------------------------------------------ element names
 
@@ -1408,7 +1408,12 @@ impl Ctx<'_> {
             lines.len()
         );
         let q = query.trim().to_lowercase();
-        if !q.is_empty() {
+        let terms: Vec<String> = if q.is_empty() {
+            Vec::new()
+        } else {
+            filter_terms(query.trim())
+        };
+        if !terms.is_empty() {
             // 2026-10-29 Mac demo: read_text("Total") on a Wikipedia page gave the infobox label
             // ("Total") without its value on the next line, and every long paragraph with the word
             // in full. A short line that ends in the word now brings the next non-blank line (the value), and a
@@ -1416,7 +1421,10 @@ impl Ctx<'_> {
             let found: Vec<String> = lines
                 .iter()
                 .enumerate()
-                .filter(|(_, ln)| ln.to_lowercase().contains(&q))
+                .filter(|(_, ln)| {
+                    let l = ln.to_lowercase();
+                    terms.iter().any(|t| l.contains(t.as_str()))
+                })
                 .map(|(i, ln)| {
                     let ln = ln.trim();
                     let mut row = if ln.chars().count() > line_cap {
@@ -1430,7 +1438,12 @@ impl Ctx<'_> {
                     };
                     // a label: short, and nothing but punctuation after the word asked for
                     let lower = ln.to_lowercase();
-                    let after = lower.rfind(&q).map_or("", |at| &lower[at + q.len()..]);
+                    // the term that sits last in the line decides what follows it
+                    let after = terms
+                        .iter()
+                        .filter_map(|t| lower.rfind(t.as_str()).map(|at| &lower[at + t.len()..]))
+                        .min_by_key(|rest| rest.len())
+                        .unwrap_or("");
                     if ln.chars().count() <= 60
                         && after.chars().all(|c| !c.is_alphanumeric())
                         && let Some((j, next)) = lines
@@ -1439,7 +1452,10 @@ impl Ctx<'_> {
                             .skip(i + 1)
                             .take(3)
                             .find(|(_, n)| !n.trim().is_empty())
-                        && !next.to_lowercase().contains(&q)
+                        && {
+                            let n = next.to_lowercase();
+                            !terms.iter().any(|t| n.contains(t.as_str()))
+                        }
                     {
                         let next: String = next.trim().chars().take(line_cap).collect();
                         row.push_str(&format!("\n   {}: {next}", j + 1));

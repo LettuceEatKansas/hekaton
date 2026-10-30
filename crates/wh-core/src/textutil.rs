@@ -2,6 +2,27 @@
 
 use serde_json::Value;
 
+/// The lowercase search terms of a `filter` or `read_text` query. 2026-10-30: `radio|Submit` matched
+/// nothing because the filter was one literal string. A `|` now separates alternatives (each a
+/// case-insensitive substring, empty ones dropped, whitespace around them trimmed); a filter with no
+/// `|`, or nothing but `|`, stays the one literal string it always was.
+pub fn filter_terms(filter: &str) -> Vec<String> {
+    let literal = filter.to_lowercase();
+    if !filter.contains('|') {
+        return vec![literal];
+    }
+    let terms: Vec<String> = filter
+        .split('|')
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if terms.is_empty() {
+        vec![literal]
+    } else {
+        terms
+    }
+}
+
 /// Python's `repr()` of a `str`: single quotes unless the text contains a single quote and no
 /// double quote; backslash, the quote, `\n`, `\r`, `\t` escaped; other control characters as
 /// `\xNN`. Printable non-ASCII is kept, as Python 3 does.

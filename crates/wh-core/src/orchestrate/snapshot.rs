@@ -14,7 +14,7 @@ use super::error::{StepError, StepResult};
 use super::refs::CachedElement;
 use super::{Computer, Ctx};
 use crate::backend::{Element, TreeLimits, WakePolicy, WindowRef};
-use crate::textutil::py_repr;
+use crate::textutil::{filter_terms, py_repr};
 
 pub use super::refs::{WindowLine, format_windows};
 
@@ -118,8 +118,11 @@ pub(crate) fn render_snapshot(
         .filter(|l| !JUNK.is_match(l) && !MAC_EMPTY_CONTAINER.is_match(l))
         .collect();
     if !filter.is_empty() {
-        let f = filter.to_lowercase();
-        body.retain(|l| l.to_lowercase().contains(&f));
+        let terms = filter_terms(filter);
+        body.retain(|l| {
+            let l = l.to_lowercase();
+            terms.iter().any(|t| l.contains(t.as_str()))
+        });
     }
     let mut out: Vec<String> = head.iter().map(|s| (*s).clone()).collect();
     out.extend(body.iter().take(max_items).map(|s| (*s).clone()));
@@ -140,7 +143,7 @@ pub(crate) fn render_snapshot(
     }
     if !filter.is_empty() && body.is_empty() {
         out.push(format!(
-            "(no element matches {}; try a shorter word, or read_page/read_text for content)",
+            "(no element matches {}; try a shorter word (a|b matches either), or read_page/read_text for content)",
             py_repr(filter)
         ));
     }
@@ -320,6 +323,28 @@ mod tests {
             out.contains("300 Button ") && out.starts_with("window \"X\""),
             "{out}"
         );
+    }
+
+    // 2026-10-30: `radio|Submit` matched nothing; a bar now lists alternatives.
+    #[test]
+    fn snapshot_filter_takes_alternatives_split_by_a_bar() {
+        let lines = vec![
+            "window \"X\"".to_string(),
+            "1 RadioButton \"Yes\" @5,5".to_string(),
+            "2 ButtonControl \"Submit\" @6,6".to_string(),
+            "3 ButtonControl \"Cancel\" @7,7".to_string(),
+        ];
+        let out = render_snapshot(&lines, 40, "radio|Submit", false);
+        assert!(out.contains("1 Radio") && out.contains("2 Button"), "{out}");
+        assert!(!out.contains("Cancel"), "{out}");
+        let out = render_snapshot(&lines, 40, " radio | | SUBMIT ", false);
+        assert!(out.contains("1 Radio") && out.contains("2 Button"), "{out}");
+        // no bar: the one literal string, as before
+        let out = render_snapshot(&lines, 40, "radio", false);
+        assert!(out.contains("1 Radio") && !out.contains("Submit"), "{out}");
+        // a literal bar in the text still matches when the filter is only bars
+        let out = render_snapshot(&lines, 40, "|", false);
+        assert!(out.contains("no element matches"), "{out}");
     }
 
     #[test]
