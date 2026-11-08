@@ -1,0 +1,189 @@
+name: release
+
+# Builds the ready-to-run downloads and publishes them as a GitHub release, so nobody has to install
+# Rust. Push a tag like v0.3.0 (or run it by hand with a tag name) and the release gets:
+#   hekaton-windows-x64.zip   hekaton.exe and hekatond.exe, unzip and run
+#   hekaton-macos.zip         hekaton.app (universal) plus the macOS install scripts
+#   install-mac.sh            one-line installer for macOS (downloads hekaton-macos.zip)
+#   install-windows.ps1       one-line installer for Windows (downloads hekaton-windows-x64.zip)
+#   SHA256SUMS.txt            checksums the installers verify
+#
+# macOS signing: with the secrets MAC_DEVID_P12_B64, MAC_DEVID_P12_PASSWORD (a Developer ID Application
+# certificate) and NOTARY_KEY_P8_B64, NOTARY_KEY_ID, NOTARY_ISSUER_ID (an App Store Connect API key),
+# the app is signed with Developer ID and notarized, so it opens without warnings and keeps its
+# macOS permissions across updates. Without them it is signed ad hoc, which still runs when installed
+# with install-mac.sh, but macOS asks for the permissions again after each update.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (created on the chosen branch if it does not exist), e.g. v0.3.0
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build
+        run: cargo build --release --locked -p hekaton
+      - name: zip
+        shell: pwsh
+        run: |
+          $out = 'hekaton-windows-x64'
+          New-Item -ItemType Directory $out | Out-Null
+          Copy-Item target\release\hekaton.exe, target\release\hekatond.exe, LICENSE $out
+          & "$out\hekaton.exe" --version
+          Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: hekaton-windows-x64.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Developer ID certificate (throwaway keychain), when the secrets are set
+        id: cert
+        env:
+          P12_B64: ${{ secrets.MAC_DEVID_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.MAC_DEVID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$P12_B64" ]; then
+            echo "::warning::MAC_DEVID_P12_B64 not set: the app is signed ad hoc and not notarized"
+            echo "identity=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/hekaton-release.keychain-db"
+          KC_PASS="$(openssl rand -hex 16)"
+          echo "$P12_B64" | base64 --decode > "$RUNNER_TEMP/devid.p12"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          security import "$RUNNER_TEMP/devid.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC" >/dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/devid.p12"
+          id=$(security find-identity -v -p codesigning "$KC" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)
+          [ -n "$id" ] || { echo "::error::no Developer ID Application identity in the certificate"; exit 1; }
+          echo "identity=$id" >> "$GITHUB_OUTPUT"
+
+      - name: build hekaton.app
+        env:
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          set -euo pipefail
+          if [ -n "$IDENTITY" ]; then
+            packaging/macos/build-app.sh --identity "$IDENTITY"
+          else
+            packaging/macos/build-app.sh
+          fi
+          packaging/macos/verify-app.sh target/macos/hekaton.app
+
+      - name: notarize, when the secrets are set
+        if: steps.cert.outputs.identity != ''
+        env:
+          P8_B64: ${{ secrets.NOTARY_KEY_P8_B64 }}
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$P8_B64" ]; then echo "::warning::NOTARY_KEY_P8_B64 not set: signed but not notarized"; exit 0; fi
+          echo "$P8_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          ditto -c -k --keepParent target/macos/hekaton.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$KEY_ID" --issuer "$ISSUER" --wait
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          xcrun stapler staple target/macos/hekaton.app
+
+      - name: zip
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/hekaton-macos"
+          mkdir -p "$out"
+          ditto target/macos/hekaton.app "$out/hekaton.app"
+          cp packaging/macos/install.sh packaging/macos/uninstall.sh packaging/macos/lib.sh \
+             packaging/macos/build-app.sh packaging/macos/make-signing-identity.sh LICENSE "$out/"
+          (cd "$RUNNER_TEMP" && ditto -c -k --keepParent hekaton-macos "$GITHUB_WORKSPACE/hekaton-macos.zip")
+          ls -l hekaton-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: hekaton-macos.zip
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums and installers
+        run: |
+          set -euo pipefail
+          cp install/install-mac.sh install/install-windows.ps1 dist/
+          cd dist
+          sha256sum hekaton-windows-x64.zip hekaton-macos.zip install-mac.sh install-windows.ps1 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Hekaton $TAG" --notes-file install/RELEASE_NOTES.md
+          fi
+          gh release upload "$TAG" dist/* --clobber
+
+  # Install from the published release exactly as a user would, so a broken download is caught at once.
+  try-windows:
+    name: install on Windows from the release
+    needs: publish
+    runs-on: windows-latest
+    steps:
+      - name: install-windows.ps1
+        shell: pwsh
+        env:
+          HEKATON_VERSION: ${{ env.TAG }}
+        run: |
+          irm "https://github.com/${{ github.repository }}/releases/download/$env:HEKATON_VERSION/install-windows.ps1" | iex
+          & "$env:LOCALAPPDATA\Programs\Hekaton\hekaton.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'hekaton.exe --version failed' }
+
+  try-macos:
+    name: download on macOS from the release
+    needs: publish
+    runs-on: macos-latest
+    steps:
+      - name: install-mac.sh (dry run, the runner has no screen permissions to grant)
+        env:
+          HEKATON_VERSION: ${{ env.TAG }}
+          HEKATON_DRY_RUN: '1'
+        run: curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$HEKATON_VERSION/install-mac.sh" | bash

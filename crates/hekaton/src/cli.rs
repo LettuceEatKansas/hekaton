@@ -20,7 +20,7 @@ use crate::shim::{Activity, Shim, reaper_for, serve_stdio, start_reaper};
 use crate::start::Starter;
 
 /// The short usage line.
-pub const USAGE: &str = "usage: hekaton (or hekaton) <acknowledge|status|start|stop|pause|resume|lock|unlock|approve CODE|deny CODE|doctor|daemon|mcp|hk|--version|--build-info>";
+pub const USAGE: &str = "usage: hekaton <acknowledge|status|start|stop|pause|resume|lock|unlock|approve CODE|deny CODE|doctor|daemon|mcp|hk|--version|--build-info>";
 
 fn exe_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("hekaton"))
