@@ -22,10 +22,13 @@ try {
     Write-Host "==> Downloading Hekaton ($version)"
     $zip = Join-Path $work 'hekaton-windows-x64.zip'
     Invoke-WebRequest "$base/hekaton-windows-x64.zip" -OutFile $zip -UseBasicParsing
-    $sums = (Invoke-WebRequest "$base/SHA256SUMS.txt" -UseBasicParsing).Content
+    # Saved to a file and read as text: GitHub serves release assets as bytes, not a string.
+    $sumsFile = Join-Path $work 'SHA256SUMS.txt'
+    Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile $sumsFile -UseBasicParsing
 
     Write-Host '==> Checking the download'
-    $want = ($sums -split "`n" | Where-Object { $_ -match ' hekaton-windows-x64\.zip\s*$' }) -replace '\s.*$', ''
+    $line = Get-Content $sumsFile | Where-Object { $_ -match '\shekaton-windows-x64\.zip\s*$' } | Select-Object -First 1
+    $want = if ($line) { ($line.Trim() -split '\s+')[0] } else { '' }
     $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     if (-not $want -or $want.Trim().ToLower() -ne $got) {
         throw 'The download does not match SHA256SUMS.txt; nothing was installed.'
