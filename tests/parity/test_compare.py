@@ -1,4 +1,4 @@
-"""Tests for compare.py against two throwaway mock servers. No winhands daemon is involved.
+"""Tests for compare.py against two throwaway mock servers. No hekaton daemon is involved.
 
     python -m unittest discover -s tests/parity
 """
@@ -46,7 +46,7 @@ def mock_daemon(health: dict, answers: dict):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.headers.get("X-Winhands-Token") != "tok":
+            if self.headers.get("X-Hekaton-Token") != "tok":
                 return self._send(401, {"error": "unauthorized"})
             self._send(200, health)
 
@@ -95,7 +95,7 @@ class Shapes(unittest.TestCase):
         self.assertIsNone(compare.image_size(b""))
 
     def test_health_ignores_the_rust_extras_and_catches_the_rest(self):
-        rust = dict(HEALTH, impl="winhands-rs", backend="windows")
+        rust = dict(HEALTH, impl="hekaton-rs", backend="windows")
         self.assertEqual(compare.compare_health(HEALTH, rust), [])
         missing = {k: v for k, v in rust.items() if k != "ocr"}
         self.assertTrue(any("'ocr' only in a" in d for d in compare.compare_health(HEALTH, missing)))

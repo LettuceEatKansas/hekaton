@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install winhands on this Mac: build (or take a prebuilt app), sign, copy to ~/Applications, register the
+# Install hekaton on this Mac: build (or take a prebuilt app), sign, copy to ~/Applications, register the
 # LaunchAgent, walk through the two permissions, and print the MCP config. Safe to re-run to update.
 # See --help and docs/INSTALL-mac.md.
 set -euo pipefail
@@ -11,17 +11,17 @@ LABEL="$APP_ID"
 UID_N=$(id -u)
 DEST_DIR="$HOME/Applications"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG_DIR="$HOME/Library/Logs/winhands"
+LOG_DIR="$HOME/Library/Logs/hekaton"
 
 usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-Installs winhands.app into ~/Applications and registers its LaunchAgent. Run it again to update:
+Installs hekaton.app into ~/Applications and registers its LaunchAgent. Run it again to update:
 as long as the same signing identity is used, the macOS permissions are kept.
 
 Options:
-  --app PATH        Install this prebuilt winhands.app (for example from a CI download) instead of building.
+  --app PATH        Install this prebuilt hekaton.app (for example from a CI download) instead of building.
                     It is re-signed with your local identity unless --keep-signature is given.
   --identity NAME   Sign with this certificate (Apple Development or Developer ID) instead of "$IDENTITY_NAME".
   --keep-signature  With --app: install the app exactly as it is, do not re-sign.
@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --yes)
-      WH_YES=1
+      HK_YES=1
       shift
       ;;
     -h | --help)
@@ -84,13 +84,13 @@ while [ $# -gt 0 ]; do
 done
 
 require_macos
-[ "$UID_N" -ne 0 ] || die "Do not run this with sudo. winhands belongs to your own user account."
+[ "$UID_N" -ne 0 ] || die "Do not run this with sudo. hekaton belongs to your own user account."
 need launchctl "It ships with macOS; is this a normal Mac?"
 need codesign "It ships with macOS; is this a normal Mac?"
 
 DEST_APP="$DEST_DIR/$BIN_NAME.app"
 DEST_BIN="$DEST_APP/Contents/MacOS/$BIN_NAME"
-WORK=$(mktemp -d -t winhands-install)
+WORK=$(mktemp -d -t hekaton-install)
 trap 'rm -rf "$WORK"' EXIT
 
 # --- 1. which signature ---------------------------------------------------------------------------------
@@ -103,7 +103,7 @@ elif identity_available "$IDENTITY_NAME"; then
   SIGN_MODE=local
 else
   info "No signing identity \"$IDENTITY_NAME\" yet."
-  note "A stable identity is what lets macOS keep the winhands permissions across updates."
+  note "A stable identity is what lets macOS keep the hekaton permissions across updates."
   if confirm "Create the one-time signing certificate now (recommended)?"; then
     "$PKG_DIR/make-signing-identity.sh" --yes
     if identity_available "$IDENTITY_NAME"; then SIGN_MODE=local; fi
@@ -146,7 +146,7 @@ codesign --verify --strict --deep "$STAGE" || die "The app's signature is broken
 
 # --- 3. install -----------------------------------------------------------------------------------------
 if [ "$NO_LAUNCHD" = 0 ]; then
-  info "Stopping any running winhands daemon"
+  info "Stopping any running hekaton daemon"
   launchctl bootout "gui/$UID_N/$LABEL" >/dev/null 2>&1 || true
 fi
 
@@ -168,8 +168,8 @@ if [ "$NO_LAUNCHD" = 0 ]; then
   LOG_X=$(printf '%s' "$LOG_DIR/daemon.log" | xml_escape)
   HOME_X=$(printf '%s' "$HOME" | xml_escape)
   # On demand, like the Windows scheduled task: loaded at login but not started (RunAtLoad false) and not
-  # restarted when it exits (KeepAlive false). `winhands mcp` starts it with `launchctl kickstart`, which
-  # makes launchd, not the caller, the parent, so macOS attributes the permissions to winhands.app and not
+  # restarted when it exits (KeepAlive false). `hekaton mcp` starts it with `launchctl kickstart`, which
+  # makes launchd, not the caller, the parent, so macOS attributes the permissions to hekaton.app and not
   # to Claude or Terminal. Aqua = only inside the logged-in graphical session, where the screen is visible.
   (
     umask 022
@@ -212,7 +212,7 @@ EOF
   info "Registering it with launchd (gui/$UID_N)"
   if launchctl bootstrap "gui/$UID_N" "$PLIST" 2>"$WORK/bootstrap.err"; then
     if launchctl print "gui/$UID_N/$LABEL" >/dev/null 2>&1; then
-      note "Loaded. It starts on demand when an AI client uses winhands."
+      note "Loaded. It starts on demand when an AI client uses hekaton."
     fi
   else
     warn "launchctl bootstrap failed: $(tr '\n' ' ' <"$WORK/bootstrap.err")"
@@ -228,37 +228,37 @@ codesign --display --verbose=2 --requirements - "$DEST_APP" 2>&1 | grep -E '^(Id
 echo
 info "Two permissions to switch on (macOS asks you to do this yourself, once)"
 cat <<EOF
-    1. Accessibility: lets winhands read what is on screen as buttons and text, and click and type
+    1. Accessibility: lets hekaton read what is on screen as buttons and text, and click and type
        for the AI agent.
-    2. Screen Recording: lets winhands take screenshots so the agent can see.
+    2. Screen Recording: lets hekaton take screenshots so the agent can see.
 
-    In each list, find "winhands" and switch it ON. If winhands is not in the list yet, click the
+    In each list, find "hekaton" and switch it ON. If hekaton is not in the list yet, click the
     "+" button, pick $DEST_APP, and click Open. (A Finder window showing the app opens
-    too, so you can drag it into the list.) macOS may ask you to quit and reopen winhands: choose
-    "Later". There is nothing to restart, winhands starts fresh the next time it is used.
+    too, so you can drag it into the list.) macOS may ask you to quit and reopen hekaton: choose
+    "Later". There is nothing to restart, hekaton starts fresh the next time it is used.
 EOF
 
 if [ "$NO_OPEN" = 0 ]; then
-  # `doctor --prompt`, run as the app, makes macOS list winhands in both panes and may pop up its own
-  # "winhands would like to ..." boxes: choose "Open System Settings" there.
-  info "Asking macOS to list winhands under Accessibility and Screen Recording"
+  # `doctor --prompt`, run as the app, makes macOS list hekaton in both panes and may pop up its own
+  # "hekaton would like to ..." boxes: choose "Open System Settings" there.
+  info "Asking macOS to list hekaton under Accessibility and Screen Recording"
   run_as_app "$DEST_APP" doctor --prompt >/dev/null || note "(could not trigger the prompts; use the + button in each list)"
   open -R "$DEST_APP" || true
   echo
   info "Opening System Settings: Accessibility"
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" || true
-  pause_for_user "    Switch winhands ON, then press Enter here to continue. "
+  pause_for_user "    Switch hekaton ON, then press Enter here to continue. "
   info "Opening System Settings: Screen Recording"
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" || true
-  pause_for_user "    Switch winhands ON, then press Enter here to continue. "
+  pause_for_user "    Switch hekaton ON, then press Enter here to continue. "
 fi
 
 # --- 6. doctor ------------------------------------------------------------------------------------------
 echo
-info "winhands doctor (permission status, checked as winhands.app itself)"
+info "hekaton doctor (permission status, checked as hekaton.app itself)"
 if ! run_as_app "$DEST_APP" doctor | sed 's/^/    /'; then
   note "(could not run it as the app; running it from this Terminal instead, which can show"
-  note " Terminal's permissions rather than winhands's)"
+  note " Terminal's permissions rather than hekaton's)"
   "$DEST_BIN" doctor 2>&1 | sed 's/^/    /' || true
 fi
 
@@ -271,22 +271,22 @@ cat <<EOF
 
          "$DEST_BIN" acknowledge
 
-     (Optional shortcut: add  alias winhands='$DEST_BIN'  to ~/.zshrc, then just type: winhands acknowledge)
+     (Optional shortcut: add  alias hekaton='$DEST_BIN'  to ~/.zshrc, then just type: hekaton acknowledge)
 
-  B. Tell your AI client about winhands.
+  B. Tell your AI client about hekaton.
 
      Claude Code:
 
-         claude mcp add winhands -- "$DEST_BIN" mcp
+         claude mcp add hekaton -- "$DEST_BIN" mcp
 
-     Claude Desktop: open the file below (create it if missing) and add the "winhands" entry inside
+     Claude Desktop: open the file below (create it if missing) and add the "hekaton" entry inside
      "mcpServers", then quit and reopen Claude Desktop:
 
          ~/Library/Application Support/Claude/claude_desktop_config.json
 
          {
            "mcpServers": {
-             "winhands": {
+             "hekaton": {
                "command": "$DEST_BIN",
                "args": ["mcp"]
              }

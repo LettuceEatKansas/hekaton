@@ -27,8 +27,8 @@ import urllib.request
 from pathlib import Path
 
 API = "https://api.hcompany.ai/v1/chat/completions"
-WINHANDS = os.environ.get(
-    "WINHANDS_BIN", str(Path.home() / "Applications/winhands.app/Contents/MacOS/winhands")
+HEKATON = os.environ.get(
+    "HEKATON_BIN", str(Path.home() / "Applications/hekaton.app/Contents/MacOS/hekaton")
 )
 # python.org builds ship without root certs; fall back to the macOS bundle
 SSL = ssl.create_default_context(cafile="/etc/ssl/cert.pem" if Path("/etc/ssl/cert.pem").exists() else None)
@@ -138,14 +138,14 @@ def api_key():
     ).stdout.strip()
 
 
-def wh(payload):
+def hk(payload):
     """One Hekaton `computer` call. Returns (ok, stdout+stderr text)."""
     if ONLY:
         payload = {**payload, "only_apps": ONLY}
         for step in payload.get("actions", []):
             step.setdefault("only_apps", ONLY)
     p = subprocess.run(
-        [WINHANDS, "wh", "computer", "--json", "-"],
+        [HEKATON, "hk", "computer", "--json", "-"],
         input=json.dumps(payload), capture_output=True, text=True,
     )
     out = (p.stdout + p.stderr).strip()
@@ -159,7 +159,7 @@ SHOT_LONG = 1440
 
 
 def screenshot():
-    ok, out = wh({"action": "screenshot", "shot_long": SHOT_LONG})
+    ok, out = hk({"action": "screenshot", "shot_long": SHOT_LONG})
     m = re.search(r"(\d+)x(\d+) image", out)
     path = out.strip().splitlines()[-1].strip()
     if not ok or not m or not Path(path).exists():
@@ -171,15 +171,15 @@ def screenshot():
 def clean_screen(first_app):
     """Bring the task's first app forward and hide every other app, so the recording and the model
     only see the task. No AppleScript: an osascript call raised an Automation prompt mid-take."""
-    wh({"action": "open_app", "text": first_app, "shot": False})
+    hk({"action": "open_app", "text": first_app, "shot": False})
     time.sleep(0.8)
-    wh({"action": "key", "text": "cmd+alt+h", "shot": False})
+    hk({"action": "key", "text": "cmd+alt+h", "shot": False})
     time.sleep(0.5)
 
 
 def visible_outsiders(allowed):
     """Windows on screen from apps that are not part of the task."""
-    _, out = wh({"action": "list_windows", "shot": False})
+    _, out = hk({"action": "list_windows", "shot": False})
     bad = []
     for ln in out.splitlines():
         m = re.match(r'w\d+ ".*" (\S+) ', ln)
@@ -286,10 +286,10 @@ def run_tool(name, a, w, h):
                        "controls. Close the dialog (Escape) and use contact info shown openly.")
     if name == "click":
         mod = {"text": a["modifier"]} if a.get("modifier") in ("cmd", "shift", "alt") else {}
-        return wh({"action": "left_click", "coordinate": px(), "shot_long": SHOT_LONG, "shot": False,
+        return hk({"action": "left_click", "coordinate": px(), "shot_long": SHOT_LONG, "shot": False,
                    **mod})
     if name == "double_click":
-        return wh({"action": "double_click", "coordinate": px(), "shot_long": SHOT_LONG,
+        return hk({"action": "double_click", "coordinate": px(), "shot_long": SHOT_LONG,
                    "shot": False})
     if name == "type":
         steps = []
@@ -300,26 +300,26 @@ def run_tool(name, a, w, h):
         steps.append({"action": "type", "text": a["text"]})
         if a.get("submit"):
             steps.append({"action": "key", "text": "Return"})
-        return wh({"actions": steps, "shot": False})
+        return hk({"actions": steps, "shot": False})
     if name == "web_search":
-        return wh({"actions": [{"action": "key", "text": "cmd+l"},
+        return hk({"actions": [{"action": "key", "text": "cmd+l"},
                                {"action": "type", "text": a["query"]},
                                {"action": "key", "text": "Return"}], "shot": False})
     if name == "key":
-        return wh({"action": "key", "text": a["keys"], "shot": False})
+        return hk({"action": "key", "text": a["keys"], "shot": False})
     if name == "scroll":
-        return wh({"action": "scroll", "coordinate": px(), "shot_long": SHOT_LONG,
+        return hk({"action": "scroll", "coordinate": px(), "shot_long": SHOT_LONG,
                    "scroll_direction": a["direction"],
                    "scroll_amount": a.get("amount", 3), "shot": False})
     if name == "open_app":
         FRONT[0] = a["name"]
-        ok, out = wh({"action": "open_app", "text": a["name"], "shot": False})
+        ok, out = hk({"action": "open_app", "text": a["name"], "shot": False})
         ref = re.search(r"\bw(\d+)\b", out)
         if ok and ref:
             # small windows confused the model (an empty dark TextEdit page looked like nothing).
             # Not op=maximize: on macOS that is native full screen, a separate Space, and the next
             # app opened onto an empty desktop. Fill the screen below the menu bar instead.
-            wh({"action": "window", "op": "move", "window": f"w{ref.group(1)}",
+            hk({"action": "window", "op": "move", "window": f"w{ref.group(1)}",
                 "rect": [0, 30, 1920, 996], "shot": False})
         return ok, out
     if name == "wait":

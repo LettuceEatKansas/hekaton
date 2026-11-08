@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare two winhands daemons (for example the Python build and the Rust build) on the same screen.
+"""Compare two hekaton daemons (for example the Python build and the Rust build) on the same screen.
 
 It starts nothing. Give it two base URLs and their tokens; it sends the same PASSIVE requests to both
 (no clicks, no keys, no typing: health, screenshot, list_windows, cursor_position, list_files, read,
@@ -13,11 +13,11 @@ find_text) and diffs the answers:
 Run it with both daemons up and the desktop left alone, so both see the same screen:
 
     python tests/parity/compare.py \\
-        --a http://127.0.0.1:47811 --a-token-file "%LOCALAPPDATA%\\winhands\\token" --a-label python \\
-        --b http://127.0.0.1:47812 --b-token-file D:\\rs-test\\winhands\\token       --b-label rust
+        --a http://127.0.0.1:47811 --a-token-file "%LOCALAPPDATA%\\hekaton\\token" --a-label python \\
+        --b http://127.0.0.1:47812 --b-token-file D:\\rs-test\\hekaton\\token       --b-label rust
 
 The Rust daemon on a second port keeps its data in another folder: start it with
-LOCALAPPDATA=<some folder> WINHANDS_PORT=47812 winhands daemon. Never point both at one data folder,
+LOCALAPPDATA=<some folder> HEKATON_PORT=47812 hekaton daemon. Never point both at one data folder,
 the second would rewrite the first one's token.
 
 Exit code 0 when no shape differs, 1 when something does, 2 when a daemon cannot be reached.
@@ -64,7 +64,7 @@ class Daemon:
     def request(self, method: str, path: str, payload: dict | None = None) -> tuple[int, dict | None, bytes]:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(self.base + path, data=data, method=method)
-        req.add_header("X-Winhands-Token", self.token)
+        req.add_header("X-Hekaton-Token", self.token)
         req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:

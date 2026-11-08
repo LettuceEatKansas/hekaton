@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wh-core", "crates/wh-win", "crates/wh-mac", "crates/winhands"]
+members = ["crates/hekaton-core", "crates/hekaton-win", "crates/hekaton-mac", "crates/hekaton"]
 exclude = ["vendor/tiny_http"]
 
 [patch.crates-io]
@@ -12,15 +12,15 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.88"
 
-# One place for every shared version. Platform crates (windows, objc2-*) are listed here so wh-win and
-# wh-mac pick them up from one table, but only those two crates may depend on them, and only under a
-# target-specific section, so wh-core stays free of OS bindings and builds on Windows, macOS and Linux.
+# One place for every shared version. Platform crates (windows, objc2-*) are listed here so hekaton-win and
+# hekaton-mac pick them up from one table, but only those two crates may depend on them, and only under a
+# target-specific section, so hekaton-core stays free of OS bindings and builds on Windows, macOS and Linux.
 [workspace.dependencies]
-wh-core = { path = "crates/wh-core" }
-wh-win = { path = "crates/wh-win" }
-wh-mac = { path = "crates/wh-mac" }
+hekaton-core = { path = "crates/hekaton-core" }
+hekaton-win = { path = "crates/hekaton-win" }
+hekaton-mac = { path = "crates/hekaton-mac" }
 
-# wh-core (pure Rust, no OS bindings)
+# hekaton-core (pure Rust, no OS bindings)
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 regex = "1.13"
@@ -31,10 +31,10 @@ png = "0.18"
 fast_image_resize = "6.1"
 jpeg-encoder = "0.7"
 
-# wh-win (Windows only). Features are added by the code that needs them, keep this list short.
+# hekaton-win (Windows only). Features are added by the code that needs them, keep this list short.
 windows = { version = "0.62.2", default-features = false }
 
-# wh-mac (macOS only). Frameworks are enabled per feature when the code that needs them lands (R5).
+# hekaton-mac (macOS only). Frameworks are enabled per feature when the code that needs them lands (R5).
 objc2-core-graphics = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false }
@@ -49,7 +49,7 @@ libc = "0.2"
 global-hotkey = "0.8.0"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
-# winhands binary (daemon, MCP server, CLI). The daemon is synchronous (one thread per request, like
+# hekaton binary (daemon, MCP server, CLI). The daemon is synchronous (one thread per request, like
 # the Python ThreadingHTTPServer), so only the MCP stdio server needs an async runtime.
 tiny_http = "0.12"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io", "elicitation"] }
@@ -69,5 +69,5 @@ lto = "thin"
 codegen-units = 1
 strip = true
 # unwind, not abort: the daemon and the MCP server catch a panic per request and answer with an error
-# instead of dying (wh_core::daemon::Daemon::handle, winhands::shim::guarded).
+# instead of dying (hekaton_core::daemon::Daemon::handle, hekaton::shim::guarded).
 panic = "unwind"

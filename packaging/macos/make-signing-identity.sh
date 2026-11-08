@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create the self-signed code-signing identity "winhands-local" in your LOGIN keychain, once.
+# Create the self-signed code-signing identity "hekaton-local" in your LOGIN keychain, once.
 #
 # Why: macOS remembers the Accessibility and Screen Recording permissions by the app's code signature.
 # An ad hoc signature changes with every build, so the permissions would reset on every update. Signing
@@ -28,7 +28,7 @@ EOF
 while [ $# -gt 0 ]; do
   case $1 in
     --yes)
-      WH_YES=1
+      HK_YES=1
       shift
       ;;
     -h | --help)
@@ -67,14 +67,14 @@ cat <<EOF
 This will create a self-signed code-signing certificate called "$IDENTITY_NAME"
 in your LOGIN keychain:
     $KEYCHAIN
-It is valid for 10 years and is used only to sign winhands.app on this Mac. It is not trusted
-by anyone else and gives winhands no extra powers. Remove it any time with:
+It is valid for 10 years and is used only to sign hekaton.app on this Mac. It is not trusted
+by anyone else and gives hekaton no extra powers. Remove it any time with:
     security delete-identity -c $IDENTITY_NAME
 
 EOF
 confirm "Create it now?" || die "Cancelled. No identity was created."
 
-WORK=$(mktemp -d -t winhands-identity)
+WORK=$(mktemp -d -t hekaton-identity)
 chmod 700 "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -98,12 +98,12 @@ EOF
 # macOS's own LibreSSL (/usr/bin/openssl) writes a .p12 that `security import` accepts. A Homebrew
 # OpenSSL 3 would need extra legacy flags, which is why the system one is the default.
 P12_PASS=$("$OPENSSL" rand -hex 16)
-export WH_P12_PASS="$P12_PASS"
+export HK_P12_PASS="$P12_PASS"
 "$OPENSSL" pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -name "$IDENTITY_NAME" \
-  -out "$WORK/identity.p12" -passout env:WH_P12_PASS
+  -out "$WORK/identity.p12" -passout env:HK_P12_PASS
 
 # --- the login password (optional, see usage) ---------------------------------------------------------------
-KC_PASS="${WINHANDS_KEYCHAIN_PASSWORD:-}"
+KC_PASS="${HEKATON_KEYCHAIN_PASSWORD:-}"
 if [ -z "$KC_PASS" ] && [ -t 0 ]; then
   printf 'Mac login password (the one that unlocks your keychain; typing is hidden; Enter to skip): '
   read -r -s KC_PASS || true
@@ -124,7 +124,7 @@ if [ -n "$KC_PASS" ]; then
 
   probe_ok() {
     cp /bin/echo "$WORK/probe"
-    run_with_timeout 25 codesign --force --sign "$IDENTITY_NAME" ${WH_KEYCHAIN:+--keychain "$WH_KEYCHAIN"} "$WORK/probe" >/dev/null 2>&1
+    run_with_timeout 25 codesign --force --sign "$IDENTITY_NAME" ${HK_KEYCHAIN:+--keychain "$HK_KEYCHAIN"} "$WORK/probe" >/dev/null 2>&1
   }
   if ! probe_ok; then
     note "Narrow permission did not take effect, widening to all signing keys in this keychain."

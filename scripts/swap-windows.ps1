@@ -1,16 +1,16 @@
 <#
 .SYNOPSIS
-Swap the Windows install of winhands between the Python build and the Rust build, or back.
+Swap the Windows install of hekaton between the Python build and the Rust build, or back.
 
 .DESCRIPTION
-  -To rust    stop the running daemon, point the scheduled task "winhands daemon" at winhandsd.exe, set
-              daemon_task in config.json, and point the MCP entry `winhands` of Claude Code and of the
-              Hermes profiles at `winhands.exe mcp`.
-  -To python  the exact reverse (task back to the Python winhands.exe daemon, config.json key removed,
+  -To rust    stop the running daemon, point the scheduled task "hekaton daemon" at hekatond.exe, set
+              daemon_task in config.json, and point the MCP entry `hekaton` of Claude Code and of the
+              Hermes profiles at `hekaton.exe mcp`.
+  -To python  the exact reverse (task back to the Python hekaton.exe daemon, config.json key removed,
               MCP entries back to python.exe shim.py).
 
 Changing the task needs an elevated PowerShell. Everything else is edited in place, line by line, so
-unrelated changes in the Hermes files are kept (the Hermes env blocks, WINHANDS_COORDS included, are
+unrelated changes in the Hermes files are kept (the Hermes env blocks, HEKATON_COORDS included, are
 never touched). Each file is copied to <name>.pre-swap-<time>.bak first; the task definition is
 exported to XML next to the Rust binaries. -DryRun prints the plan and changes nothing.
 See docs/SWAP-WINDOWS.md.
@@ -18,13 +18,13 @@ See docs/SWAP-WINDOWS.md.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidateSet('rust', 'python')][string]$To,
-    [string]$RustBin = 'C:\Users\ikill\tools\winhands-rs-bin',
-    [string]$PythonRoot = 'C:\Users\ikill\tools\winhands',
-    [string]$TaskName = 'winhands daemon',
+    [string]$RustBin = 'C:\Users\ikill\tools\hekaton-rs-bin',
+    [string]$PythonRoot = 'C:\Users\ikill\tools\hekaton',
+    [string]$TaskName = 'hekaton daemon',
     [string[]]$HermesConfigs = @(
         "$env:LOCALAPPDATA\hermes\config.yaml",
         "$env:LOCALAPPDATA\hermes\profiles\lean\config.yaml"),
-    [string]$DataDir = "$env:LOCALAPPDATA\winhands",
+    [string]$DataDir = "$env:LOCALAPPDATA\hekaton",
     [switch]$SkipTask,
     [switch]$SkipClaude,
     [switch]$SkipDaemonStop,
@@ -35,11 +35,11 @@ $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
-$rustCli = Join-Path $RustBin 'winhands.exe'
-$rustDaemon = Join-Path $RustBin 'winhandsd.exe'
-$pyExe = Join-Path $PythonRoot 'bin\winhands.exe'
+$rustCli = Join-Path $RustBin 'hekaton.exe'
+$rustDaemon = Join-Path $RustBin 'hekatond.exe'
+$pyExe = Join-Path $PythonRoot 'bin\hekaton.exe'
 $pyPython = Join-Path $PythonRoot '.venv\Scripts\python.exe'
-$pyShim = Join-Path $PythonRoot 'winhands\shim.py'
+$pyShim = Join-Path $PythonRoot 'hekaton\shim.py'
 
 function Step([string]$what, [scriptblock]$do) {
     if ($DryRun) { Write-Host "[dry-run] $what"; return }
@@ -96,7 +96,7 @@ if (-not $SkipTask) {
         $now = Get-ScheduledTask -TaskName $TaskName
         Write-Host ("  action now: {0} {1} (run level {2})" -f $now.Actions[0].Execute, $now.Actions[0].Arguments, $now.Principal.RunLevel)
         if ($now.Principal.RunLevel -ne 'Highest') {
-            Write-Warning 'run level is no longer Highest: restore the exported XML with schtasks /create /tn "winhands daemon" /xml <file> /f'
+            Write-Warning 'run level is no longer Highest: restore the exported XML with schtasks /create /tn "hekaton daemon" /xml <file> /f'
         }
     }
 }
@@ -125,7 +125,7 @@ Step $cfgLabel {
     }
 }
 
-# ---- 4. the Hermes profiles: command and args of mcp_servers.winhands, nothing else
+# ---- 4. the Hermes profiles: command and args of mcp_servers.hekaton, nothing else
 if ($To -eq 'rust') {
     $hCommand = ($rustCli -replace '\\', '/')
     $hArg = 'mcp'
@@ -133,16 +133,16 @@ if ($To -eq 'rust') {
     $hCommand = ($pyPython -replace '\\', '/')
     $hArg = ($pyShim -replace '\\', '/')
 }
-$entry = [regex]'(?m)^(  winhands:)(\r?\n)    args:\r?\n(?:      - [^\r\n]*\r?\n)+    command: [^\r\n]*\r?\n'
+$entry = [regex]'(?m)^(  hekaton:)(\r?\n)    args:\r?\n(?:      - [^\r\n]*\r?\n)+    command: [^\r\n]*\r?\n'
 foreach ($cfg in $HermesConfigs) {
     if (-not (Test-Path -LiteralPath $cfg)) { Write-Host "skip (not there): $cfg"; continue }
     $text = [IO.File]::ReadAllText($cfg, $utf8)
     $from = $text.IndexOf('mcp_servers:')
     if ($from -lt 0) { throw "no mcp_servers: in $cfg" }
     $m = $entry.Match($text, $from)
-    if (-not $m.Success) { throw "mcp_servers.winhands in $cfg does not have the expected shape (args list, then command); edit it by hand" }
+    if (-not $m.Success) { throw "mcp_servers.hekaton in $cfg does not have the expected shape (args list, then command); edit it by hand" }
     $nl = $m.Groups[2].Value
-    $new = "  winhands:$nl    args:$nl      - $hArg$nl    command: $hCommand$nl"
+    $new = "  hekaton:$nl    args:$nl      - $hArg$nl    command: $hCommand$nl"
     if ($m.Value -eq $new) { Write-Host "already set: $cfg"; continue }
     Step "Hermes entry in $cfg -> $hCommand $hArg" {
         Backup $cfg
@@ -156,11 +156,11 @@ if (-not $SkipClaude) {
         Write-Warning 'claude CLI not on PATH: skipped Claude Code (see docs/SWAP-WINDOWS.md for the command)'
     } else {
         if ($To -eq 'rust') { $cmdLine = @($rustCli, 'mcp') } else { $cmdLine = @($pyPython, $pyShim) }
-        Step "Claude Code: claude mcp add -s user winhands -- $($cmdLine -join ' ')" {
+        Step "Claude Code: claude mcp add -s user hekaton -- $($cmdLine -join ' ')" {
             $keep = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
-            & claude mcp remove winhands -s user 2>&1 | Out-Null
-            & claude mcp add -s user winhands -- @cmdLine 2>&1 | Out-Host
+            & claude mcp remove hekaton -s user 2>&1 | Out-Null
+            & claude mcp add -s user hekaton -- @cmdLine 2>&1 | Out-Host
             $code = $LASTEXITCODE
             $ErrorActionPreference = $keep
             if ($code -ne 0) { throw "claude mcp add failed (exit $code)" }

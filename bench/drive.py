@@ -8,9 +8,9 @@ median and p95 per call name. Images never reach the calling agent's context.
     python bench/drive.py --target old --suite bench/suites/baseline.json --out bench/runs/old
 
 Targets:
-    old  installed daemon, port 47811, state %LOCALAPPDATA%\\winhands
+    old  installed daemon, port 47811, state %LOCALAPPDATA%\\hekaton
     new  side-by-side daemon, port 47911, state HEKATON_TEST_STATE (default
-         C:\\Users\\ikill\\tools\\hekaton-test-state\\winhands)
+         C:\\Users\\ikill\\tools\\hekaton-test-state\\hekaton)
 
 Token estimate: text chars / 4, plus per image ceil(w*h/750) after the Anthropic API downscale
 (long edge <= 1568 px and <= 1.15 MP). It is an estimate, labelled as such in every report.
@@ -32,10 +32,10 @@ import urllib.request
 from pathlib import Path
 
 TARGETS = {
-    "old": (47811, Path(os.environ.get("LOCALAPPDATA", "")) / "winhands"),
+    "old": (47811, Path(os.environ.get("LOCALAPPDATA", "")) / "hekaton"),
     "new": (
         47911,
-        Path(os.environ.get("HEKATON_TEST_STATE", r"C:\Users\ikill\tools\hekaton-test-state\winhands")),
+        Path(os.environ.get("HEKATON_TEST_STATE", r"C:\Users\ikill\tools\hekaton-test-state\hekaton")),
     ),
 }
 
@@ -80,7 +80,7 @@ def call(port: int, token: str, args: dict, timeout: float) -> tuple[int, bytes,
         data=body,
         method="POST",
         headers={
-            "X-Winhands-Token": token,
+            "X-Hekaton-Token": token,
             "X-Hands-Deadline-Unix-Ms": str(deadline),
             "Content-Type": "application/json",
         },

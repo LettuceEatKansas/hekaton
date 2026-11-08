@@ -1,0 +1,110 @@
+[package]
+name = "hekaton-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "hekaton macOS backend (CGEvent, ScreenCaptureKit, AX, Vision). Platform code is compiled on macOS only; the pure helpers build everywhere."
+
+[dependencies]
+hekaton-core = { workspace = true }
+
+# Everything below is compiled on macOS only; on Windows and Linux only the pure helper modules build.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSBundle",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSObject",
+    "NSRange",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFArray",
+    "CFCGTypes",
+    "CFData",
+    "CFDictionary",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+    "CFURL",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGBase",
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGDirectDisplay",
+    "CGDisplayConfiguration",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGGeometry",
+    "CGImage",
+    "CGRemoteOperation",
+    "CGWindow",
+    "libc",
+    "objc2",
+    "std",
+] }
+objc2-app-kit = { workspace = true, features = [
+    "NSPasteboard",
+    "NSPasteboardItem",
+    "NSRunningApplication",
+    "NSWorkspace",
+    "libc",
+    "std",
+] }
+objc2-screen-capture-kit = { workspace = true, features = [
+    "SCError",
+    "SCScreenshotManager",
+    "SCShareableContent",
+    "SCStream",
+    "block2",
+    "dispatch2",
+    "libc",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "std",
+] }
+objc2-application-services = { workspace = true, features = [
+    "AXAttributeConstants",
+    "AXError",
+    "AXUIElement",
+    "AXValue",
+    "HIServices",
+    "libc",
+    "objc2",
+    "std",
+] }
+objc2-vision = { workspace = true, features = [
+    "VNObservation",
+    "VNRecognizeTextRequest",
+    "VNRequest",
+    "VNRequestHandler",
+    "VNTypes",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "std",
+] }
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+libc = { workspace = true }
+global-hotkey = { workspace = true }
+sysinfo = { workspace = true }
+
+[lints.rust]
+# The macOS backend needs FFI. Every unsafe block carries a one-line SAFETY comment (PLAN ground
+# rule 4), enforced by the clippy lint below, so the plain `unsafe_code` lint stays off.
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

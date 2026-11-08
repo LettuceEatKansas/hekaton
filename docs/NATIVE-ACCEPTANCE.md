@@ -23,10 +23,10 @@ Each selected job must pass on the exact source revision intended for release. P
 Run only when the machine is reserved for testing:
 
 ```text
-cargo test --locked -p wh-win --test passive -- --ignored --nocapture --test-threads=1
-cargo test --locked -p wh-win --test uia_passive -- --ignored --nocapture --test-threads=1
-cargo test --locked -p wh-mac --test macos_smoke -- --nocapture --test-threads=1
-cargo test --locked -p wh-mac --test macos_e2e -- --ignored --nocapture --test-threads=1
+cargo test --locked -p hekaton-win --test passive -- --ignored --nocapture --test-threads=1
+cargo test --locked -p hekaton-win --test uia_passive -- --ignored --nocapture --test-threads=1
+cargo test --locked -p hekaton-mac --test macos_smoke -- --nocapture --test-threads=1
+cargo test --locked -p hekaton-mac --test macos_e2e -- --ignored --nocapture --test-threads=1
 ```
 
 Only use commands for the current operating system. Set `HANDS_REQUIRE_NATIVE=1` in the macOS test environment for the strict native lane. Run results, timestamps, hardware/display configuration, permission state, and unresolved failures belong in the release evidence. Do not infer a pass from the presence of this workflow file.

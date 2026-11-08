@@ -80,7 +80,7 @@ def line(start, end, style, x, y, text, layer=0):
     return f"Dialogue: {layer},{ts(start)},{ts(end)},{style},,0,0,0,,{{\\pos({x},{y})}}{text}\n"
 
 
-def build(events, vstart, duration, hands="machands"):
+def build(events, vstart, duration, hands="hekaton"):
     rel = lambda t: t - vstart
     prompt = next(e for e in events if e["kind"] == "prompt")
     answer = next((e for e in events if e["kind"] == "answer"), None)
@@ -178,7 +178,7 @@ def main():
     ap.add_argument("--lead", type=float, default=2.5,
                     help="seconds of recording kept before the prompt is sent; earlier frames are cut "
                          "(they show the screen before the run hid other apps)")
-    ap.add_argument("--hands", default="machands", help="name of the hands layer shown in the panel")
+    ap.add_argument("--hands", default="hekaton", help="name of the hands layer shown in the panel")
     ap.add_argument("--blur", action="append", default=[],
                     help="x:y:w:h in recording pixels (1920x1080), optional @start-end seconds")
     args = ap.parse_args()

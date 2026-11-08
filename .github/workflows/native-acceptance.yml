@@ -36,9 +36,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force native-results | Out-Null
-          cargo test --locked -p wh-win --test passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-passive.log
+          cargo test --locked -p hekaton-win --test passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-passive.log
           if ($LASTEXITCODE -ne 0) { Get-Content native-results/windows-passive.log; exit 1 }
-          cargo test --locked -p wh-win --test uia_passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-uia.log
+          cargo test --locked -p hekaton-win --test uia_passive -- --ignored --nocapture --test-threads=1 *> native-results/windows-uia.log
           if ($LASTEXITCODE -ne 0) { Get-Content native-results/windows-uia.log; exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
@@ -62,8 +62,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p native-results
-          cargo test --locked -p wh-mac --test macos_smoke -- --nocapture --test-threads=1 2>&1 | tee native-results/macos-smoke.log
-          cargo test --locked -p wh-mac --test macos_e2e -- --ignored --nocapture --test-threads=1 2>&1 | tee native-results/macos-e2e.log
+          cargo test --locked -p hekaton-mac --test macos_smoke -- --nocapture --test-threads=1 2>&1 | tee native-results/macos-smoke.log
+          cargo test --locked -p hekaton-mac --test macos_e2e -- --ignored --nocapture --test-threads=1 2>&1 | tee native-results/macos-e2e.log
           # Historical exploratory tests can return successfully after logging a failed operation.
           # Preserve an explicit guard even when the test harness itself exits zero.
           if grep -E 'E2E .*FAIL|gave up after|E2E no Untitled document window' native-results/macos-e2e.log; then

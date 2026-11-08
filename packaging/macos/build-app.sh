@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build winhands.app: a universal (arm64 + x86_64) release binary in a signed macOS app bundle.
+# Build hekaton.app: a universal (arm64 + x86_64) release binary in a signed macOS app bundle.
 # Run on a Mac. See --help.
 set -euo pipefail
 
@@ -10,14 +10,14 @@ usage() {
   cat <<EOF
 Usage: build-app.sh [options]
 
-Builds winhands.app (bundle id $APP_ID) from the winhands binary and signs it.
+Builds hekaton.app (bundle id $APP_ID) from the hekaton binary and signs it.
 
 Options:
   --identity NAME   Sign with this code-signing certificate (an Apple Development or Developer ID
                     certificate), with the hardened runtime and a secure timestamp.
-  --binary PATH     Use this already-built winhands executable instead of running cargo. It is copied
+  --binary PATH     Use this already-built hekaton executable instead of running cargo. It is copied
                     in as is, so pass a universal binary if you want a universal app.
-  --out DIR         Where winhands.app is written (default: target/macos in the repo).
+  --out DIR         Where hekaton.app is written (default: target/macos in the repo).
   --version X.Y.Z   Version recorded in Info.plist (default: read from Cargo).
   --native          Build only for this Mac's CPU. Faster, for development.
   -h, --help        Show this text.
@@ -79,7 +79,7 @@ need codesign "It ships with macOS; is this a normal Mac?"
 need plutil "It ships with macOS; is this a normal Mac?"
 need lipo "Install the Xcode command line tools: xcode-select --install"
 
-WORK=$(mktemp -d -t winhands-build)
+WORK=$(mktemp -d -t hekaton-build)
 trap 'rm -rf "$WORK"' EXIT
 
 # --- 1. the executable ----------------------------------------------------------------------------------
@@ -105,8 +105,8 @@ build_binary() {
       info "rustup target add $t"
       rustup target add "$t"
     fi
-    info "cargo build --release -p winhands --target $t"
-    (cd "$REPO_ROOT" && MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS" cargo build --release --locked -p winhands --target "$t")
+    info "cargo build --release -p hekaton --target $t"
+    (cd "$REPO_ROOT" && MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS" cargo build --release --locked -p hekaton --target "$t")
     outs+=("$target_dir/$t/release/$BIN_NAME")
   done
   if [ "${#outs[@]}" -eq 1 ]; then
@@ -148,7 +148,7 @@ cp "$WORK/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 # LSUIElement: no Dock icon and no app menu, but the app may still show a menu-bar item.
-# No NSAppleEventsUsageDescription: winhands does not send Apple Events (it posts CGEvents and reads the
+# No NSAppleEventsUsageDescription: hekaton does not send Apple Events (it posts CGEvents and reads the
 # Accessibility tree). macOS has no Info.plist key for the Accessibility or Screen Recording prompts.
 cat >"$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -164,9 +164,9 @@ cat >"$APP/Contents/Info.plist" <<EOF
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$BIN_NAME</string>
+	<string>$APP_DISPLAY_NAME</string>
 	<key>CFBundleDisplayName</key>
-	<string>$BIN_NAME</string>
+	<string>$APP_DISPLAY_NAME</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -206,7 +206,7 @@ else
   cat >&2 <<EOF
 
 ##########################################################################################
- AD HOC SIGNATURE: macOS will forget the winhands permissions on every rebuild.
+ AD HOC SIGNATURE: macOS will forget the hekaton permissions on every rebuild.
 
  This app is signed ad hoc because no signing identity was found. An ad hoc signature is
  different on every build, and macOS ties Accessibility and Screen Recording permission to

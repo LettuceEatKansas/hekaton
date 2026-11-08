@@ -1,6 +1,6 @@
 #!/bin/bash
-# Check a built winhands.app: signature intact, Info.plist sane, both CPU types present, binary runs.
-# Usage: verify-app.sh [path/to/winhands.app]   (default: target/macos/winhands.app)
+# Check a built hekaton.app: signature intact, Info.plist sane, both CPU types present, binary runs.
+# Usage: verify-app.sh [path/to/hekaton.app]   (default: target/macos/hekaton.app)
 set -euo pipefail
 
 # shellcheck source=lib.sh
