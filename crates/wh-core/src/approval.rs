@@ -522,9 +522,29 @@ impl Store {
     }
 }
 
+/// The hash of `v` with every object's keys sorted. 2026-11-07: serde_json keeps insertion order
+/// here (`preserve_order`) and its `remove` is a swap-remove, so taking `approval_code` out of the
+/// middle of the repeated call moved the last key (`only_apps`, `session_id`) into its place. The
+/// same call hashed differently, and four approved codes in a row unlocked nothing.
 fn short_hash(v: &Value) -> String {
-    let digest = Sha256::digest(v.to_string().as_bytes());
+    let digest = Sha256::digest(key_sorted(v).to_string().as_bytes());
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+fn key_sorted(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), key_sorted(&m[k])))
+                    .collect(),
+            )
+        }
+        Value::Array(a) => Value::Array(a.iter().map(key_sorted).collect()),
+        other => other.clone(),
+    }
 }
 
 fn without_control_keys(m: &Map<String, Value>) -> Map<String, Value> {
@@ -651,6 +671,28 @@ mod tests {
         let t2 = s.mint(entry("a"), Duration::from_secs(100)).unwrap();
         let just_before = Duration::from_secs(100) + TOKEN_TTL - Duration::from_secs(1);
         assert!(s.take(&t2, just_before).is_ok());
+    }
+
+    #[test]
+    fn a_call_is_the_same_call_whatever_order_its_keys_came_in() {
+        let sent = json!({"action": "left_click", "coordinate": [1, 2], "coords": "pixels",
+                          "only_apps": ["a"], "session_id": "s", "expect": {"b": 1, "a": 2}});
+        let mut repeated = json!({"action": "left_click", "coordinate": [1, 2],
+                                  "approval_code": "K7QM", "coords": "pixels", "only_apps": ["a"],
+                                  "session_id": "s", "expect": {"a": 2, "b": 1}});
+        // what the daemon does to the repeat: a swap-remove puts session_id where the code was
+        repeated.as_object_mut().unwrap().remove("approval_code");
+        let (sent, repeated) = (sent.as_object().unwrap(), repeated.as_object().unwrap());
+        assert_ne!(
+            sent.keys().collect::<Vec<_>>(),
+            repeated.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(call_id(sent), call_id(repeated));
+        assert_eq!(step_id(sent), step_id(repeated));
+        // a different click is still a different call
+        let mut other = sent.clone();
+        other.insert("coordinate".into(), json!([1, 3]));
+        assert_ne!(call_id(sent), call_id(&other));
     }
 
     #[test]

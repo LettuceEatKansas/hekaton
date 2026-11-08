@@ -272,6 +272,45 @@ fn a_chat_code_works_only_after_jon_approves_it_and_only_once() {
     assert!(kit.computer.answer_approval_code(&code, true).is_err());
 }
 
+/// The payload the MCP server sends for `args`: built by `build_payload`, then marked `approvable`
+/// last, the way the shim does.
+fn from_mcp(args: Value) -> Value {
+    let defaults = crate::mcp::ShimDefaults {
+        coords: "pixels".into(),
+        only_apps: vec!["app.exe".into()],
+    };
+    let mut payload = crate::mcp::build_payload(args.as_object().unwrap(), &defaults).unwrap();
+    payload["approvable"] = json!("chat");
+    payload
+}
+
+// 2026-11-07 (Basecut Send): Jon approved B7YY, the model repeated the identical call with
+// approval_code B7YY, and it was refused as "a different step". The MCP payload puts approval_code
+// before coords and only_apps; taking it out reordered the keys and the call hashed differently.
+#[test]
+fn an_approved_chat_code_opens_the_identical_call_as_the_mcp_server_sends_it() {
+    let kit = kit_with(None);
+    let click = json!({"action": "left_click", "coordinate": [30, 30]});
+    let first = call(&kit, from_mcp(click.clone()));
+    assert!(
+        text_of(&first).contains("Needs the owner's OK"),
+        "{}",
+        text_of(&first)
+    );
+    let code = code_of(&first);
+    kit.computer.answer_approval_code(&code, true).unwrap();
+    let retry = from_mcp(with(click, "approval_code", json!(code)));
+    let keys: Vec<&String> = retry.as_object().unwrap().keys().collect();
+    let at = |k: &str| keys.iter().position(|x| *x == k).unwrap();
+    assert!(
+        at("approval_code") < at("coords") && at("coords") < at("only_apps"),
+        "the code rides in the middle, as on 2026-11-07: {keys:?}"
+    );
+    let ran = call(&kit, retry);
+    assert!(ran.ok && ran.failed_step.is_none(), "{}", text_of(&ran));
+    assert_eq!(clicks(&kit), 1);
+}
+
 #[test]
 fn a_denied_chat_code_never_runs() {
     let kit = kit_with(None);
