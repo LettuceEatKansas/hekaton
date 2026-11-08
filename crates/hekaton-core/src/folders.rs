@@ -688,8 +688,8 @@ mod tests {
         {
             assert_eq!(normpath("C:/Users/x/../y/"), "C:\\Users\\y");
             assert_eq!(
-                normpath("C:\\Users\\ikill\\My Docs"),
-                "C:\\Users\\ikill\\My Docs"
+                normpath("C:\\Users\\you\\My Docs"),
+                "C:\\Users\\you\\My Docs"
             );
         }
     }

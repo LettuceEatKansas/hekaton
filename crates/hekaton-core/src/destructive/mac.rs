@@ -639,11 +639,11 @@ mod tests {
             r#"rm -rf "$HOME""#,
             "rm -rf ${HOME}/",
             "rm -rf $HOME/*",
-            "rm -rf /Users/jon",
+            "rm -rf /Users/you",
             "rm -r --no-preserve-root /",
             "rm -rf -- /",
             "rm -rf /tmp/x /",
-            "rm -rf /Users/jon/..",
+            "rm -rf /Users/you/..",
             "sudo rm -rf /Applications ; echo done",
             r#"bash -c "rm -rf /""#,
             "sudo -n /bin/rm -rf /Library",
@@ -691,7 +691,7 @@ mod tests {
             "rm -rf /usr/local/Cellar/foo",
             "rm -rf /usr/local/*",
             "rm -rf /Library/Caches/com.example.app",
-            "rm -rf /Users/jon/Downloads/x",
+            "rm -rf /Users/you/Downloads/x",
             "rm -rf /Users/Shared/cache",
             "rm notes.txt",
             "rm -f /",
@@ -869,8 +869,8 @@ mod tests {
             "security dump-keychain -d login.keychain",
             "sudo security dump-keychain",
             "/usr/bin/security dump-keychain",
-            "security find-generic-password -a jon -s foo -w",
-            "security find-generic-password -ga jon",
+            "security find-generic-password -a ada -s foo -w",
+            "security find-generic-password -ga ada",
             "security find-internet-password -s github.com -w",
             r#"security find-generic-password -s "Chrome Safe Storage" -w"#,
             "security export -k login.keychain -t certs -f pemseq -o out.pem",
@@ -890,7 +890,7 @@ mod tests {
             "security find-certificate -a -c Apple",
             "security find-identity -v -p codesigning",
             // No -w or -g: only attributes come back, so it is an existence check.
-            "security find-generic-password -a jon -s foo",
+            "security find-generic-password -a ada -s foo",
             "security list-keychains",
             "security default-keychain",
             "security verify-cert -c x.pem",
@@ -949,7 +949,7 @@ mod tests {
             "cat ~/.ssh/id_ed25519 | pbcopy",
             "pbcopy < ~/.ssh/id_rsa",
             "cat $HOME/.ssh/id_ecdsa",
-            r#"cat "/Users/jon/.ssh/id_rsa""#,
+            r#"cat "/Users/you/.ssh/id_rsa""#,
             "scp ~/.ssh/id_rsa user@host:/tmp/",
             "scp -r ~/.ssh user@host:",
             "scp user@host:.ssh/id_rsa .",
@@ -1013,10 +1013,10 @@ mod tests {
             "/System/Library/CoreServices/boot.efi",
             "/bin/sh",
             "/usr/bin/ssh",
-            "/Users/jon/.ssh/id_rsa",
-            "/Users/jon/.aws/credentials",
-            "/Users/jon/Library/Keychains/login.keychain-db",
-            "/Users/jon/Library/Application Support/Google/Chrome/Default/Cookies",
+            "/Users/you/.ssh/id_rsa",
+            "/Users/you/.aws/credentials",
+            "/Users/you/Library/Keychains/login.keychain-db",
+            "/Users/you/Library/Application Support/Google/Chrome/Default/Cookies",
         ] {
             assert!(
                 OFF.check_path(path, "a test").is_err(),
@@ -1024,9 +1024,9 @@ mod tests {
             );
         }
         for path in [
-            "/Users/jon/Documents/notes.txt",
-            "/Users/jon/.ssh/id_rsa.pub",
-            "/Users/jon/.ssh/config",
+            "/Users/you/Documents/notes.txt",
+            "/Users/you/.ssh/id_rsa.pub",
+            "/Users/you/.ssh/config",
             "/usr/local/bin/foo",
             "/Applications/Foo.app",
             "/Library/Caches/x",
@@ -1043,24 +1043,24 @@ mod tests {
     fn credential_paths_cover_the_mac_stores() {
         use super::super::is_credential_path;
         assert!(is_credential_path(
-            "/Users/jon/Library/Keychains/login.keychain-db"
+            "/Users/you/Library/Keychains/login.keychain-db"
         ));
         assert!(is_credential_path(
-            "/Users/jon/Library/Application Support/Google/Chrome/Profile 1/Login Data"
+            "/Users/you/Library/Application Support/Google/Chrome/Profile 1/Login Data"
         ));
         assert!(is_credential_path(
-            "/Users/jon/Library/Application Support/Arc/User Data/Default/Cookies"
+            "/Users/you/Library/Application Support/Arc/User Data/Default/Cookies"
         ));
         assert!(is_credential_path(
-            "/Users/jon/Library/Cookies/Cookies.binarycookies"
+            "/Users/you/Library/Cookies/Cookies.binarycookies"
         ));
-        assert!(!is_credential_path("/Users/jon/Library/Keychains"));
-        assert!(!is_credential_path("/Users/jon/Library/Keychains/"));
+        assert!(!is_credential_path("/Users/you/Library/Keychains"));
+        assert!(!is_credential_path("/Users/you/Library/Keychains/"));
         assert!(!is_credential_path(
-            "/Users/jon/Library/Application Support/Google/Chrome/Default/Bookmarks"
+            "/Users/you/Library/Application Support/Google/Chrome/Default/Bookmarks"
         ));
         assert!(!is_credential_path(
-            "/Users/jon/Documents/cookies-recipe.txt"
+            "/Users/you/Documents/cookies-recipe.txt"
         ));
     }
 
@@ -1129,8 +1129,8 @@ mod tests {
 
     #[test]
     fn path_parsing_normalises_what_a_shell_would() {
-        let p = MacPath::parse("/Users/jon/../jon/./").unwrap();
-        assert_eq!(p.comps, ["users", "jon"]);
+        let p = MacPath::parse("/Users/you/../ada/./").unwrap();
+        assert_eq!(p.comps, ["users", "ada"]);
         let p = MacPath::parse("~/Downloads/*").unwrap();
         assert!(p.base == Base::Home && p.comps == ["downloads"]);
         let p = MacPath::parse("${HOME}/.*").unwrap();

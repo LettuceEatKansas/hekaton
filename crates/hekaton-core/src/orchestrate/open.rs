@@ -966,12 +966,12 @@ mod tests {
     #[test]
     fn installers_scripts_and_fresh_downloads_are_spotted() {
         for yes in [
-            "/Users/jon/Downloads/Setup.dmg",
-            "/usr/bin/open \"/Users/jon/Downloads/Zoom Installer.pkg\"",
+            "/Users/you/Downloads/Setup.dmg",
+            "/usr/bin/open \"/Users/you/Downloads/Zoom Installer.pkg\"",
             "~/Desktop/run.command",
-            "/Users/jon/Downloads/Cool App.app",
-            "C:\\Users\\jon\\Downloads\\setup.exe",
-            "explorer.exe \"C:\\Users\\jon\\AppData\\Local\\Temp\\x.msi\"",
+            "/Users/you/Downloads/Cool App.app",
+            "C:\\Users\\you\\Downloads\\setup.exe",
+            "explorer.exe \"C:\\Users\\you\\AppData\\Local\\Temp\\x.msi\"",
             "powershell.ps1",
         ] {
             assert!(is_installer(yes), "{yes}");
@@ -982,9 +982,9 @@ mod tests {
             "viewer.exe --fast",
             "Safari",
             "/Applications/TextEdit.app",
-            "explorer.exe \"C:\\Users\\jon\\Downloads\\photos\"",
-            "/usr/bin/open \"/Users/jon/Downloads/report.pdf\"",
-            "/usr/bin/open \"/Users/jon/Downloads/sub folder\"",
+            "explorer.exe \"C:\\Users\\you\\Downloads\\photos\"",
+            "/usr/bin/open \"/Users/you/Downloads/report.pdf\"",
+            "/usr/bin/open \"/Users/you/Downloads/sub folder\"",
         ] {
             assert!(!is_installer(no), "{no}");
         }

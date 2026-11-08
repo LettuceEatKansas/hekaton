@@ -238,7 +238,7 @@ mod tests {
 
     fn info() -> AckInfo {
         AckInfo {
-            user: "jon".into(),
+            user: "ada".into(),
             host: "box".into(),
             os: "test".into(),
             version: "0.0.0".into(),
@@ -386,7 +386,7 @@ mod tests {
         let doc: Value =
             serde_json::from_str(&std::fs::read_to_string(cfg.paths().ack()).unwrap()).unwrap();
         assert_eq!(doc["how"], "typed at a terminal");
-        assert_eq!(doc["user"], "jon");
+        assert_eq!(doc["user"], "ada");
         let stamp = doc["acknowledged_at"].as_str().unwrap();
         assert_eq!(stamp.len(), "2026-10-08T12:00:00+0000".len(), "{stamp}");
     }

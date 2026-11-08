@@ -10,7 +10,7 @@
 //!    (Windows only; this is how an elevated daemon is started without a prompt);
 //! 3. on macOS, `launchctl kickstart gui/<uid>/<label>` when `daemon_launchd_label` /
 //!    `HEKATON_DAEMON_LAUNCHD_LABEL` is set, or when this executable runs from inside a
-//!    `hekaton.app` bundle (label `com.lettuceatkansas.hekaton`, the LaunchAgent that
+//!    `hekaton.app` bundle (label `org.hekaton.app`, the LaunchAgent that
 //!    `packaging/macos/install.sh` installs). launchd then starts the daemon as its own process, so
 //!    macOS charges the Accessibility and Screen Recording grants to hekaton.app and not to Claude or
 //!    Terminal. Only when no such agent is loaded does it fall back to spawning the daemon (5), with a
@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use hekaton_core::config::{Config, to_text};
 
 /// The LaunchAgent `packaging/macos/install.sh` installs (also the app's bundle id).
-pub const LAUNCHD_LABEL: &str = "com.lettuceatkansas.hekaton";
+pub const LAUNCHD_LABEL: &str = "org.hekaton.app";
 
 /// How a missing daemon gets started.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,7 +466,7 @@ mod tests {
     }
 
     fn app_exe() -> PathBuf {
-        PathBuf::from("/Users/jon/Applications/hekaton.app/Contents/MacOS/hekaton")
+        PathBuf::from("/Users/you/Applications/hekaton.app/Contents/MacOS/hekaton")
     }
 
     #[test]
@@ -482,7 +482,7 @@ mod tests {
         );
         assert_eq!(
             s.describe(),
-            "launchctl kickstart gui/$(id -u)/com.lettuceatkansas.hekaton"
+            "launchctl kickstart gui/$(id -u)/org.hekaton.app"
         );
     }
 
@@ -494,7 +494,7 @@ mod tests {
             Starter::SelfDaemon(app_exe()),
             "not off macOS"
         );
-        let dev = PathBuf::from("/Users/jon/src/hekaton-rs/target/debug/hekaton");
+        let dev = PathBuf::from("/Users/you/src/hekaton-rs/target/debug/hekaton");
         assert_eq!(
             Starter::resolve_for(&c, dev.clone(), None, None, true),
             Starter::SelfDaemon(dev),
@@ -548,7 +548,7 @@ mod tests {
         assert!(!inside_app_bundle(Path::new("/x/nothekaton.app/y")));
         assert_eq!(
             launchd_target(501, LAUNCHD_LABEL),
-            "gui/501/com.lettuceatkansas.hekaton"
+            "gui/501/org.hekaton.app"
         );
     }
 

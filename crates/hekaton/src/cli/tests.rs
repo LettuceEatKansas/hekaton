@@ -163,14 +163,14 @@ fn doctor_on_macos_does_not_ask_for_an_elevated_daemon() {
 #[test]
 fn doctor_says_when_it_runs_outside_the_app_bundle_on_macos() {
     use std::path::Path;
-    let outside = Path::new("/Users/jon/src/hekaton-rs/target/release/hekaton");
+    let outside = Path::new("/Users/you/src/hekaton-rs/target/release/hekaton");
     let note = bundle_note(outside, true).expect("outside the bundle on macOS");
     assert!(
         note.starts_with("NOTE not running from hekaton.app"),
         "{note}"
     );
     assert!(note.contains("install.sh"));
-    let inside = Path::new("/Users/jon/Applications/hekaton.app/Contents/MacOS/hekaton");
+    let inside = Path::new("/Users/you/Applications/hekaton.app/Contents/MacOS/hekaton");
     assert_eq!(bundle_note(inside, true), None);
     assert_eq!(
         bundle_note(outside, false),

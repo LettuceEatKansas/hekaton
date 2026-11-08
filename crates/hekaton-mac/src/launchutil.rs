@@ -140,10 +140,10 @@ mod tests {
 
     #[test]
     fn search_dirs_cover_system_and_user_apps() {
-        let d = app_search_dirs("/Users/jon/");
+        let d = app_search_dirs("/Users/you/");
         assert!(d.contains(&"/Applications".to_string()));
         assert!(d.contains(&"/System/Applications".to_string()));
-        assert_eq!(d.last().unwrap(), "/Users/jon/Applications");
+        assert_eq!(d.last().unwrap(), "/Users/you/Applications");
         assert!(
             !app_search_dirs("")
                 .iter()
@@ -191,13 +191,13 @@ mod tests {
     #[test]
     fn urls() {
         assert!(looks_like_url("https://example.com/a?b=1"));
-        assert!(looks_like_url("mailto:jon@example.com"));
+        assert!(looks_like_url("mailto:ada@example.com"));
         assert!(looks_like_url(
             "x-apple.systempreferences:com.apple.preference.security"
         ));
         assert!(!looks_like_url("10:30"));
         assert!(!looks_like_url("report:final"));
-        assert!(!looks_like_url("/Users/jon/file.txt"));
+        assert!(!looks_like_url("/Users/you/file.txt"));
         assert!(!looks_like_url("C:\\Windows"));
         assert!(!looks_like_url("hello world: x"));
         assert!(!looks_like_url("notes"));
@@ -242,8 +242,8 @@ mod tests {
     fn args_split_like_a_shell() {
         assert_eq!(split_args("a b  c"), ["a", "b", "c"]);
         assert_eq!(
-            split_args(r#"--name "Jon Smith" 'x y'"#),
-            ["--name", "Jon Smith", "x y"]
+            split_args(r#"--name "Ada Smith" 'x y'"#),
+            ["--name", "Ada Smith", "x y"]
         );
         assert_eq!(split_args(r"a\ b c"), ["a b", "c"]);
         assert_eq!(split_args(r#""a \"quoted\" word""#), [r#"a "quoted" word"#]);

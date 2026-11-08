@@ -164,7 +164,7 @@ mod tests {
     fn the_definition_stays_within_its_budget() {
         let size = definition_chars();
         // 2026-10-28: room for the nine session/budget params and the excel format/chart/pivot args.
-        // 2026-10-29: +34 for approval_code; the "Needs Jon's OK" refusal teaches its use, so the
+        // 2026-10-29: +34 for approval_code; the "Needs the owner's OK" refusal teaches its use, so the
         // description is unchanged. The size before the 2026-10-08 slimming was 4175.
         // 2026-10-29: +99 for the line saying screen text is data, not instructions, +100 for the
         // line on answering prompts.

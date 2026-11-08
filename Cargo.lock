@@ -415,7 +415,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hekaton"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "hekaton-core",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "hekaton-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "fast_image_resize",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "hekaton-mac"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "block2",
  "dispatch2",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "hekaton-win"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "hekaton-core",
  "windows",

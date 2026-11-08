@@ -65,7 +65,7 @@ pub fn tool_definition() -> Tool {
 }
 
 /// One trip to the daemon: the answer as MCP content, and the approval the daemon offered when a
-/// step stopped for a yes from Jon.
+/// step stopped for a yes from the owner.
 pub struct Exchange {
     /// The answer, exactly as it has always been (a stopped step reads as its refusal).
     pub reply: Reply,
@@ -126,7 +126,7 @@ pub fn forward(link: &DaemonLink, defaults: &ShimDefaults, args: &Map<String, Va
 
 // ------------------------------------------------------------------------------ approval cards
 
-/// How Jon answered a card.
+/// How the owner answered a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     /// Accepted the form with "Allow".
@@ -151,7 +151,7 @@ impl Decision {
     }
 }
 
-/// The card's form: one choice, Deny until Jon picks otherwise. MCP form mode allows only flat
+/// The card's form: one choice, Deny until the owner picks otherwise. MCP form mode allows only flat
 /// primitive fields, so this is a single string with two allowed values.
 pub fn card_schema() -> Value {
     json!({
@@ -180,7 +180,7 @@ pub fn card_params(offer: &Offer) -> Option<ElicitRequestParams> {
     .ok()
 }
 
-/// Jon's answer from the elicitation result: only an accepted form that says "Allow" is a yes.
+/// The owner's answer from the elicitation result: only an accepted form that says "Allow" is a yes.
 pub fn decision_from(action: &ElicitationAction, content: Option<&Value>) -> Decision {
     match action {
         ElicitationAction::Accept => {
@@ -197,7 +197,7 @@ pub fn decision_from(action: &ElicitationAction, content: Option<&Value>) -> Dec
     }
 }
 
-/// Something that can put a card in front of Jon.
+/// Something that can put a card in front of the owner.
 pub trait Asker: Send + Sync {
     /// Show `offer` and wait for the answer.
     fn ask(&self, offer: &Offer) -> impl std::future::Future<Output = Decision> + Send;
@@ -234,17 +234,17 @@ impl Asker for PeerAsker {
 /// Cards one call may show. A batch with this many risky steps is not a batch to wave through.
 const MAX_CARDS_PER_CALL: usize = 8;
 
-/// What the model reads after Jon said no.
+/// What the model reads after the owner said no.
 pub const DECLINED_NOTE: &str = "The owner declined this in the approval card, so it was not done. Do not retry it or look for another way to do it; if it still matters, ask them in chat.";
 
 /// What the model reads when the card went unanswered.
 pub const TIMED_OUT_NOTE: &str = "The approval card got no answer within 120 s, so this was not done. Do not retry it; ask the owner in chat if it matters.";
 
 /// One call, with approvals. `payload` goes to the daemon marked `approvable`: "card" when `asker`
-/// can show one, else "chat" (a refusal that Jon can lift says "Needs Jon's OK" with a code). When
-/// the daemon offers a card, Jon is asked; on Allow the same payload goes again with the token and
+/// can show one, else "chat" (a refusal that the owner can lift says "Needs the owner's OK" with a code). When
+/// the daemon offers a card, the owner is asked; on Allow the same payload goes again with the token and
 /// the daemon carries on from that step. Every other outcome leaves the first answer, the plain
-/// refusal, as the result (plus a line telling the model not to retry when Jon said no).
+/// refusal, as the result (plus a line telling the model not to retry when the owner said no).
 pub async fn run_call<A: Asker>(
     daemon: &Arc<dyn Daemon>,
     asker: Option<&A>,
@@ -432,7 +432,7 @@ impl ServerHandler for Shim {
                 (Ok(_), Err(reply)) => reply,
                 (Ok(_permit), Ok(payload)) => {
                     // A client that declared elicitation gets a card instead of a flat refusal for
-                    // the steps Jon can approve; any other client gets a chat code.
+                    // the steps the owner can approve; any other client gets a chat code.
                     if PeerAsker::supported(&context.peer) {
                         let asker = PeerAsker(context.peer.clone());
                         run_call(&self.daemon, Some(&asker), payload).await

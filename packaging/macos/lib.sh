@@ -3,7 +3,7 @@
 # Written for the bash 3.2 that ships with macOS (no associative arrays, no mapfile, no ${var,,}).
 # shellcheck shell=bash disable=SC2034
 
-APP_ID="com.lettuceatkansas.hekaton"
+APP_ID="org.hekaton.app"
 BIN_NAME="hekaton"
 APP_DISPLAY_NAME="Hekaton"   # what System Settings and the Dock show
 IDENTITY_NAME="hekaton-local"

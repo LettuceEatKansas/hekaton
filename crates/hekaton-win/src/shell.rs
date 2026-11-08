@@ -290,8 +290,8 @@ mod tests {
     #[test]
     fn same_location_decodes_a_file_url() {
         assert!(same_location(
-            "file:///C:/Users/ikill/My%20Docs",
-            "C:\\Users\\ikill\\My Docs"
+            "file:///C:/Users/you/My%20Docs",
+            "C:\\Users\\you\\My Docs"
         ));
         assert!(same_location("file:///c:/users/x/", "C:\\Users\\x"));
         assert!(same_location(

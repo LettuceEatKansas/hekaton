@@ -171,9 +171,9 @@ mod tests {
     #[test]
     fn falls_back_to_the_home_folder() {
         let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let env = MapEnv::new().with(key, "/home/jon");
+        let env = MapEnv::new().with(key, "/home/ada");
         let p = Paths::from_env(&env);
-        assert!(p.dir().starts_with("/home/jon"));
+        assert!(p.dir().starts_with("/home/ada"));
         assert!(p.dir().ends_with("hekaton"));
     }
 }

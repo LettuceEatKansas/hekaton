@@ -1322,7 +1322,7 @@ impl Ctx<'_> {
 
     /// [`Self::read_text`] showing up to `limit` matching lines. 2026-10-29 leads rerun: 30 was
     /// fixed, `limit` was ignored, and the AI asked again with other words (or ".") to see the
-    /// rest of a YouTube page; 48 commands where hekaton, looking at pictures, took 23.
+    /// rest of a YouTube page; 48 commands where the old Python tool, looking at pictures, took 23.
     pub(crate) fn read_text_lines(
         &self,
         query: &str,

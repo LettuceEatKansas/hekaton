@@ -509,19 +509,19 @@ fn read_field_finds_a_value_by_the_elements_own_name() {
         Element::new("r", Role::Window, "Form").with_child(
             Element::new("email", Role::Edit, "Email address")
                 .at(Rect::new(0, 0, 10, 10))
-                .valued("jon@x.com"),
+                .valued("ada@x.com"),
         ),
     );
     assert_eq!(
         kit.ctx(json!({}))
             .read_field_uia("Email address")
             .as_deref(),
-        Some("jon@x.com")
+        Some("ada@x.com")
     );
     let (note, img) = kit
         .step(json!({"action": "read_field", "text": "Email address"}))
         .unwrap();
-    assert_eq!(note, "Email address: 'jon@x.com' (uia)");
+    assert_eq!(note, "Email address: 'ada@x.com' (uia)");
     assert!(img.is_none());
 }
 
@@ -753,7 +753,7 @@ fn read_text_counts_extra_matches() {
 fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
     let (kit, _w) = tk_kit();
     kit.fake
-        .set_clipboard(ClipboardContent::Text("jon's text".into()));
+        .set_clipboard(ClipboardContent::Text("ada's text".into()));
     let body = log_text();
     let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<Key>>::new()));
     let seen = sink.clone();
@@ -780,7 +780,7 @@ fn read_text_copies_for_editors_without_uia_text_and_puts_everything_back() {
         ]
     );
     use crate::backend::Backend;
-    assert_eq!(kit.fake.clipboard_text().unwrap(), "jon's text");
+    assert_eq!(kit.fake.clipboard_text().unwrap(), "ada's text");
 }
 
 // 2026-10-30: a read of a browser page by select-all + copy sent Left afterwards (it does not clear a

@@ -10,7 +10,7 @@ median and p95 per call name. Images never reach the calling agent's context.
 Targets:
     old  installed daemon, port 47811, state %LOCALAPPDATA%\\hekaton
     new  side-by-side daemon, port 47911, state HEKATON_TEST_STATE (default
-         C:\\Users\\ikill\\tools\\hekaton-test-state\\hekaton)
+         C:\\Users\\you\\tools\\hekaton-test-state\\hekaton)
 
 Token estimate: text chars / 4, plus per image ceil(w*h/750) after the Anthropic API downscale
 (long edge <= 1568 px and <= 1.15 MP). It is an estimate, labelled as such in every report.
@@ -35,7 +35,7 @@ TARGETS = {
     "old": (47811, Path(os.environ.get("LOCALAPPDATA", "")) / "hekaton"),
     "new": (
         47911,
-        Path(os.environ.get("HEKATON_TEST_STATE", r"C:\Users\ikill\tools\hekaton-test-state\hekaton")),
+        Path(os.environ.get("HEKATON_TEST_STATE", r"C:\Users\you\tools\hekaton-test-state\hekaton")),
     ),
 }
 

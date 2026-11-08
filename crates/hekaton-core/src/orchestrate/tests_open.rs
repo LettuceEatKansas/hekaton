@@ -222,7 +222,7 @@ fn a_fresh_notepad_on_a_restored_tab_gets_a_blank_tab() {
     let chords = record_chords(&kit);
     kit.fake.set_launch_hook(|fake, _| {
         fake.add_window(WindowInfo::basic(
-            "*basecut_debug.txt - Notepad",
+            "*debug_notes.txt - Notepad",
             "Notepad.exe",
             30,
             Rect::from_xywh(0, 0, 50, 50),
@@ -588,7 +588,7 @@ fn file_dialog_does_not_press_enter_on_a_box_that_did_not_take_the_path() {
 #[cfg(not(windows))]
 const GOTO: &str = "goto";
 #[cfg(not(windows))]
-const PANEL_PATH: &str = "/Users/jon/Documents/hekaton-test/open-me.txt";
+const PANEL_PATH: &str = "/Users/you/Documents/hekaton-test/open-me.txt";
 
 #[cfg(not(windows))]
 fn panel_root(with_sheet: bool) -> Element {

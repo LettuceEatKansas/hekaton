@@ -87,7 +87,7 @@ jobs:
           HEKATON_KEYCHAIN: ${{ runner.temp }}/hekaton-ci.keychain-db
         run: |
           set -euxo pipefail
-          LABEL=com.lettuceatkansas.hekaton
+          LABEL=org.hekaton.app
           # Install the ad hoc CI artifact: install.sh must re-sign it with the local identity.
           packaging/macos/install.sh --app target/macos/hekaton.app --yes --no-open
           test -x "$HOME/Applications/hekaton.app/Contents/MacOS/hekaton"

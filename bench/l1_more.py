@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import drive  # noqa: E402
 
-ROOT = Path(r"C:\Users\ikill\tools\hekaton-test-state\gauntlet\l1-more")
+ROOT = Path(r"C:\Users\you\tools\hekaton-test-state\gauntlet\l1-more")
 
 
 class Client:

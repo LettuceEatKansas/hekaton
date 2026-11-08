@@ -30,7 +30,7 @@
 //!   run or save recipes: per-call authority belongs to the call that runs a recipe.
 //!
 //! Where recipes live: the bundled ones are compiled into the binary from `crates/hekaton-core/recipes/`,
-//! the owner's own sit in `%LOCALAPPDATA%\hekaton\recipes\` ([`Paths::recipes_dir`]). A user recipe
+//! The owner's own sit in `%LOCALAPPDATA%\hekaton\recipes\` ([`Paths::recipes_dir`]). A user recipe
 //! overrides a bundled one of the same name.
 //!
 //! The three actions are `recipe_list`, `recipe` (expanded in place inside `run_many`, see
@@ -568,7 +568,7 @@ impl RecipeStore {
     }
 
     /// Every valid recipe by name, and every broken file by stem with the reason. Bundled first, then
-    /// the owner's, so the owner's win.
+    /// The owner's, so the owner's win.
     pub fn all(&self) -> (BTreeMap<String, Recipe>, BTreeMap<String, String>) {
         let mut found = BTreeMap::new();
         let mut bad = BTreeMap::new();
@@ -1706,7 +1706,7 @@ mod tests {
     fn the_python_builds_bundled_recipe_files_load_unchanged() {
         let dir = std::env::var("HEKATON_PY_RECIPES")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(r"C:\Users\ikill\tools\hekaton\hekaton\recipes"));
+            .unwrap_or_else(|_| PathBuf::from(r"C:\Users\you\tools\hekaton\hekaton\recipes"));
         if !dir.is_dir() {
             eprintln!("skipped: no Python recipes folder at {}", dir.display());
             return;
@@ -1830,9 +1830,9 @@ mod tests {
         );
         let steps = expand_one(
             &store,
-            json!({"action": "recipe", "name": "greeter", "params": {"who": "Jon"}}),
+            json!({"action": "recipe", "name": "greeter", "params": {"who": "Ada"}}),
         );
-        assert_eq!(steps[0]["text"], "hello Jon kindly");
+        assert_eq!(steps[0]["text"], "hello Ada kindly");
     }
 
     // Ported from test_description_can_come_from_either_key.

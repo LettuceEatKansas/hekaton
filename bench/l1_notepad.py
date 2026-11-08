@@ -16,7 +16,7 @@ TEXT = TEXT * 3
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--target", required=True); ap.add_argument("--runs", type=int, default=3)
     a = ap.parse_args()
-    out = Path(r"C:\Users\ikill\tools\hekaton-test-state\gauntlet")
+    out = Path(r"C:\Users\you\tools\hekaton-test-state\gauntlet")
     results = []
     for i in range(a.runs):
         path = out / f"l1-notepad-{a.target}-{i}.txt"

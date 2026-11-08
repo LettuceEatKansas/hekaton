@@ -397,7 +397,7 @@ pub fn agent_host_refusal(
             ""
         };
         return format!(
-            "that window belongs to {name}, which is in hekaton' protect_processes list \
+            "that window belongs to {name}, which is in hekaton's protect_processes list \
              (config.json / HEKATON_PROTECT_PROCESSES). {note}It is refused whoever is calling"
         );
     }

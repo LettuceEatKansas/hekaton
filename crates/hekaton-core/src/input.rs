@@ -162,7 +162,7 @@ fn type_body(
         return Ok(TypeOutcome::Typed);
     }
     // 2026-10-29: about 1 paste in 6 into a Brave text box never landed, with no error (the same
-    // silent drop hekaton had). When the focused box shows its value, keep the clipboard until
+    // silent drop the old Python tool had). When the focused box shows its value, keep the clipboard until
     // the value changes, and type the text as keys if it never does.
     let box_value = || {
         backend
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn long_text_is_pasted_and_the_owners_clipboard_comes_back() {
         let backend = FakeBackend::new();
-        backend.set_clipboard(ClipboardContent::Text("jon's clipboard".into()));
+        backend.set_clipboard(ClipboardContent::Text("ada's clipboard".into()));
         // Pinned to Windows: this test asserts Ctrl+V, and `TypeOptions::new` follows the OS the
         // tests run on (a_mac_pastes_with_command covers the other half).
         let opts = TypeOptions {
@@ -322,7 +322,7 @@ mod tests {
                 InputEvent::KeyUp(Key::Ctrl),
             ]
         );
-        assert_eq!(backend.clipboard_text().unwrap(), "jon's clipboard");
+        assert_eq!(backend.clipboard_text().unwrap(), "ada's clipboard");
     }
 
     #[test]

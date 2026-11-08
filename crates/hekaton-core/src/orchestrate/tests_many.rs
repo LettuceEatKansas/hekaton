@@ -1159,7 +1159,7 @@ fn a_whole_batch_runs_from_launch_to_a_saved_file() {
             {"action": "open_app", "text": "Notepad"},
             {"action": "type", "text": "hello from hekaton"},
             {"action": "key", "text": "ctrl+s"},
-            {"action": "file_dialog", "text": "C:/Users/jon/out.txt"},
+            {"action": "file_dialog", "text": "C:/Users/you/out.txt"},
             {"action": "list_windows"}
         ]}))
         .unwrap();
@@ -1172,7 +1172,7 @@ fn a_whole_batch_runs_from_launch_to_a_saved_file() {
     assert_eq!(lines[1], "typed 18 chars (pasted)", "{}", out.text);
     assert_eq!(lines[2], "pressed ctrl+s", "{}", out.text);
     assert_eq!(
-        lines[3], r"file dialog: entered C:\Users\jon\out.txt and confirmed",
+        lines[3], r"file dialog: entered C:\Users\you\out.txt and confirmed",
         "{}",
         out.text
     );

@@ -143,7 +143,7 @@ fn element_ids_survive_another_thread() {
 fn big_trees_time_against_python() {
     let b = backend();
     println!("python: ~316 ms for 300 items (Hermes), ~103 ms (ChatGPT)");
-    for needle in ["Claude", "ChatGPT", "Brave", "Basecut", "Hermes"] {
+    for needle in ["Claude", "ChatGPT", "Brave", "Hermes"] {
         let Some(w) = window_titled(&b, needle) else {
             println!("{needle}: no such window open");
             continue;

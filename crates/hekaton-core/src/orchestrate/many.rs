@@ -578,7 +578,7 @@ impl Ctx<'_> {
                 dialog_watch = self.be().foreground_window().ok().flatten();
             }
             // read_text acts (select-all + copy) but only to look: a wait before it may end once
-            // the page settles. 2026-10-29 leads run 3: hekaton' wait 4 s returned after 1.7 s on
+            // the page settles. 2026-10-29 leads run 3: the old Python tool's wait 4 s returned after 1.7 s on
             // each YouTube channel page, Hekaton's wait 3 s ran out every time (8 channels, ~10 s).
             let input_follows = items.get(i + 1).is_some_and(|next| {
                 next.step

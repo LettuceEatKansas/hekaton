@@ -15,7 +15,7 @@ You need a Mac on macOS 14 (Sonoma) or newer, Apple Silicon or Intel. Then, in T
 ## 2. Install: one command
 
 ```
-gh repo clone LettuceEatKansas/hekaton-rs ~/hekaton-rs && ~/hekaton-rs/packaging/macos/install.sh
+gh repo clone LettuceEatKansas/hekaton ~/hekaton && ~/hekaton/packaging/macos/install.sh
 ```
 
 It tells you what it is doing. In order, it:
@@ -45,7 +45,7 @@ System Settings". If `hekaton` is not in a list, click `+`, choose `hekaton` in 
 inside your home folder (a Finder window showing it opens for you), and click Open. If macOS says hekaton
 must quit and reopen, choose Later; nothing is running yet. You do this once.
 
-You may also see "Background Items Added". That is hekaton' start-up entry. Leave it on (System Settings,
+You may also see "Background Items Added". That is hekaton's start-up entry. Leave it on (System Settings,
 General, Login Items & Extensions).
 
 ## 4. Connect Claude and acknowledge
@@ -79,7 +79,7 @@ running yet is normal).
 cd ~/hekaton-rs && git pull && packaging/macos/install.sh
 ```
 
-macOS ties your permissions to three things: the app's id (`com.lettuceatkansas.hekaton`), where it lives
+macOS ties your permissions to three things: the app's id (`org.hekaton.app`), where it lives
 (`~/Applications`), and which certificate signed it. An update keeps all three, so you do not tick the boxes
 again. macOS will ask again if you delete the `hekaton-local` certificate (Keychain Access), move or rename
 the app, reinstall macOS, or move to a new Mac. The install script warns "AD HOC SIGNATURE" if it had to build
@@ -88,12 +88,12 @@ without the certificate.
 ## Troubleshooting
 
 **Claude says hekaton cannot start, or nothing happens.** Check the start-up entry is loaded:
-`launchctl print gui/$(id -u)/com.lettuceatkansas.hekaton`. If it says it could not find the service, run the
+`launchctl print gui/$(id -u)/org.hekaton.app`. If it says it could not find the service, run the
 install script again. Read the log: `~/Library/Logs/hekaton/daemon.log`.
 
 **"not allowed" or a permission error.** Run `hekaton doctor` (the path in step 4) and look for WARN lines.
 Switch the named box on in System Settings. If it is already on, switch it off and on, then restart hekaton:
-`launchctl kickstart -k gui/$(id -u)/com.lettuceatkansas.hekaton`.
+`launchctl kickstart -k gui/$(id -u)/org.hekaton.app`.
 
 **Permissions reset after an update.** The signature changed. Run `security find-identity -p codesigning` and
 look for `hekaton-local`. If it is missing, run `~/hekaton-rs/packaging/macos/make-signing-identity.sh`,

@@ -171,7 +171,7 @@ fn deny_or_no_answer_leaves_the_refusal_and_the_next_call_asks_again() {
     let kit = kit_with(None);
     let first = call(&kit, send("card"));
     assert!(first.offer.is_some());
-    // Jon denied (the shim simply does not resend): the next try is refused and asks afresh
+    // The owner denied (the shim simply does not resend): the next try is refused and asks afresh
     let second = call(&kit, send("card"));
     assert!(text_of(&second).contains(SEND_REFUSAL));
     assert_ne!(token_of(&second), token_of(&first), "never sticky");
@@ -234,7 +234,7 @@ fn a_batch_carries_on_from_the_approved_step_without_repeating_earlier_ones() {
 // ---------------------------------------------------------------------------- chat codes
 
 #[test]
-fn a_chat_code_works_only_after_jon_approves_it_and_only_once() {
+fn a_chat_code_works_only_after_the_owner_approves_it_and_only_once() {
     let kit = kit_with(None);
     let out = call(&kit, send("chat"));
     assert!(out.offer.is_none(), "no token for a chat client");
@@ -247,7 +247,7 @@ fn a_chat_code_works_only_after_jon_approves_it_and_only_once() {
     let code = code_of(&out);
     assert!(crate::approval::is_code(&code), "{code}");
     let retry = with(send("chat"), "approval_code", json!(code));
-    // the model repeating the code before Jon answered: nothing runs
+    // the model repeating the code before the owner answered: nothing runs
     let early = call(&kit, retry.clone());
     assert!(
         text_of(&early).contains("has not approved"),
@@ -255,7 +255,7 @@ fn a_chat_code_works_only_after_jon_approves_it_and_only_once() {
         text_of(&early)
     );
     assert_eq!(clicks(&kit), 0);
-    // Jon approves (hekaton approve CODE), the same call goes ahead once
+    // The owner approves (hekaton approve CODE), the same call goes ahead once
     let said = kit.computer.answer_approval_code(&code, true).unwrap();
     assert!(said.starts_with(&format!("approved {code}")), "{said}");
     let ran = call(&kit, retry.clone());
@@ -284,7 +284,7 @@ fn from_mcp(args: Value) -> Value {
     payload
 }
 
-// 2026-11-07 (Basecut Send): Jon approved B7YY, the model repeated the identical call with
+// 2026-11-07 (an app's Send button): the owner approved B7YY, the model repeated the identical call with
 // approval_code B7YY, and it was refused as "a different step". The MCP payload puts approval_code
 // before coords and only_apps; taking it out reordered the keys and the call hashed differently.
 #[test]

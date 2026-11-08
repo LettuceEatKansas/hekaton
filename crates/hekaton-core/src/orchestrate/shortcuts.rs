@@ -889,7 +889,7 @@ mod pure_tests {
     fn a_whole_title_segment_is_not_ambiguous_with_substrings() {
         assert_eq!(title_segments("c - file explorer"), ["c", "file explorer"]);
         assert_eq!(title_segments("page | site"), ["page", "site"]);
-        assert_eq!(title_segments("basecut v4.0.8"), ["basecut v4.0.8"]);
+        assert_eq!(title_segments("editor v4.0.8"), ["editor v4.0.8"]);
         assert_eq!(title_segments("a \u{2013} b \u{2014} c"), ["a", "b", "c"]);
     }
 

@@ -16,7 +16,7 @@ changes the scripts or the `hekaton` binary.
 
 macOS TCC (Accessibility, Screen Recording) stores a code requirement per grant. For an ad hoc signature that
 requirement is the code directory hash, which changes with every build, so every update loses the grants. For
-a certificate it is `identifier "com.lettuceatkansas.hekaton" and certificate leaf = H"<cert hash>"`, which is
+a certificate it is `identifier "org.hekaton.app" and certificate leaf = H"<cert hash>"`, which is
 stable for as long as the same certificate signs the app. `build-app.sh` picks, in order: `--identity NAME`
 (hardened runtime, secure timestamp), the `hekaton-local` identity (hardened runtime, no timestamp), ad hoc
 (loud warning). The same bundle id, install path (`~/Applications/hekaton.app`) and certificate must be kept.
@@ -27,7 +27,7 @@ icon). `LSMinimumSystemVersion` is 14.0 because screenshots use `SCScreenshotMan
 
 ## LaunchAgent contract
 
-`~/Library/LaunchAgents/com.lettuceatkansas.hekaton.plist`, label `com.lettuceatkansas.hekaton`:
+`~/Library/LaunchAgents/org.hekaton.app.plist`, label `org.hekaton.app`:
 `ProgramArguments` = `[~/Applications/hekaton.app/Contents/MacOS/hekaton, daemon]`, `RunAtLoad` false,
 `KeepAlive` false, `LimitLoadToSessionType` Aqua, `ProcessType` Interactive, `AssociatedBundleIdentifiers` =
 the bundle id, stdout and stderr to `~/Library/Logs/hekaton/daemon.log`. `install.sh` bootstraps it into
@@ -42,7 +42,7 @@ What `crates/hekaton` does to match (`src/start.rs`, `src/cli.rs`, `src/platform
 
 - `hekaton mcp` (and `hk`, `start`), when `127.0.0.1:47811` is not answering and the executable runs from
   inside a `hekaton.app` bundle (or `daemon_launchd_label` / `HEKATON_DAEMON_LAUNCHD_LABEL` is set), runs
-  `launchctl kickstart gui/<getuid>/com.lettuceatkansas.hekaton` (no `-k`), then polls the port. Only if the
+  `launchctl kickstart gui/<getuid>/org.hekaton.app` (no `-k`), then polls the port. Only if the
   agent is not loaded (`launchctl print` fails) does it spawn `hekaton daemon` itself, with a warning on
   stderr and in `daemon.log` that permissions then belong to its parent app. `--daemon-cmd` and
   `--daemon-task` still win.
@@ -56,9 +56,9 @@ What `crates/hekaton` does to match (`src/start.rs`, `src/cli.rs`, `src/platform
 
 ## Approvals
 
-A step the irreversible-button guard or the destructive hard line would refuse is put to Jon instead, per
+A step the irreversible-button guard or the destructive hard line would refuse is put to the owner instead, per
 step and never sticky (`hekaton_core::approval`). A client that shows MCP elicitation gets an Allow/Deny card; any
-other client gets "Needs Jon's OK" with a four-character code. Jon answers a code in his own terminal:
+other client gets "Needs the owner's OK" with a four-character code. The owner answers a code in their own terminal:
 
     ~/Applications/hekaton.app/Contents/MacOS/hekaton approve K7QM   # or: deny K7QM
 

@@ -692,15 +692,15 @@ mod tests {
     #[test]
     fn ordinary_work_is_allowed() {
         for cmd in [
-            r"del C:\Users\jon\system32-notes\draft.txt",
-            r"Remove-Item C:\Users\jon\Documents\windows-notes.md",
+            r"del C:\Users\you\system32-notes\draft.txt",
+            r"Remove-Item C:\Users\you\Documents\windows-notes.md",
             r"move C:\projects\boot\readme.md C:\projects\archive\\",
-            r"del C:\Users\jon\Downloads\installer.exe",
+            r"del C:\Users\you\Downloads\installer.exe",
             "The disk needs a format before we can use it.",
             "I told him the format of the report was wrong.",
             "Type 'format' into the search box to find the paragraph tool.",
             "diskpartners.example.com is the vendor",
-            r"copy report.docx C:\Users\jon\Documents\\",
+            r"copy report.docx C:\Users\you\Documents\\",
         ] {
             allows(cmd);
         }
@@ -713,10 +713,10 @@ mod tests {
         assert!(is_system_path(r"%SystemRoot%\System32"));
         assert!(is_system_path("C:\\"));
         assert!(is_system_path(r"D:\EFI\Microsoft\Boot"));
-        assert!(!is_system_path(r"C:\Users\jon\system32-notes"));
-        assert!(!is_system_path(r"C:\Users\jon\Documents\boot"));
-        assert!(!is_system_path(r"C:\Users\jon\windows-backup\file.txt"));
-        assert!(!is_system_path(r"C:\Users\jon"));
+        assert!(!is_system_path(r"C:\Users\you\system32-notes"));
+        assert!(!is_system_path(r"C:\Users\you\Documents\boot"));
+        assert!(!is_system_path(r"C:\Users\you\windows-backup\file.txt"));
+        assert!(!is_system_path(r"C:\Users\you"));
     }
 
     // ---------------------------------------------------------------- 2. killing recovery
@@ -785,7 +785,7 @@ mod tests {
             r"reg save HKLM\SAM sam.hive",
             r"reg save HKLM\SECURITY sec.hive",
             r"copy C:\Windows\NTDS\ntds.dit D:\out\\",
-            r#"copy "C:\Users\jon\AppData\Local\Google\Chrome\User Data\Default\Login Data" C:\Users\jon\out.db"#,
+            r#"copy "C:\Users\you\AppData\Local\Google\Chrome\User Data\Default\Login Data" C:\Users\you\out.db"#,
             "procdump -ma lsass.exe lsass.dmp",
             "rundll32 comsvcs.dll MiniDump 640 lsass.dmp full",
             "mimikatz # sekurlsa::logonpasswords",
@@ -798,7 +798,7 @@ mod tests {
     fn credential_near_misses_are_allowed() {
         for cmd in [
             "Get-Process lsass",
-            r"copy C:\Users\jon\Documents\login-notes.txt D:\backup\\",
+            r"copy C:\Users\you\Documents\login-notes.txt D:\backup\\",
             "The login data for the demo account is in 1Password.",
         ] {
             allows(cmd);
@@ -810,7 +810,7 @@ mod tests {
         assert!(is_credential_path(r"C:\Windows\NTDS\ntds.dit"));
         assert!(is_credential_path(r"C:\Windows\System32\config\SAM"));
         assert!(!is_credential_path(
-            r"C:\Users\jon\Documents\cookies-recipe.txt"
+            r"C:\Users\you\Documents\cookies-recipe.txt"
         ));
     }
 
@@ -891,7 +891,7 @@ mod tests {
                 .is_err()
         );
         assert!(
-            OFF.check_command("notepad.exe C:\\Users\\jon\\notes.txt", "the launch string")
+            OFF.check_command("notepad.exe C:\\Users\\you\\notes.txt", "the launch string")
                 .is_ok()
         );
     }
@@ -903,7 +903,7 @@ mod tests {
                 .is_err()
         );
         assert!(
-            OFF.check_path(r"C:\Users\jon\Documents\notes.txt", "a test")
+            OFF.check_path(r"C:\Users\you\Documents\notes.txt", "a test")
                 .is_ok()
         );
     }
@@ -1007,10 +1007,10 @@ mod tests {
         assert!(is_system_path(r"c:/windows"));
         assert!(!is_system_path(""));
         assert!(is_credential_path(
-            r#""C:/Users/jon/AppData/Local/Google/Chrome/User Data/Default/Cookies""#
+            r#""C:/Users/you/AppData/Local/Google/Chrome/User Data/Default/Cookies""#
         ));
         assert!(is_credential_path(
-            r"C:\Users\jon\AppData\Roaming\Mozilla\Firefox\logins.json"
+            r"C:\Users\you\AppData\Roaming\Mozilla\Firefox\logins.json"
         ));
         assert!(is_credential_path(r"C:\x\key4.db"));
     }

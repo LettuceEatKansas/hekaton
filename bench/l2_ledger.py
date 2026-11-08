@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from l1_more import Client  # noqa: E402
 
-OUT = Path(r"C:\Users\ikill\tools\hekaton-test-state\gauntlet\l2-ledger")
+OUT = Path(r"C:\Users\you\tools\hekaton-test-state\gauntlet\l2-ledger")
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 M = f"{{{NS['m']}}}"
 REGIONS = ["North", "South", "East", "West"]

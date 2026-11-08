@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from l1_more import Client  # noqa: E402
 
-OUT = Path(r"C:\Users\ikill\tools\hekaton-test-state\gauntlet\l2-excel")
+OUT = Path(r"C:\Users\you\tools\hekaton-test-state\gauntlet\l2-excel")
 TABLE = "Item\tQty\tPrice\napple\t3\t1.25\npear\t5\t0.8\nplum\t7\t2.5\n"
 WANT = {
     "A1": "Item", "B1": "Qty", "C1": "Price",
