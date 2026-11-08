@@ -74,7 +74,7 @@ On Windows, the command is `C:\\Users\\you\\AppData\\Local\\Programs\\Hekaton\\h
 
 ## Build from source
 
-This is only for working on Hekaton itself. You need Rust 1.88 or later. Then:
+This repository has the Rust code, the Windows and macOS backends, the command-line tools and the installers. Building it is only for working on Hekaton itself. You need Rust 1.88 or later. Then:
 
 ```bash
 cargo build --release -p hekaton
