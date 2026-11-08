@@ -95,7 +95,7 @@ fn is_card(raw: &str) -> bool {
             (_, dd) => dd,
         })
         .sum();
-    issuer && sum % 10 == 0
+    issuer && sum.is_multiple_of(10)
 }
 
 /// `text` with every secret swapped for `[hidden: kind]`. Borrowed when nothing matched, which is

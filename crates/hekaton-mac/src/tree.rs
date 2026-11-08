@@ -843,15 +843,13 @@ pub(crate) fn find_file_dialog_field(
     if matches!(
         title.as_str(),
         "save" | "open" | "export" | "import" | "save as"
-    ) {
-        if let Some(ax) = focused_ax()
-            && matches!(
-                ax.string("AXRole").as_deref(),
-                Some("AXTextField" | "AXComboBox")
-            )
-        {
-            return Ok(Some(reg.insert(ax, Some(window))));
-        }
+    ) && let Some(ax) = focused_ax()
+        && matches!(
+            ax.string("AXRole").as_deref(),
+            Some("AXTextField" | "AXComboBox")
+        )
+    {
+        return Ok(Some(reg.insert(ax, Some(window))));
     }
     Ok(None)
 }

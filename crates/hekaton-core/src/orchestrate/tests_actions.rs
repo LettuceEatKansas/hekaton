@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::StepError;
-use super::testkit::{H, Kit, W, cmd_key, png_size};
+use super::testkit::{H, Kit, W, png_size};
 use crate::backend::fake::InputEvent;
 use crate::backend::{
     ClipboardContent, Element, MenuItem, MouseButton, OcrLine, OcrResult, OcrWord, Point, Rect,
@@ -2090,14 +2090,21 @@ fn read_finds_a_window_by_its_app_and_takes_window_as_well_as_text() {
         mail,
         Element::new("r", Role::Window, "Compose Mail - Gmail"),
     );
-    let (out, _) = kit
-        .step(json!({"action": "read", "window": "Safari"}))
-        .unwrap();
-    assert!(out.starts_with("window \"Compose Mail - Gmail\""), "{out}");
+    // a bundle id's last part names the app off Windows only (refs::app_is); on Windows a process is
+    // a file name such as Notepad.exe, and only its stem counts
+    if !cfg!(windows) {
+        let (out, _) = kit
+            .step(json!({"action": "read", "window": "Safari"}))
+            .unwrap();
+        assert!(out.starts_with("window \"Compose Mail - Gmail\""), "{out}");
+    }
     let (out, _) = kit
         .step(json!({"action": "read", "text": "textedit"}))
         .unwrap();
     assert!(out.starts_with("window \"Untitled\""), "{out}");
+    if cfg!(windows) {
+        return;
+    }
     // two windows of one app stay ambiguous: never guess which one
     kit.window(
         "Inbox - Gmail",

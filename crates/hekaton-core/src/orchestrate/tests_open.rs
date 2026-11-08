@@ -585,9 +585,12 @@ fn file_dialog_does_not_press_enter_on_a_box_that_did_not_take_the_path() {
 
 // ---- the macOS Open panel has no File name box: file_dialog goes through Go to the folder
 
+#[cfg(not(windows))]
 const GOTO: &str = "goto";
+#[cfg(not(windows))]
 const PANEL_PATH: &str = "/Users/jon/Documents/hekaton-test/open-me.txt";
 
+#[cfg(not(windows))]
 fn panel_root(with_sheet: bool) -> Element {
     let root = Element::new("root", Role::Window, "Open");
     if with_sheet {
@@ -603,6 +606,7 @@ fn panel_root(with_sheet: bool) -> Element {
 
 /// An Open panel in front with no name box. cmd+shift+g opens the Go to the folder sheet; the first
 /// Return closes the sheet (when `sheet_closes`), the second runs `on_open`.
+#[cfg(not(windows))]
 fn open_panel_kit(
     sheet_closes: bool,
     on_open: impl Fn(&FakeBackend, WindowRef) + Send + Sync + 'static,

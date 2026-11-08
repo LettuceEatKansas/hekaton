@@ -551,13 +551,16 @@ pub fn code_arg(rest: &[String]) -> Result<String, String> {
     }
 }
 
+/// How [`run_answer`] reaches the daemon: a route and a body in, the status and body out.
+pub type SendToDaemon<'a> = dyn FnMut(&str, &[u8]) -> Result<(u16, Vec<u8>), String> + 'a;
+
 /// Answer a chat code. `approve` only for a person at a real terminal: a model running it through a
 /// non-interactive shell would be approving its own step. `deny` is allowed anywhere.
 pub fn run_answer(
     rest: &[String],
     allow: bool,
     interactive: bool,
-    send: &mut dyn FnMut(&str, &[u8]) -> Result<(u16, Vec<u8>), String>,
+    send: &mut SendToDaemon<'_>,
     out: &mut dyn Write,
 ) -> i32 {
     let code = match code_arg(rest) {

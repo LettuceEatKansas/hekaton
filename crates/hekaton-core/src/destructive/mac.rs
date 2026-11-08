@@ -60,7 +60,7 @@ static START: LazyLock<String> = LazyLock::new(|| {
 });
 
 fn at_start(tail: &str) -> String {
-    format!("{}{tail}", &*START)
+    format!("{}{tail}", *START)
 }
 
 /// Chromium-family browser folders under `~/Library/Application Support`. Written for the
@@ -235,10 +235,10 @@ struct MacPath {
 
 fn home_rest(s: &str) -> Option<&str> {
     for prefix in ["${home}", "$home", "~"] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            if rest.is_empty() || rest.starts_with('/') {
-                return Some(rest);
-            }
+        if let Some(rest) = s.strip_prefix(prefix)
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
+            return Some(rest);
         }
     }
     None
@@ -414,7 +414,7 @@ fn tokens(rest: &str) -> Vec<String> {
 static DELETE_AT_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"(?i){}(?P<verb>rm|srm|unlink|rmdir|mv)\b(?P<rest>{REST})",
-        &*START
+        *START
     ))
     .expect("DELETE_AT_COMMAND")
 });
@@ -423,7 +423,7 @@ static DELETE_AT_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
 static READ_AT_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"(?i){}(?P<verb>cat|head|tail|less|more|bat|strings|xxd|hexdump|od|base64|pbcopy|cp|ditto|rsync|scp|sftp|tar|zip|curl|wget|nc|ncat|socat|ftp|sqlite3)\b(?P<rest>{REST})",
-        &*START
+        *START
     ))
     .expect("READ_AT_COMMAND")
 });
@@ -434,16 +434,16 @@ fn path_part(value: &str) -> &str {
     let mut t = value;
     if let Some(i) = t.find("=@") {
         t = &t[i + 2..];
-    } else if let Some(i) = t.find('=') {
-        if !t.starts_with(['/', '~', '$']) {
-            t = &t[i + 1..];
-        }
+    } else if let Some(i) = t.find('=')
+        && !t.starts_with(['/', '~', '$'])
+    {
+        t = &t[i + 1..];
     }
     t = t.trim_start_matches(['<', '@']);
-    if let Some(i) = t.rfind(':') {
-        if !t[..i].contains('/') {
-            t = &t[i + 1..];
-        }
+    if let Some(i) = t.rfind(':')
+        && !t[..i].contains('/')
+    {
+        t = &t[i + 1..];
     }
     t
 }
@@ -544,10 +544,10 @@ fn check_read(verb: &str, toks: &[String]) -> Option<Hit> {
         };
         // A word with a space in it is a quoted command (`rsync -e "ssh -i key"`), not a path to
         // a key file. Folder checks still apply: "Application Support" has a space.
-        if !path.contains(char::is_whitespace) {
-            if let Some(hit) = p.secret_file() {
-                return Some(hit);
-            }
+        if !path.contains(char::is_whitespace)
+            && let Some(hit) = p.secret_file()
+        {
+            return Some(hit);
         }
         if let Some(hit) = p.secret_dir() {
             return Some(hit);

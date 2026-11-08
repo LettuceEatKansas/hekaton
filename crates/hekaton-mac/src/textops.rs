@@ -184,7 +184,9 @@ fn fold(c: char) -> char {
     c.to_lowercase().next().unwrap_or(c)
 }
 
-/// Case-insensitive, non-overlapping matches of `query` in `text`, up to `max_hits`.
+/// Case-insensitive, non-overlapping matches of `query` in `text`, up to `max_hits` (tests; the code
+/// itself calls [`find_matches_checked`]).
+#[cfg(test)]
 pub(crate) fn find_matches(text: &str, query: &str, max_hits: usize) -> Vec<TextMatch> {
     find_matches_checked(text, query, max_hits, &|| true).unwrap_or_default()
 }

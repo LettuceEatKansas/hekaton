@@ -85,7 +85,7 @@ pub(crate) fn paint_hidden(img: Image, layers: &[(Rect, bool)]) -> (Image, usize
     let scale_out = img.scale();
     let mut rgba = img.into_rgba();
     let mut painted = 0;
-    for (px, o) in rgba.chunks_exact_mut(4).zip(&owner) {
+    for (px, o) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(&owner) {
         if *o == 2 {
             px.copy_from_slice(&HIDDEN_RGBA);
             painted += 1;
@@ -123,9 +123,8 @@ impl Ctx<'_> {
             .filter_map(|a| a.split_once(':'))
             .filter(|(proc_part, _)| super::guard::entry_names_app(proc_part, &name))
             .any(|(_, part)| {
-                if part.starts_with("re:") {
-                    regex::Regex::new(&format!("(?i){}", &part[3..]))
-                        .is_ok_and(|re| re.is_match(&title))
+                if let Some(pattern) = part.strip_prefix("re:") {
+                    regex::Regex::new(&format!("(?i){pattern}")).is_ok_and(|re| re.is_match(&title))
                 } else {
                     title.contains(&part.to_lowercase())
                 }
