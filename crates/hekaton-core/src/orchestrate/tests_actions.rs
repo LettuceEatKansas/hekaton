@@ -2372,3 +2372,21 @@ fn a_plain_allow_is_clicked_but_lasting_grants_and_tainted_prompts_are_not() {
     );
     assert_eq!(clicks(&kit).len(), 1);
 }
+
+#[test]
+fn click_and_hover_work_as_actions_alone_and_in_a_batch() {
+    let kit = Kit::new();
+    for payload in [
+        json!({"action": "click", "coordinate": [5, 5]}),
+        json!({"action": "hover", "coordinate": [6, 6]}),
+        json!({"actions": [
+            {"action": "hover", "coordinate": [7, 7]},
+            {"action": "click", "coordinate": [8, 8]}
+        ]}),
+    ] {
+        let out = kit.computer.execute(&payload, &kit.who);
+        let said = format!("{:?} {:?}", out.result, out.error);
+        assert!(out.ok, "{payload}: {said}");
+        assert!(!said.contains("unknown action"), "{said}");
+    }
+}

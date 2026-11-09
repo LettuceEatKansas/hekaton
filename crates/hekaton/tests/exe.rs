@@ -621,3 +621,78 @@ fn hekaton_start_can_start_hekatond_and_status_names_it_by_default() {
     thread::sleep(Duration::from_millis(300));
     assert!(sb.request("GET", "/health", None).is_none());
 }
+
+fn listed_names(mut cmd: Command) -> Vec<String> {
+    cmd.env(
+        "HEKATON_DAEMON_CMD",
+        "definitely-not-a-hekaton-program daemon",
+    );
+    let mut mcp = Mcp::spawn(cmd);
+    mcp.handshake();
+    mcp.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let listed = mcp.recv(2, Duration::from_secs(20));
+    let names = listed["result"]["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(mcp.finish(), Some(0));
+    names
+}
+
+#[test]
+fn mcp_profiles_choose_the_tool_list_and_the_flag_beats_the_environment() {
+    let nine = [
+        "look",
+        "read_text",
+        "press",
+        "type",
+        "key",
+        "open",
+        "scroll",
+        "wait",
+        "approve",
+    ];
+    let sb = Sandbox::new("profiles");
+    assert_eq!(listed_names(sb.command(&["mcp"])), ["computer"]);
+    assert_eq!(
+        listed_names(sb.command(&["mcp", "--profile", "full"])),
+        ["computer"]
+    );
+    assert_eq!(
+        listed_names(sb.command(&["mcp", "--profile", "simple"])),
+        nine
+    );
+    let vision = listed_names(sb.command(&["mcp", "--profile=simple-vision"]));
+    assert_eq!(vision[..9], nine);
+    assert_eq!(vision[9..], ["screenshot", "click_at"]);
+    let mut by_env = sb.command(&["mcp"]);
+    by_env.env("HEKATON_MCP_PROFILE", "simple");
+    assert_eq!(listed_names(by_env), nine);
+    let mut flag_wins = sb.command(&["mcp", "--profile", "full"]);
+    flag_wins.env("HEKATON_MCP_PROFILE", "simple");
+    assert_eq!(listed_names(flag_wins), ["computer"]);
+}
+
+#[test]
+fn an_unknown_profile_exits_2_with_the_usage_line() {
+    let sb = Sandbox::new("badprofile");
+    for mut cmd in [
+        sb.command(&["mcp", "--profile", "huge"]),
+        {
+            let mut c = sb.command(&["mcp"]);
+            c.env("HEKATON_MCP_PROFILE", "huge");
+            c
+        },
+        sb.command(&["mcp", "--profile"]),
+    ] {
+        let out = cmd.stdin(Stdio::null()).output().expect("run hekaton mcp");
+        assert_eq!(out.status.code(), Some(2), "{out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("usage: hekaton mcp [--profile full|simple|simple-vision]"),
+            "{err}"
+        );
+    }
+}

@@ -157,6 +157,37 @@ pub const ACTIONS_SORTED: [&str; 39] = [
     "zoom",
 ];
 
+/// The full name behind a friendly alias (`click` is `left_click`, `hover` is `mouse_move`).
+pub fn alias_of(action: &str) -> Option<&'static str> {
+    match action.trim() {
+        "click" => Some("left_click"),
+        "hover" => Some("mouse_move"),
+        _ => None,
+    }
+}
+
+/// `args` with the aliases of [`alias_of`] replaced by the real action names, in the call itself
+/// and in every batch step. Anything else is left exactly as it came.
+pub fn resolve_aliases(args: &serde_json::Value) -> serde_json::Value {
+    let mut out = args.clone();
+    let fix = |v: &mut serde_json::Value| {
+        let name = v.get("action").and_then(serde_json::Value::as_str);
+        if let Some(full) = name.and_then(alias_of) {
+            v["action"] = serde_json::Value::from(full);
+        }
+    };
+    fix(&mut out);
+    if let Some(steps) = out
+        .get_mut("actions")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for step in steps.iter_mut().filter(|s| s.is_object()) {
+            fix(step);
+        }
+    }
+    out
+}
+
 /// Is `action` one of the 39 actions the `computer` tool knows?
 pub fn is_action(action: &str) -> bool {
     POINTER_ACTIONS.contains(&action) || OTHER_ACTIONS.contains(&action)
@@ -236,6 +267,23 @@ mod tests {
         assert!(!is_excel_read("excel", "write"));
         assert!(!is_excel_read("read", "read"));
         assert!(!is_passive("excel") && !is_ack_exempt("excel"));
+    }
+
+    #[test]
+    fn click_and_hover_are_aliases_alone_and_in_batches() {
+        let one = resolve_aliases(&serde_json::json!({"action": "click", "coordinate": [1, 2]}));
+        assert_eq!(one["action"], "left_click");
+        let many = resolve_aliases(&serde_json::json!({"actions": [
+            {"action": "hover"}, {"action": "click"}, {"action": "key"}, {"action": "left_click"}
+        ]}));
+        let names: Vec<&str> = many["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["action"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["mouse_move", "left_click", "key", "left_click"]);
+        assert!(!is_action("click") && is_action(alias_of("hover").unwrap()));
     }
 
     #[test]

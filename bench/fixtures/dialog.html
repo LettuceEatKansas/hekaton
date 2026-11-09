@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Please wait</title></head>
+<body>
+<h1>Please wait</h1>
+<p id="status">Waiting for a notice...</p>
+<div id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-title" hidden>
+<h2 id="dlg-title">Notice</h2><p>Press OK to continue.</p><button id="ok" type="button">OK</button></div>
+<p id="revealed" role="status"></p>
+<script>
+function code(s){var h=7;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))%1000003;}return "K"+("000000"+h).slice(-6);}
+setTimeout(function(){document.getElementById("dlg").hidden=false;},3000);
+document.getElementById("ok").onclick=function(){document.getElementById("dlg").hidden=true;
+document.getElementById("revealed").textContent="Revealed text: amber tide seven";};
+</script>
+</body></html>

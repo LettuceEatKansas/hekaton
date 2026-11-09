@@ -10,6 +10,7 @@ use hekaton_core::ack::{AckInfo, run_acknowledge};
 use hekaton_core::backend::{Backend, Capabilities, Display, PermissionStatus};
 use hekaton_core::config::Config;
 use hekaton_core::mcp::ShimDefaults;
+use hekaton_core::simple::{PROFILE_USAGE, Profile};
 use serde_json::Value;
 
 use crate::hk::{self, Exit};
@@ -206,13 +207,34 @@ fn cmd_mcp(mut rest: Vec<String>) -> i32 {
             return 2;
         }
     };
+    let flag = match take_option(&mut rest, "--profile") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}\n{PROFILE_USAGE}");
+            return 2;
+        }
+    };
     if let Some(extra) = rest.first() {
-        eprintln!(
-            "hekaton mcp: unexpected argument {extra:?}. usage: hekaton mcp [--daemon-cmd CMD] [--daemon-task NAME]"
-        );
+        eprintln!("hekaton mcp: unexpected argument {extra:?}. {PROFILE_USAGE}");
         return 2;
     }
     let cfg = Config::from_system();
+    // the flag wins; HEKATON_MCP_PROFILE is for clients that cannot pass arguments
+    let named = flag.or_else(|| {
+        hekaton_core::env::Env::var(cfg.env(), "HEKATON_MCP_PROFILE")
+            .filter(|v| !v.trim().is_empty())
+    });
+    let profile = match named.as_deref().map(Profile::parse) {
+        None => Profile::Full,
+        Some(Some(p)) => p,
+        Some(None) => {
+            eprintln!(
+                "hekaton mcp: unknown profile {:?} (use full, simple or simple-vision). {PROFILE_USAGE}",
+                named.unwrap_or_default()
+            );
+            return 2;
+        }
+    };
     let link = Arc::new(local_link(&cfg, &opts, SHIM_TIMEOUT));
     let defaults = ShimDefaults::from_config(&cfg);
     let activity = Activity::new();
@@ -220,7 +242,7 @@ fn cmd_mcp(mut rest: Vec<String>) -> i32 {
         .ok()
         .and_then(|backend| reaper_for(backend, &cfg, activity.clone()))
         .map(start_reaper);
-    let result = serve_stdio(Shim::new(link, defaults, activity));
+    let result = serve_stdio(Shim::new(link, defaults, activity).with_profile(profile));
     if let Some(cleanup) = cleanup {
         cleanup.run();
     }

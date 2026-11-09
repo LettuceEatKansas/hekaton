@@ -12,6 +12,7 @@ use hekaton_core::approval::{CARD_WAIT, Offer, card_message};
 use hekaton_core::mcp::{
     self, Block, Reply, ShimDefaults, TOOL_NAME, build_payload, reply_and_approval, timeout_message,
 };
+use hekaton_core::simple::{self as simple_mode, Profile, Simple};
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequestParams,
@@ -353,8 +354,64 @@ fn to_result(reply: Reply) -> CallToolResult {
     }
 }
 
+/// One simple-mode call: translate it, run it through the same guarded path as a `computer` call
+/// ([`run_call`]: approval, `only_apps`, audit and the owner card all unchanged), and shape the reply.
+/// An acting call is followed by a `read`, so its reply carries a fresh numbered list.
+pub async fn run_simple<A: Asker>(
+    daemon: &Arc<dyn Daemon>,
+    asker: Option<&A>,
+    simple: &Simple,
+    defaults: &ShimDefaults,
+    session_id: &str,
+    name: &str,
+    args: &Map<String, Value>,
+) -> Reply {
+    let call = match simple.prepare(name, args) {
+        Ok(call) => call,
+        Err(reply) => return reply,
+    };
+    let payload = |mut m: Map<String, Value>| {
+        m.entry("session_id")
+            .or_insert_with(|| Value::String(session_id.to_string()));
+        guarded_payload(defaults, &m)
+    };
+    let main = match payload(call.args.clone()) {
+        Ok(p) => p,
+        Err(reply) => return reply,
+    };
+    let reply = run_call(daemon, asker, main).await;
+    simple.remember(&call, &reply);
+    match simple.finish(&call, reply) {
+        Ok(done) => done,
+        Err(outcome) => {
+            let list = match payload(simple_mode::list_call()) {
+                Ok(p) => run_call(daemon, asker, p).await,
+                Err(reply) => reply,
+            };
+            simple.with_list(&call, &outcome, &list)
+        }
+    }
+}
+
+/// The simple tools as the MCP tool list.
+pub fn simple_tools(profile: Profile) -> Vec<Tool> {
+    profile
+        .definitions()
+        .into_iter()
+        .filter_map(|d| {
+            let schema = d.get("inputSchema")?.as_object()?.clone();
+            Some(Tool::new(
+                d.get("name")?.as_str()?.to_string(),
+                d.get("description")?.as_str()?.to_string(),
+                Arc::new(schema),
+            ))
+        })
+        .collect()
+}
+
 /// The server handler.
 pub struct Shim {
+    simple: Option<Simple>,
     daemon: Arc<dyn Daemon>,
     defaults: ShimDefaults,
     activity: Activity,
@@ -377,6 +434,7 @@ impl Shim {
                 .to_string()
         });
         Self {
+            simple: None,
             daemon,
             defaults,
             activity,
@@ -387,6 +445,12 @@ impl Shim {
             ),
             calls: Arc::new(tokio::sync::Semaphore::new(4)),
         }
+    }
+
+    /// Serve `profile`'s tools (the full profile is the default and changes nothing).
+    pub fn with_profile(mut self, profile: Profile) -> Self {
+        self.simple = profile.is_simple().then(|| Simple::new(profile));
+        self
     }
 
     fn session_args(&self, mut args: Map<String, Value>) -> Map<String, Value> {
@@ -409,7 +473,10 @@ impl ServerHandler for Shim {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         self.activity.touch();
-        Ok(ListToolsResult::with_all_items(vec![tool_definition()]))
+        Ok(ListToolsResult::with_all_items(match &self.simple {
+            Some(simple) => simple_tools(simple.profile()),
+            None => vec![tool_definition()],
+        }))
     }
 
     async fn call_tool(
@@ -418,7 +485,41 @@ impl ServerHandler for Shim {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         self.activity.touch();
-        let reply = if request.name != TOOL_NAME {
+        let reply = if let Some(simple) = &self.simple {
+            match self.calls.clone().try_acquire_owned() {
+                Err(_) => Reply::error(
+                    "Hands is busy: four calls are already running; request was not executed",
+                ),
+                Ok(_permit) => {
+                    let args = request.arguments.unwrap_or_default();
+                    let (daemon, defaults, id) = (&self.daemon, &self.defaults, &self.session_id);
+                    if PeerAsker::supported(&context.peer) {
+                        let asker = PeerAsker(context.peer.clone());
+                        run_simple(
+                            daemon,
+                            Some(&asker),
+                            simple,
+                            defaults,
+                            id,
+                            &request.name,
+                            &args,
+                        )
+                        .await
+                    } else {
+                        run_simple::<PeerAsker>(
+                            daemon,
+                            None,
+                            simple,
+                            defaults,
+                            id,
+                            &request.name,
+                            &args,
+                        )
+                        .await
+                    }
+                }
+            }
+        } else if request.name != TOOL_NAME {
             Reply::error(format!("Unknown tool: {}", request.name))
         } else {
             let args = self.session_args(request.arguments.unwrap_or_default());
@@ -1057,5 +1158,184 @@ mod tests {
             json!({"actions": [{"action": "click_text", "text": "Send"}], "approval_code": "K7QM"}),
         );
         assert_eq!(r.payloads[0]["approval_code"], "K7QM");
+    }
+
+    // ------------------------------------------------------------------ simple mode
+
+    /// A daemon that refuses a press of "Send" until it sees approval_code K7QM, does everything
+    /// else, and answers a `read` with a three-item list.
+    #[derive(Default)]
+    struct SimpleDaemon {
+        payloads: Mutex<Vec<Value>>,
+    }
+
+    impl Daemon for SimpleDaemon {
+        fn exchange(&self, payload: &Value) -> Exchange {
+            self.payloads.lock().unwrap().push(payload.clone());
+            let action = payload["action"].as_str().unwrap_or("");
+            let text = payload["text"].as_str().unwrap_or("");
+            let said = match action {
+                "read" => {
+                    "window Notes (Notes)\n1 Button \"Save\"\n2 Edit \"Body\"\n3 Button \"Send\""
+                        .to_string()
+                }
+                "click_text" if text == "Send" && payload.get("approval_code").is_none() => {
+                    return Exchange::plain(Reply::error(
+                        "Needs the owner's OK. Show them this in chat: \"Hekaton wants to: Click Send\". Ask them to run \"hekaton approve K7QM\" then repeat the call with approval_code \"K7QM\".",
+                    ));
+                }
+                "press" if text == "99" => {
+                    return Exchange::plain(Reply::error(
+                        "no element 99 in the last read of that window; read it first",
+                    ));
+                }
+                "press" => format!("pressed {text} Button 'Save'\nscreen settled in 90 ms"),
+                _ => format!("did {action}\nscreen settled in 90 ms"),
+            };
+            Exchange::plain(Reply {
+                blocks: vec![
+                    Block::Text(said),
+                    Block::Image {
+                        data: "AAAA".into(),
+                        mime: "image/png".into(),
+                    },
+                ],
+                is_error: false,
+            })
+        }
+    }
+
+    fn run_simple_tool(
+        daemon: &Arc<SimpleDaemon>,
+        simple: &Simple,
+        name: &str,
+        args: Value,
+    ) -> Reply {
+        let d: Arc<dyn Daemon> = daemon.clone();
+        rt().block_on(run_simple::<FixedAsker>(
+            &d,
+            None,
+            simple,
+            &defaults(),
+            "hands-test",
+            name,
+            args.as_object().unwrap(),
+        ))
+    }
+
+    fn actions_sent(daemon: &SimpleDaemon) -> Vec<String> {
+        daemon
+            .payloads
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| p["action"].as_str().unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn an_acting_call_answers_with_one_line_and_a_fresh_list_and_no_picture() {
+        let daemon = Arc::new(SimpleDaemon::default());
+        let simple = Simple::new(Profile::Simple);
+        let r = run_simple_tool(&daemon, &simple, "press", json!({"target": "2"}));
+        assert!(!r.is_error);
+        assert!(
+            r.blocks.iter().all(|b| matches!(b, Block::Text(_))),
+            "no image"
+        );
+        assert_eq!(
+            texts(&r),
+            [
+                "pressed 2 Button 'Save'\nwindow Notes (Notes)\n1 Button \"Save\"\n2 Edit \"Body\"\n3 Button \"Send\""
+            ]
+        );
+        assert_eq!(actions_sent(&daemon), ["press", "read"]);
+        let sent = daemon.payloads.lock().unwrap().clone();
+        assert_eq!(sent[0]["shot"], false);
+        assert_eq!(
+            sent[0]["approvable"], "chat",
+            "same guarded path as computer"
+        );
+        assert_eq!(sent[1]["limit"], 40);
+        assert!(
+            sent[0]["session_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("hands-")
+        );
+    }
+
+    #[test]
+    fn look_is_the_list_alone() {
+        let daemon = Arc::new(SimpleDaemon::default());
+        let simple = Simple::new(Profile::Simple);
+        let r = run_simple_tool(&daemon, &simple, "look", json!({"filter": "save"}));
+        assert!(!r.is_error);
+        assert!(texts(&r)[0].starts_with("window Notes (Notes)\n1 Button"));
+        assert_eq!(actions_sent(&daemon), ["read"]);
+        assert_eq!(daemon.payloads.lock().unwrap()[0]["filter"], "save");
+    }
+
+    #[test]
+    fn a_failed_action_is_the_error_alone_with_a_next_line() {
+        let daemon = Arc::new(SimpleDaemon::default());
+        let simple = Simple::new(Profile::Simple);
+        let r = run_simple_tool(&daemon, &simple, "press", json!({"target": 99}));
+        assert!(r.is_error);
+        let t = &texts(&r)[0];
+        assert!(t.starts_with("no element 99"), "{t}");
+        assert!(
+            t.lines().last().unwrap().starts_with("Next: call look"),
+            "{t}"
+        );
+        assert!(!t.contains("window Notes"), "no list after a failure");
+        assert_eq!(actions_sent(&daemon), ["press"], "no read was sent");
+    }
+
+    #[test]
+    fn approve_resends_the_refused_call_with_the_code_and_says_when_nothing_waits() {
+        let daemon = Arc::new(SimpleDaemon::default());
+        let simple = Simple::new(Profile::Simple);
+        let none = run_simple_tool(&daemon, &simple, "approve", json!({"code": "K7QM"}));
+        assert!(none.is_error);
+        assert!(texts(&none)[0].contains("Nothing is waiting"));
+        assert!(
+            daemon.payloads.lock().unwrap().is_empty(),
+            "nothing was sent"
+        );
+
+        let refused = run_simple_tool(&daemon, &simple, "press", json!({"target": "Send"}));
+        assert!(refused.is_error);
+        assert!(texts(&refused)[0].contains("Needs the owner's OK"));
+        let ok = run_simple_tool(&daemon, &simple, "approve", json!({"code": "K7QM"}));
+        assert!(!ok.is_error, "{ok:?}");
+        let sent = daemon.payloads.lock().unwrap().clone();
+        let again = &sent[1];
+        assert_eq!(
+            (again["action"].as_str(), again["text"].as_str()),
+            (Some("click_text"), Some("Send"))
+        );
+        assert_eq!(again["approval_code"], "K7QM");
+        assert!(texts(&ok)[0].contains("3 Button \"Send\""), "list follows");
+        // used up
+        let twice = run_simple_tool(&daemon, &simple, "approve", json!({"code": "K7QM"}));
+        assert!(twice.is_error);
+    }
+
+    #[test]
+    fn simple_profiles_list_their_tools_and_the_full_profile_is_unchanged() {
+        let names = |p: Profile| -> Vec<String> {
+            simple_tools(p)
+                .into_iter()
+                .map(|t| t.name.to_string())
+                .collect()
+        };
+        assert_eq!(names(Profile::Simple).len(), 9);
+        assert_eq!(names(Profile::SimpleVision).len(), 11);
+        assert_eq!(names(Profile::Simple)[0], "look");
+        assert!(simple_tools(Profile::Full).is_empty());
+        let shim = Shim::new(Arc::new(dead_link()), defaults(), Activity::new());
+        assert!(shim.simple.is_none());
+        assert!(shim.with_profile(Profile::Full).simple.is_none());
     }
 }
