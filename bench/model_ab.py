@@ -57,7 +57,8 @@ class McpClient:
     def __init__(self, argv):
         self.proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+            bufsize=1)  # the server writes UTF-8; the Windows default code page does not fit it
         self.q = queue.Queue()
         self.next_id = 1
         threading.Thread(target=self._pump, daemon=True).start()
@@ -278,6 +279,8 @@ def per_os(value):
 
 
 def expand(text, ctx, task=None):
+    if os.name == "nt":  # a native path, so a Save dialog gets C:\dir\note.txt and not C:\dir/note.txt
+        text = text.replace("{tmp}/", ctx["tmp"] + "\\")
     text = text.replace("{tmp}", ctx["tmp"]).replace("{fixtures}", ctx["fixtures"])
     if task is not None:
         text = text.replace("{app}", per_os(task.get("app", ""))).replace(

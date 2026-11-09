@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import tempfile
 import threading
@@ -94,7 +95,8 @@ class LoopTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        self.mcp_cmd = "%s %s" % (shlex.quote(sys.executable), shlex.quote(str(FAKE_MCP)))
+        argv = [sys.executable, str(FAKE_MCP)]
+        self.mcp_cmd = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
 
     def suite(self, tasks):
         p = Path(self.dir.name) / "suite.json"
@@ -171,7 +173,7 @@ class LoopTests(unittest.TestCase):
         ctx = {"tmp": tempfile.mkdtemp(), "fixtures": model_ab.FIXTURES_DIR.as_uri(), "api_key": None}
         self.addCleanup(lambda: __import__("shutil").rmtree(ctx["tmp"], ignore_errors=True))
         p = model_ab.expand_prompt(tasks[0], ctx)
-        self.assertIn(ctx["tmp"] + "/n.txt", p)
+        self.assertIn(os.path.join(ctx["tmp"], "n.txt"), p)
         self.assertTrue(p.startswith("see file://"))
         self.assertIn("/bench/fixtures/a.html", p)
         chk = tasks[0]["check"]
