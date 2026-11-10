@@ -218,7 +218,9 @@ fn locate_text_prefers_uia_over_ocr() {
             y: 20,
             source: "uia",
             label: "Save".into(),
-            actionable: false
+            actionable: false,
+            editable: false,
+            chrome: false
         }]
     );
     assert_eq!(kit.fake.ocr_calls(), 0);
@@ -238,7 +240,9 @@ fn locate_text_falls_back_to_ocr_words() {
             y: 110,
             source: "ocr",
             label: "Save".into(),
-            actionable: false
+            actionable: false,
+            editable: false,
+            chrome: false
         }]
     );
     // a blank query finds nothing; text that is not there finds nothing
@@ -1069,4 +1073,127 @@ fn read_text_accepts_filter_as_the_query_when_text_is_empty() {
         out.contains("2: Pick a Radio button") && out.contains("4: Submit"),
         "{out}"
     );
+}
+
+// ---------------------------------------------------------------------------- label rules (2026-11-09)
+
+fn cand(label: &str, x: i32, kind: &str) -> Cand {
+    Cand {
+        x,
+        y: 10,
+        source: "uia",
+        label: label.into(),
+        actionable: kind == "control",
+        editable: kind == "field",
+        chrome: kind == "chrome",
+    }
+}
+
+#[test]
+fn an_exact_label_beats_a_longer_one_even_a_control() {
+    use super::find::click_choices;
+    // "Save" against the dialog's "Save as type:" (a combo box, so a control) and the Save button
+    let c = [
+        cand("Save as type:", 1, "control"),
+        cand("Save", 2, "control"),
+    ];
+    assert_eq!(click_choices(&c, "Save", false), vec![1]);
+    // exact plain text beats a longer control: the order is exact first, control second
+    let c = [cand("Save as type:", 1, "control"), cand("save", 2, "text")];
+    assert_eq!(click_choices(&c, " Save ", false), vec![1]);
+    // no exact label: controls beat plain text
+    let c = [
+        cand("Save the date", 1, "text"),
+        cand("Save draft", 2, "control"),
+    ];
+    assert_eq!(click_choices(&c, "save", false), vec![1]);
+    // still two controls: stay ambiguous
+    let c = [cand("Save", 1, "control"), cand("Save", 2, "control")];
+    assert_eq!(click_choices(&c, "save", false), vec![0, 1]);
+}
+
+#[test]
+fn a_field_beats_everything_when_the_click_is_meant_to_type() {
+    use super::find::click_choices;
+    let c = [
+        cand("Full name", 1, "text"),
+        cand("Full name", 2, "control"),
+        cand("Full name", 3, "field"),
+    ];
+    assert_eq!(click_choices(&c, "Full name", true), vec![2]);
+    // pressing (no typing): the control wins over the caption, a field counts as a control
+    assert_eq!(click_choices(&c, "Full name", false), vec![1, 2]);
+    let c = [cand("Full name", 1, "text"), cand("Full name", 3, "field")];
+    assert_eq!(click_choices(&c, "full name:", false), vec![1]);
+}
+
+#[test]
+fn the_page_beats_the_browsers_own_toolbar_and_bookmarks() {
+    use super::find::click_choices;
+    let c = [
+        cand("Bookmark this tab", 1, "chrome"),
+        cand("OK", 2, "chrome"),
+        cand("OK", 3, "control"),
+    ];
+    assert_eq!(click_choices(&c, "OK", false), vec![2]);
+    // only chrome matches: it is still found
+    let c = [cand("Bookmark this tab", 1, "chrome")];
+    assert_eq!(click_choices(&c, "ok", false), vec![0]);
+}
+
+fn page_and_chrome(kit: &Kit) {
+    let w = kit.front("Page - Brave", "brave.exe", 9);
+    kit.fake
+        .update_window(w, |i| i.rect = Rect::from_xywh(0, 0, 1280, 720));
+    let at = |l, t, r, b| Rect::new(l, t, r, b);
+    let page = Element::new("doc", Role::Document, "Form")
+        .at(at(0, 100, 1280, 720))
+        .with_child(Element::new("t1", Role::Text, "Full name").at(at(10, 120, 100, 140)))
+        .with_child(Element::new("f1", Role::Edit, "Enter your name").at(at(10, 150, 300, 170)))
+        .with_child(Element::new("ok", Role::Button, "OK").at(at(10, 300, 60, 320)));
+    kit.fake.set_tree(
+        w,
+        Element::new("root", Role::Window, "Page - Brave")
+            .with_child(page)
+            .with_child(
+                Element::new("bm", Role::Button, "Bookmark this tab").at(at(1200, 10, 1230, 40)),
+            )
+            .with_child(Element::new("bar", Role::Button, "Ok shop").at(at(300, 60, 360, 80))),
+    );
+}
+
+#[test]
+fn click_text_ok_takes_the_pages_button_not_the_browsers_bookmark_star() {
+    let kit = plain_kit();
+    page_and_chrome(&kit);
+    let (note, _) = kit
+        .step(json!({"action": "click_text", "text": "OK"}))
+        .unwrap();
+    assert!(
+        note.contains("'OK'") && note.contains("[35, 310]"),
+        "{note}"
+    );
+}
+
+#[test]
+fn a_caption_before_a_field_stands_for_the_field_when_a_type_follows() {
+    let kit = plain_kit();
+    page_and_chrome(&kit);
+    kit.run(json!({"actions": [
+        {"action": "click_text", "text": "Full name"},
+        {"action": "type", "text": "Ada"},
+    ]}))
+    .unwrap();
+    let clicks: Vec<_> = kit
+        .fake
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            InputEvent::Click { at, .. } => Some(at),
+            _ => None,
+        })
+        .collect();
+    // the field (centre 155, 160), not the caption (55, 130)
+    assert_eq!(clicks.len(), 1, "{clicks:?}");
+    assert_eq!((clicks[0].x, clicks[0].y), (155, 160));
 }

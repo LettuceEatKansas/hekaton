@@ -300,6 +300,21 @@ impl Backend for MacBackend {
         Ok(None)
     }
 
+    fn app_names(&self, window: WindowRef) -> BackendResult<Vec<String>> {
+        // the display name ("Brave Browser"); the bundle id is already `WindowInfo::app`
+        let pid = self.window_pid(window)?;
+        let name = crate::apps::name(pid as i32);
+        Ok(if name.is_empty() {
+            Vec::new()
+        } else {
+            vec![name]
+        })
+    }
+
+    fn target_names(&self, target: &AppTarget) -> Vec<String> {
+        launch::target_bundle_names(target)
+    }
+
     fn window_text(&self, window: WindowRef) -> BackendResult<String> {
         tree::window_text(window, &self.display_rects())
     }

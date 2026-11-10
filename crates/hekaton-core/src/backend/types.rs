@@ -750,6 +750,10 @@ pub struct Element {
     pub affordances: Vec<Affordance>,
     /// Children, empty for a leaf or when the tree was flattened.
     pub children: Vec<Element>,
+    /// It sits inside a dialog, sheet or alert of its own window (a macOS sheet, a browser's ARIA
+    /// dialog). A dialog that is a window of its own is found by the window's kind instead.
+    #[serde(default)]
+    pub in_dialog: bool,
 }
 
 impl Element {
@@ -769,6 +773,7 @@ impl Element {
             state: ElementState::default(),
             affordances: Vec::new(),
             children: Vec::new(),
+            in_dialog: false,
         }
     }
 

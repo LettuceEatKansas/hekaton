@@ -77,6 +77,8 @@ struct State {
     point_override: Option<Option<WindowRef>>,
     roots: HashMap<WindowRef, WindowRef>,
     hosted: HashMap<WindowRef, String>,
+    app_names: HashMap<WindowRef, Vec<String>>,
+    target_names: HashMap<String, Vec<String>>,
     window_text: HashMap<WindowRef, String>,
     displays: Vec<Display>,
     screens: VecDeque<Image>,
@@ -189,6 +191,8 @@ impl FakeBackend {
                 point_override: None,
                 roots: HashMap::new(),
                 hosted: HashMap::new(),
+                app_names: HashMap::new(),
+                target_names: HashMap::new(),
                 window_text: HashMap::new(),
                 displays: vec![Display {
                     id: 1,
@@ -347,6 +351,21 @@ impl FakeBackend {
     /// Declare `child` to live inside the top-level window `root`.
     pub fn set_root_window(&self, child: WindowRef, root: WindowRef) {
         self.st().roots.insert(child, root);
+    }
+
+    /// Script the other names (display name) the app owning `window` goes by.
+    pub fn set_app_names(&self, window: WindowRef, names: &[&str]) {
+        self.st()
+            .app_names
+            .insert(window, names.iter().map(|n| n.to_string()).collect());
+    }
+
+    /// Script the other names (bundle id) a launch path goes by.
+    pub fn set_target_names(&self, path: &str, names: &[&str]) {
+        self.st().target_names.insert(
+            path.to_string(),
+            names.iter().map(|n| n.to_string()).collect(),
+        );
     }
 
     /// Declare that `window` is a frame hosting the app named `app`.
@@ -1058,6 +1077,25 @@ impl Backend for FakeBackend {
 
     fn hosted_app(&self, window: WindowRef) -> BackendResult<Option<String>> {
         Ok(self.st().hosted.get(&window).cloned())
+    }
+
+    fn app_names(&self, window: WindowRef) -> BackendResult<Vec<String>> {
+        Ok(self
+            .st()
+            .app_names
+            .get(&window)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn target_names(&self, target: &AppTarget) -> Vec<String> {
+        let key = match target {
+            AppTarget::Executable(p)
+            | AppTarget::Shortcut(p)
+            | AppTarget::Packaged(p)
+            | AppTarget::Other(p) => p,
+        };
+        self.st().target_names.get(key).cloned().unwrap_or_default()
     }
 
     fn window_text(&self, window: WindowRef) -> BackendResult<String> {

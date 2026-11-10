@@ -29,13 +29,13 @@ An unknown profile name exits with status 2 and prints the usage line.
 
 | Tool | Parameters (required in bold) | What it does | Becomes |
 |---|---|---|---|
-| `look` | `window`, `filter` | Front window title and app, open dialogs first, then a numbered list of things that can be pressed or typed into | `read` (browser tree woken, no screenshot) |
+| `look` | `window`, `filter` | Front window title and app, open dialogs first (under a `Dialog:` heading, then a `Window:` heading for the rest), then a numbered list of things that can be pressed or typed into | `read` (browser tree woken, no screenshot) |
 | `read_text` | `find` | The text of the window or page | `read_text` |
-| `press` | **`target`**, `double` | Press item N from the newest list, or the control with that visible label | `press` when `target` is all digits, otherwise `click_text` |
+| `press` | **`target`**, `double` | Press item N from the newest list, or the control with that visible label (an exact label beats a longer one, a control beats plain text, the page beats the browser's toolbar) | `press` when `target` is all digits, otherwise `click_text` |
 | `type` | **`text`**, `into`, `clear`, `submit` | Type text. `into` (number or label) is pressed first, `clear` replaces what is there, `submit` presses Return after | a batch of `press`/`click_text`, `key`, `type`, `key` |
 | `key` | **`keys`**, `repeat` | Press a key or combination, for example `Return` or `cmd+s` | `key` |
 | `open` | **`target`** | Open an app by name, or a web address in the browser | `open_app` |
-| `scroll` | **`direction`** (`up`, `down`, `left`, `right`), `amount` | Scroll the front window | `scroll` |
+| `scroll` | **`direction`** (`up`, `down`, `left`, `right`), `amount` | Scroll the front window; an amount over 30 is capped and the reply says so | `scroll` |
 | `wait` | `seconds`, `for_text` | Wait a fixed time, or until new text appears on screen | `wait`, or `wait_for_text` with `new_only=true` |
 | `approve` | **`code`** | Repeat the last refused step with the code the owner gave | the stored call plus `approval_code` |
 
@@ -61,7 +61,9 @@ screenshot and a click.
    are no new daemon routes.
 3. **Every acting reply carries a fresh list.** `press`, `type`, `key`, `open`, `scroll`, `wait`
    and `click_at` answer with one line saying what happened, then the current numbered list
-   (at most 40 items and 2,500 characters; `look` allows 60 items and 4,000 characters). The
+   (at most 40 items and 2,500 characters; `look` allows 60 items and 4,000 characters). Open
+   dialogs, sheets and alerts come first under a `Dialog:` heading; their items keep the numbers
+   `press` takes, and the window's own items follow under `Window:`. The
    numbers in a reply are therefore always current, and the model does not need a `look` between
    two actions. When more items exist than were shown, the reply says how many and suggests
    `look` with a `filter`. When the action fails, the reply is the error alone.
@@ -72,8 +74,12 @@ screenshot and a click.
    named in a one-line note, not refused.
 6. **Errors that say what to do next.** Every error ends with a line starting `Next:` that names
    the exact call to make. A stale number says to call `look` and press the new number. An
-   ambiguous label lists the matches with their numbers. A missing required parameter shows an
-   example call. An unknown tool name lists the tool names.
+   ambiguous label lists the matches with the numbers `press` takes right now (the same numbering
+   as `look`; the server reads the screen filtered by the label to get them) and says to press one
+   of those numbers. A missing required parameter shows an example call. An unknown tool name lists
+   the tool names. Error and hint texts the daemon words for the full tool (`wait_for`, `windows()`,
+   `zoom`, `find_text`, `read_page`, `list_windows`, `nth`, and so on) are rewritten into simple-mode
+   words before they are sent, and only simple tool names appear.
 7. **`approve`.** The server remembers the last refused call of the session in memory.
    `approve` with the owner's code sends it again with `approval_code`. With nothing waiting, it
    says so. Clients that support the owner card keep getting the card.
@@ -100,7 +106,6 @@ screenshot and a click.
 
 - New daemon routes, or any browser-API (CDP/DOM) action.
 - Any edit to the full tool's description or schema.
-- Making `only_apps` accept app name, process name and bundle id alike. That is a separate fix.
 - Replacing an installed app. The build is tested from the build folder only.
 
 ## Measuring it

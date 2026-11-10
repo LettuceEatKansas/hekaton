@@ -305,3 +305,210 @@ fn approve_resends_the_refused_call_with_the_code() {
             .is_err()
     );
 }
+
+// ---- 2026-11-09: error and hint texts name only things simple mode has.
+
+/// Texts the daemon sends for the full tool, as they reach the shaping (placeholders filled in).
+const DAEMON_HINTS: &[&str] = &[
+    "'Brave Browser' was started but showed no window within 8s. It is probably still loading: call wait_for('window:<expected title>', timeout=30) or windows() in a moment. Do not open it again, that makes a second copy",
+    "no text on screen matches 'Save' (tried UIA then OCR); zoom or find_text first to see what is actually there",
+    "sent https://example.com to the browser in front, but its window title is still 'New Tab' after 8s, so it did not navigate. If that page was already showing, nothing is wrong; otherwise screenshot to see what the browser did (a dialog, a blocked pop-up, no network) and do not assume the page loaded",
+    "started https://example.com but no browser window came to the front within 8s; list_windows or screenshot shows where it went. Do not open it again",
+    "opened /tmp but no Finder window came up for it within 8s; list_windows shows where it went",
+    "no window matches 'Foo'; list_windows shows what is open",
+    "ambiguous window 'Foo'; use a wN ref from windows",
+    "2 windows match 'Foo', ambiguous: w1, w2. Use a wN ref, or all=true",
+    "Cmd+W needs a window: none is in front, so pass window=...",
+    "no element 99 in the last read of that window; read it first",
+    "page changed since read: element 3 'Paris' is gone (element gone); read again",
+    "page changed since read: element 3 was AXButton 'A' and is now AXButton 'B'; read again",
+    "press needs text: an element number from read, e.g. 12",
+    "wait_for_text: 'Done' did not appear within 10s",
+    "wait_for_text: no new 'Done' appeared within 10s (1 already on screen when the wait began)",
+    "wait_for_file: C:/x did not appear within 10s",
+    "2 matches for 'Save', ambiguous: 1: 'Save'@[30, 20], 2: 'Save As'@[80, 50]. Pass nth to pick one",
+    "nth=3 out of range; found 2 match(es) for 'save'",
+    "coordinate [5000, 5000] is outside the 1024x768 screenshot",
+    "file dialog: entered /tmp/x and pressed Enter, but a dialog is still open (maybe 'already exists, replace?' or an invalid name): look at the screenshot",
+    "window \"Notes\"\n1 Button \"Save\"\n(this app exposes no clickable elements to Windows: it is drawn by a game engine or an embedded browser. Use read_text for its words, look for a picture with numbered boxes, or click by 'x,y'. For a browser page use read_page.)",
+    "window \"Notes\"\n(accessibility tree looks empty: pass wake=true to wake this window's accessibility tree; it is brought to the front briefly)",
+    "(no element matches 'zzz'; try a shorter word (a|b matches either), or read_page/read_text for content)",
+    "zoomed view (coordinates stay in screenshot space)",
+    "1 Edit \"Body\" =\"abc...\" (200 chars; read_text shows all)",
+    "scrolled down 30 (capped: 100 was asked, one scroll is at most 30; scroll again for more)",
+];
+
+/// Names that exist only in the full tool.
+const FULL_ONLY: &[&str] = &[
+    "wait_for",
+    "windows()",
+    "list_windows",
+    "read_page",
+    "find_text",
+    "click_text",
+    "open_app",
+    "file_dialog",
+    "snapshot",
+    "zoom",
+    "nth",
+    "shot",
+    "coordinate",
+    "hwnd",
+    "left_click",
+    "replace_word",
+    "wait=",
+    "wake=",
+    "filter=",
+];
+
+#[test]
+fn no_daemon_hint_keeps_a_name_simple_mode_does_not_have() {
+    for profile in [Profile::Simple, Profile::SimpleVision] {
+        let allowed = profile.tool_names();
+        for hint in DAEMON_HINTS {
+            // as an error, as an outcome line and inside a look
+            let err = error_reply(&Reply::error(*hint), None, profile);
+            let t = text(&err);
+            let shaped = [
+                t.clone(),
+                simplify(&outcome_line(hint), profile),
+                simplify(&shape_list(hint, 60, 4000), profile),
+            ];
+            for out in &shaped {
+                let low = out.to_lowercase();
+                let words: Vec<&str> = low
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .collect();
+                for bad in FULL_ONLY {
+                    let plain = bad.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    let found = if plain {
+                        words.contains(bad)
+                    } else {
+                        low.contains(bad)
+                    };
+                    assert!(
+                        !found,
+                        "{profile:?}: {bad:?} survives in {out:?} (from {hint:?})"
+                    );
+                }
+                if profile == Profile::Simple {
+                    assert!(!low.contains("screenshot"), "{out:?}");
+                }
+                // any snake_case name left must be one of this profile's tools
+                for word in out.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                    if word.contains('_')
+                        && word.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    {
+                        assert!(allowed.contains(&word), "{profile:?}: {word:?} in {out:?}");
+                    }
+                }
+            }
+            // an error always ends with a Next: line that names a simple tool
+            let last = t.lines().last().unwrap();
+            assert!(last.starts_with("Next: "), "{t}");
+            assert!(
+                allowed.iter().any(|name| last.contains(name)),
+                "{profile:?}: no tool named in {last:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_error_ends_with_the_next_line_that_fits_it() {
+    let next = |msg: &str| {
+        let t = text(&error_reply(&Reply::error(msg), None, Profile::Simple));
+        t.lines().last().unwrap().to_string()
+    };
+    assert!(next("'x' was started but showed no window within 8s").contains("call wait"));
+    assert!(next("wait_for_text: 'x' did not appear within 5s").contains("call wait"));
+    assert!(
+        next("refused: 'Brave' is not an app this task may open (allowed: x)")
+            .contains("do not retry")
+    );
+    assert!(next("page changed since read: element 3 is gone").contains("press the new number"));
+    // an error that already has a Next: line keeps it
+    let t = text(&error_reply(
+        &Reply::error("bad\nNext: call key."),
+        None,
+        Profile::Simple,
+    ));
+    assert_eq!(t.matches("Next:").count(), 1);
+}
+
+#[test]
+fn an_ambiguous_label_lists_the_numbers_press_takes() {
+    let simple = Simple::new(Profile::Simple);
+    let c = simple
+        .prepare("press", &args(json!({"target": "Save"})))
+        .unwrap();
+    let ambiguous = Reply::error(
+        "2 matches for 'Save', ambiguous: 1: 'Save'@[30, 20], 2: 'Save As'@[80, 50]. Pass nth to pick one",
+    );
+    assert_eq!(
+        simple.ambiguous_label(&c, &ambiguous).as_deref(),
+        Some("Save")
+    );
+    let list = Reply {
+        blocks: vec![Block::Text(
+            "window \"Doc\"\n4 Button \"Save\"\n9 Link \"Save a copy\"\n12 Button \"Cancel\""
+                .into(),
+        )],
+        is_error: false,
+    };
+    let r = simple.with_candidates(&c, "Save", &list).unwrap();
+    let t = text(&r);
+    assert!(r.is_error);
+    assert!(
+        t.contains("4 Button \"Save\"") && t.contains("9 Link \"Save a copy\""),
+        "{t}"
+    );
+    assert!(
+        !t.contains("Cancel") && !t.contains("nth") && !t.contains("@["),
+        "{t}"
+    );
+    assert!(
+        t.lines()
+            .last()
+            .unwrap()
+            .starts_with("Next: call press with target set to one of those numbers"),
+        "{t}"
+    );
+    assert!(t.contains("press 4"), "{t}");
+    // type says into
+    let c = simple
+        .prepare("type", &args(json!({"text": "x", "into": "Save"})))
+        .unwrap();
+    let t = text(&simple.with_candidates(&c, "Save", &list).unwrap());
+    assert!(t.contains("into 4"), "{t}");
+    // nothing numbered matches (drawn text): the plain error stands
+    let none = Reply {
+        blocks: vec![Block::Text("window \"Doc\"".into())],
+        is_error: false,
+    };
+    assert!(simple.with_candidates(&c, "Save", &none).is_none());
+    // an ordinary error is not an ambiguity
+    assert!(
+        simple
+            .ambiguous_label(&c, &Reply::error("no text on screen matches 'x'"))
+            .is_none()
+    );
+}
+
+#[test]
+fn dialogs_keep_their_heading_and_their_numbers_in_a_list() {
+    let text = "window \"Doc\"\nDialog: 'Save as'\n2 Button \"Save\"\n3 Button \"Cancel\"\nWindow:\n0 Button \"New\"\n1 Button \"Open\"";
+    let out = shape_list(text, 60, 4000);
+    assert_eq!(out, text);
+    // the cap cuts the window's items, never the dialog's
+    let out = shape_list(text, 2, 4000);
+    assert!(
+        out.contains("Dialog: 'Save as'") && out.contains("2 Button") && out.contains("3 Button"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("Window:") && !out.contains("0 Button"),
+        "{out}"
+    );
+    assert!(out.contains("(2 more not shown"), "{out}");
+}

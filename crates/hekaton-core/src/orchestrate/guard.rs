@@ -19,7 +19,7 @@ use super::ctx::{is_desktop_or_taskbar, is_file_manager, is_run_dialog};
 use super::error::{StepError, StepResult};
 use super::files::expand_vars;
 use crate::approval::{Kind, Need};
-use crate::backend::{BackendError, BackendResult, Point, WindowInfo, WindowRef};
+use crate::backend::{AppTarget, BackendError, BackendResult, Point, WindowInfo, WindowRef};
 use crate::caller::agent_host_refusal;
 use crate::textutil::py_repr;
 
@@ -140,6 +140,22 @@ fn mac_app_listed(app: &str, names: &BTreeSet<String>) -> bool {
                     .next()
                     .is_some_and(|last| last == app || last == squashed || last == last_word)
         })
+}
+
+/// A lowercased app name in the forms an allowlist entry may use: as given, without a trailing
+/// `.exe`, and with `.exe` added when it has no extension and no dots.
+pub(crate) fn name_forms(low: &str) -> Vec<String> {
+    let low = low.trim();
+    if low.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![low.to_string()];
+    if let Some(bare) = low.strip_suffix(".exe") {
+        out.push(bare.to_string());
+    } else if !low.contains('.') {
+        out.push(format!("{low}.exe"));
+    }
+    out
 }
 
 /// Whether the process part of an `only_apps` entry names the app `name` (lowercased). On macOS
@@ -369,6 +385,53 @@ impl Ctx<'_> {
 
     // ------------------------------------------------------------------ only_apps
 
+    /// Does an `only_apps` entry (no title part) equal one of these identifiers exactly? Equality
+    /// only: no prefix and no substring, because this is a safety control.
+    pub(crate) fn entry_equals_any(&self, ids: &[String]) -> bool {
+        self.o.only_apps.iter().any(|a| ids.contains(a))
+    }
+
+    /// Display names the backend knows for the app owning `w`, in the forms [`name_forms`] gives.
+    fn extra_app_names(&self, w: WindowRef) -> Vec<String> {
+        self.be()
+            .app_names(w)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|n| name_forms(&n.to_lowercase()))
+            .collect()
+    }
+
+    /// Every name an app goes by that `open_app` text could mean: the text itself, what the backend
+    /// resolves it to (file names of the program or bundle, a bundle id), each with and without
+    /// `.exe`. 2026-11-09: "Brave" was refused under an allowlist of "brave browser" and a window of
+    /// com.brave.browser under the same list, because each side compared a different name.
+    fn launch_ids(&self, low: &str) -> Vec<String> {
+        let mut ids = name_forms(low);
+        if let Ok(Some(t)) = self.be().resolve_app(low) {
+            let path = match &t {
+                AppTarget::Executable(p) | AppTarget::Shortcut(p) | AppTarget::Packaged(p) => {
+                    Some(p.as_str())
+                }
+                AppTarget::Other(_) => None,
+            };
+            if let Some(p) = path {
+                let file = basename(p).to_lowercase();
+                let stem = file
+                    .rsplit_once('.')
+                    .filter(|(_, ext)| matches!(*ext, "app" | "exe" | "lnk"))
+                    .map_or(file.clone(), |(s, _)| s.to_string());
+                ids.extend(name_forms(&stem));
+                if let AppTarget::Packaged(id) = &t {
+                    ids.extend(name_forms(&id.to_lowercase()));
+                }
+                for n in self.be().target_names(&t) {
+                    ids.extend(name_forms(&n.to_lowercase()));
+                }
+            }
+        }
+        ids
+    }
+
     fn allowed_list(&self) -> String {
         self.o
             .only_apps
@@ -430,7 +493,11 @@ impl Ctx<'_> {
                 name = hosted;
             }
         }
-        if name.is_empty() || self.o.only_apps.contains(&name) || self.allows_bundle_name(&name) {
+        let mut ids = name_forms(&name);
+        if name == self.app_of(w).unwrap_or_default() {
+            ids.extend(self.extra_app_names(w));
+        }
+        if name.is_empty() || self.entry_equals_any(&ids) || self.allows_bundle_name(&name) {
             return Ok(());
         }
         let file_manager = info.as_ref().is_some_and(is_file_manager);
@@ -448,7 +515,9 @@ impl Ctx<'_> {
             .only_apps
             .iter()
             .filter_map(|a| a.split_once(':'))
-            .filter(|(proc_part, _)| entry_names_app(proc_part, &name))
+            .filter(|(proc_part, _)| {
+                entry_names_app(proc_part, &name) || ids.iter().any(|i| i == proc_part)
+            })
             .map(|(_, rest)| rest)
             .collect();
         if !parts.is_empty() {
@@ -530,6 +599,18 @@ impl Ctx<'_> {
         // 2026-10-28 Mac stress test: open_app "Safari" was refused under only_apps
         // ["com.apple.Safari"]. The windows it opens still pass check_allowed one by one.
         if !cfg!(windows) && mac_app_listed(&low, &names) {
+            return Ok(());
+        }
+        // A plain app name ("Brave", "Brave Browser") is resolved to the app first and allowed when
+        // any of its names (display, program, bundle id) equals an entry exactly. Not for
+        // explorer, whose launches carry their own rules below, nor for an entry with a title part.
+        if exe.is_empty()
+            && !low.contains([':', '!', '\\', '/'])
+            && self
+                .launch_ids(&low)
+                .iter()
+                .any(|i| i != "explorer" && i != "explorer.exe" && self.o.only_apps.contains(i))
+        {
             return Ok(());
         }
         if exe.is_empty() {

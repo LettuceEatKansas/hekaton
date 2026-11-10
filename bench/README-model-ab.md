@@ -44,15 +44,30 @@ llama-server needs `--jinja` for tool calls. `--model` is the name the server kn
 tag, LM Studio model id; llama-server ignores it). For a hosted endpoint put the key in an env
 var and pass `--api-key-env`.
 
-## Both profiles back to back, then compare
+## Three runs back to back, then compare
+
+The recommended comparison is three runs of the same model:
+
+1. `--profile full --vision`: the full tool, with its screenshots shown to the model.
+2. `--profile full`: the full tool, screenshots hidden.
+3. `--profile simple`: the text-only simple tools.
+
+Why three: without `--vision` the harness replaces every image with the text `[image omitted]`,
+so a plain `full` run hides the screenshots the full tool is built around and looks worse than
+it is. Run 1 shows the full tool at its best, run 2 shows it blind like `simple`, and run 3 is
+the simple tools. Compare 2 against 3 for a fair text-only answer, and 1 against 2 to see what
+the pictures add. (Use a vision model for run 1.)
 
 macOS:
 
 ```
 python3 bench/model_ab.py --endpoint http://127.0.0.1:8080/v1 --model my-model \
+  --profile full --vision --hekaton ./target/release/hekaton --out full-vision.json --yes
+python3 bench/model_ab.py --endpoint http://127.0.0.1:8080/v1 --model my-model \
   --profile full   --hekaton ./target/release/hekaton --out full.json   --yes
 python3 bench/model_ab.py --endpoint http://127.0.0.1:8080/v1 --model my-model \
   --profile simple --hekaton ./target/release/hekaton --out simple.json --yes
+python3 bench/model_ab.py --compare full-vision.json full.json
 python3 bench/model_ab.py --compare full.json simple.json
 ```
 
@@ -60,13 +75,16 @@ Windows (PowerShell, same flags, backtick continuation, `.exe` path):
 
 ```
 python bench\model_ab.py --endpoint http://127.0.0.1:1234/v1 --model my-model `
+  --profile full --vision --hekaton .\target\release\hekaton.exe --out full-vision.json --yes
+python bench\model_ab.py --endpoint http://127.0.0.1:1234/v1 --model my-model `
   --profile full --hekaton .\target\release\hekaton.exe --out full.json --yes
 python bench\model_ab.py --endpoint http://127.0.0.1:1234/v1 --model my-model `
   --profile simple --hekaton .\target\release\hekaton.exe --out simple.json --yes
+python bench\model_ab.py --compare full-vision.json full.json
 python bench\model_ab.py --compare full.json simple.json
 ```
 
-Keep the model, endpoint settings and machine state the same between the two runs. Temperature
+Keep the model, endpoint settings and machine state the same between the runs. Temperature
 is 0, but local models can still vary a little, so repeat a run before trusting a small gap.
 
 ## What is recorded

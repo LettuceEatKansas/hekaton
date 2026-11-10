@@ -753,6 +753,46 @@ impl Ctx<'_> {
             || BROWSER_APPS.contains(&i.app.to_lowercase().as_str())
     }
 
+    /// A browser window that now shows something new, compared with the windows listed before the
+    /// launch: the window in front when it is another one or its title changed, a browser window that
+    /// did not exist, or any browser window whose title changed. 2026-11-09: a URL opened as a new TAB
+    /// of a browser window that was not in front (Windows keeps focus where it was) or whose title only
+    /// changed in the background was reported as a failure nine times in nine.
+    pub(crate) fn browser_page_changed(
+        &self,
+        wins: &[WindowLine],
+        before: &HashMap<WindowRef, String>,
+        fg0: Option<WindowRef>,
+    ) -> Option<WindowRef> {
+        if let Some(fg) = self.fg_root()
+            && self.is_browser(fg)
+        {
+            let cur = wins.iter().find(|w| w.window == fg);
+            let was = before.get(&fg);
+            if Some(fg) != fg0 || (cur.is_some_and(|c| Some(&c.title) != was) && was.is_some()) {
+                return Some(fg);
+            }
+        }
+        let browsers = || wins.iter().filter(|w| self.is_browser(w.window));
+        // a new browser window that did not take focus
+        if let Some(w) = browsers().find(|w| !before.contains_key(&w.window)) {
+            return Some(w.window);
+        }
+        // a window that was there and now shows another page
+        browsers()
+            .find(|w| before.get(&w.window).is_some_and(|t| *t != w.title))
+            .map(|w| w.window)
+    }
+
+    /// Bring `w` to the front unless it already is, and name it.
+    pub(crate) fn raise_browser(&self, w: WindowRef, wins: &[WindowLine]) -> StepResult<Target> {
+        if self.fg_root() != Some(w) {
+            self.check_not_protected(w)?;
+            self.be().bring_to_foreground(w)?;
+        }
+        Ok(self.target_of(w, wins))
+    }
+
     /// Open an http(s) URL in the default browser and wait until a browser window is in front and has
     /// changed (a new window, or a new page title). Only plain web addresses come here. Python
     /// `shortcuts.open_url`.
@@ -797,10 +837,6 @@ impl Ctx<'_> {
             .into_iter()
             .map(|w| (w.window, w.title))
             .collect();
-        let title0 = fg0
-            .and_then(|f| before.get(&f))
-            .cloned()
-            .unwrap_or_default();
         // the default browser must not run with the daemon's admin rights: `deelevate` starts it at
         // the user's normal level
         self.be().launch(&LaunchSpec {
@@ -809,27 +845,9 @@ impl Ctx<'_> {
             deelevate: true,
         })?;
         let arrived = || -> Option<StepResult<Target>> {
-            let fg = self.fg_root();
             let wins = self.c.window_refs().list(false).ok()?;
-            if let Some(fg) = fg
-                && self.is_browser(fg)
-            {
-                let cur = wins.iter().find(|w| w.window == fg);
-                if Some(fg) != fg0 || cur.is_some_and(|c| c.title != title0) {
-                    return Some(Ok(self.target_of(fg, &wins)));
-                }
-            }
-            // a new browser window that did not take focus: raise it
-            for w in &wins {
-                if !before.contains_key(&w.window) && self.is_browser(w.window) {
-                    let raised = self
-                        .check_not_protected(w.window)
-                        .and_then(|()| Ok(self.be().bring_to_foreground(w.window)?))
-                        .map(|()| self.target_of(w.window, &wins));
-                    return Some(raised);
-                }
-            }
-            None
+            let w = self.browser_page_changed(&wins, &before, fg0)?;
+            Some(self.raise_browser(w, &wins))
         };
         let (found, _) = self.poll(arrived, wait, 0.25);
         self.remember_target();

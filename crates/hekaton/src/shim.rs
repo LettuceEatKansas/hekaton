@@ -381,6 +381,20 @@ pub async fn run_simple<A: Asker>(
     };
     let reply = run_call(daemon, asker, main).await;
     simple.remember(&call, &reply);
+    // An ambiguous label: read the screen filtered by it, so the reply can list the matches with
+    // the numbers `press` takes right now.
+    let reply = match simple.ambiguous_label(&call, &reply) {
+        Some(label) => {
+            let list = match payload(Simple::candidates_call(&label)) {
+                Ok(p) => run_call(daemon, asker, p).await,
+                Err(r) => r,
+            };
+            simple
+                .with_candidates(&call, &label, &list)
+                .unwrap_or(reply)
+        }
+        None => reply,
+    };
     match simple.finish(&call, reply) {
         Ok(done) => done,
         Err(outcome) => {
@@ -1175,9 +1189,17 @@ mod tests {
             let action = payload["action"].as_str().unwrap_or("");
             let text = payload["text"].as_str().unwrap_or("");
             let said = match action {
+                "read" if payload["filter"] == "Dup" => {
+                    "window Notes (Notes)\n4 Button \"Dup\"\n9 Link \"Dup page\"".to_string()
+                }
                 "read" => {
                     "window Notes (Notes)\n1 Button \"Save\"\n2 Edit \"Body\"\n3 Button \"Send\""
                         .to_string()
+                }
+                "click_text" if text == "Dup" => {
+                    return Exchange::plain(Reply::error(
+                        "2 matches for 'Dup', ambiguous: 1: 'Dup'@[3, 4], 2: 'Dup page'@[5, 6]. Pass nth to pick one",
+                    ));
                 }
                 "click_text" if text == "Send" && payload.get("approval_code").is_none() => {
                     return Exchange::plain(Reply::error(
@@ -1290,6 +1312,24 @@ mod tests {
         );
         assert!(!t.contains("window Notes"), "no list after a failure");
         assert_eq!(actions_sent(&daemon), ["press"], "no read was sent");
+    }
+
+    #[test]
+    fn an_ambiguous_label_comes_back_with_numbers_press_accepts_now() {
+        let daemon = Arc::new(SimpleDaemon::default());
+        let simple = Simple::new(Profile::Simple);
+        let r = run_simple_tool(&daemon, &simple, "press", json!({"target": "Dup"}));
+        assert!(r.is_error);
+        let t = &texts(&r)[0];
+        assert!(
+            t.contains("4 Button \"Dup\"") && t.contains("9 Link \"Dup page\""),
+            "{t}"
+        );
+        assert!(t.lines().last().unwrap().contains("press 4"), "{t}");
+        assert!(!t.contains("nth"), "{t}");
+        assert_eq!(actions_sent(&daemon), ["click_text", "read"]);
+        let sent = daemon.payloads.lock().unwrap().clone();
+        assert_eq!(sent[1]["filter"], "Dup");
     }
 
     #[test]

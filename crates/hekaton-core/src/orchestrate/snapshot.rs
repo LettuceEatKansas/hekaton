@@ -94,6 +94,11 @@ fn center_of(e: &Element) -> (i32, i32) {
     })
 }
 
+/// A line that only names the group of items after it.
+fn is_heading(line: &str) -> bool {
+    line.starts_with("Dialog:") || line == "Window:"
+}
+
 /// Prune, filter, cap and compact a full snapshot (`fast.do_snapshot` after `core.snapshot`).
 pub(crate) fn render_snapshot(
     lines: &[String],
@@ -111,29 +116,58 @@ pub(crate) fn render_snapshot(
         .iter()
         .filter(|l| l.starts_with(CHROME_NOTE_PREFIX))
         .collect();
-    let mut body: Vec<&String> = lines
+    let terms = (!filter.is_empty()).then(|| filter_terms(filter));
+    // Headings ("Dialog: ...", "Window:") split the items into groups. A heading is shown only when
+    // an item of its group is, and "Window:" only after a dialog was shown.
+    let mut groups: Vec<(Option<&String>, Vec<&String>)> = vec![(None, Vec::new())];
+    for l in lines
         .iter()
         .filter(|l| !l.starts_with("window ") && l.as_str() != "(truncated)")
         .filter(|l| !l.starts_with(CHROME_NOTE_PREFIX))
-        .filter(|l| !JUNK.is_match(l) && !MAC_EMPTY_CONTAINER.is_match(l))
-        .collect();
-    if !filter.is_empty() {
-        let terms = filter_terms(filter);
-        body.retain(|l| {
-            let l = l.to_lowercase();
-            terms.iter().any(|t| l.contains(t.as_str()))
-        });
+    {
+        if is_heading(l) {
+            groups.push((Some(l), Vec::new()));
+            continue;
+        }
+        if JUNK.is_match(l) || MAC_EMPTY_CONTAINER.is_match(l) {
+            continue;
+        }
+        if let Some(terms) = &terms {
+            let low = l.to_lowercase();
+            if !terms.iter().any(|t| low.contains(t.as_str())) {
+                continue;
+            }
+        }
+        if let Some(g) = groups.last_mut() {
+            g.1.push(l);
+        }
     }
+    let total: usize = groups.iter().map(|g| g.1.len()).sum();
     let mut out: Vec<String> = head.iter().map(|s| (*s).clone()).collect();
-    out.extend(body.iter().take(max_items).map(|s| (*s).clone()));
-    if body.len() > max_items {
+    let mut room = max_items;
+    let mut dialog_shown = false;
+    for (heading, items) in &groups {
+        if items.is_empty() || room == 0 {
+            continue;
+        }
+        if let Some(h) = heading {
+            dialog_shown |= h.starts_with("Dialog:");
+            if dialog_shown {
+                out.push((*h).clone());
+            }
+        }
+        let take = items.len().min(room);
+        out.extend(items.iter().take(take).map(|s| (*s).clone()));
+        room -= take;
+    }
+    if total > max_items {
         out.push(format!(
             "(truncated, {} more; pass filter= to narrow)",
-            body.len() - max_items
+            total - max_items
         ));
     }
     out.extend(notes.iter().map(|s| (*s).clone()));
-    if body.is_empty() && filter.is_empty() {
+    if total == 0 && filter.is_empty() {
         out.push(
             "(this app exposes no clickable elements to Windows: it is drawn by a game engine or an \
              embedded browser. Use read_text for its words, look for a picture with numbered boxes, \
@@ -141,7 +175,7 @@ pub(crate) fn render_snapshot(
                 .to_string(),
         );
     }
-    if !filter.is_empty() && body.is_empty() {
+    if !filter.is_empty() && total == 0 {
         out.push(format!(
             "(no element matches {}; try a shorter word (a|b matches either), or read_page/read_text for content)",
             py_repr(filter)
@@ -190,19 +224,63 @@ impl Ctx<'_> {
         };
         let mut lines = vec![format!("window \"{title}\"")];
         let mut cached = Vec::with_capacity(items.len());
+        let cache_of = |reference: usize, e: &Element| CachedElement {
+            reference,
+            id: e.id.clone(),
+            native_role: e.native_role.clone(),
+            name: e.name.clone(),
+            disabled: !e.enabled,
+            center: center_of(e),
+            value: e.value.clone(),
+            rect: e.rect,
+            state: e.state.flags().iter().map(|f| format!(" [{f}]")).collect(),
+        };
+        let mut rows: Vec<(usize, String)> = Vec::with_capacity(items.len());
         for (i, e) in items.iter().enumerate() {
-            lines.push(element_line(i, e));
-            cached.push(CachedElement {
-                reference: i,
-                id: e.id.clone(),
-                native_role: e.native_role.clone(),
-                name: e.name.clone(),
-                disabled: !e.enabled,
-                center: center_of(e),
-                value: e.value.clone(),
-                rect: e.rect,
-                state: e.state.flags().iter().map(|f| format!(" [{f}]")).collect(),
-            });
+            rows.push((i, element_line(i, e)));
+            cached.push(cache_of(i, e));
+        }
+        // Dialogs, sheets and alerts go first, marked, with the numbers they have in the list (a
+        // press takes the number, so the order of the lines does not matter). A dialog that is a
+        // window of its own is read and its items numbered after the window's.
+        let mut dialogs: Vec<(String, Vec<String>)> = Vec::new();
+        let inside: Vec<String> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.in_dialog)
+            .map(|(i, _)| rows[i].1.clone())
+            .collect();
+        if !inside.is_empty() {
+            dialogs.push(("Dialog:".to_string(), inside));
+        }
+        for (d, d_title) in self.dialog_windows_of(window) {
+            let mut dl = TreeLimits::snapshot(30);
+            dl.wake = WakePolicy::Never;
+            let Ok(dt) = self.be().element_tree(d, &dl) else {
+                continue;
+            };
+            let mut rows_d = Vec::new();
+            for e in &dt.root.children {
+                let n = cached.len();
+                rows_d.push(element_line(n, e));
+                cached.push(cache_of(n, e));
+            }
+            dialogs.push((format!("Dialog: {}", py_repr(&d_title)), rows_d));
+        }
+        if dialogs.is_empty() {
+            lines.extend(rows.into_iter().map(|(_, l)| l));
+        } else {
+            let is_dialog_row = |l: &str| dialogs.iter().any(|(_, r)| r.iter().any(|x| x == l));
+            for (heading, rows_d) in &dialogs {
+                lines.push(heading.clone());
+                lines.extend(rows_d.iter().cloned());
+            }
+            lines.push("Window:".to_string());
+            lines.extend(
+                rows.into_iter()
+                    .map(|(_, l)| l)
+                    .filter(|l| !is_dialog_row(l)),
+            );
         }
         self.c.element_refs().store(window, cached);
         if tree.truncated {
@@ -225,6 +303,41 @@ impl Ctx<'_> {
             });
         }
         Ok((lines, !wake && tree.wake_hint))
+    }
+
+    /// Dialog windows (at most three) that belong to `window`: owned by it, or of the same process.
+    /// Empty when `window` is itself a dialog.
+    fn dialog_windows_of(&self, window: WindowRef) -> Vec<(WindowRef, String)> {
+        let Ok(all) = self.be().list_windows(false) else {
+            return Vec::new();
+        };
+        let Some(me) = all.iter().find(|w| w.window == window) else {
+            return Vec::new();
+        };
+        if me.kind == crate::backend::WindowKind::Dialog {
+            return Vec::new();
+        }
+        let pid = me.pid;
+        all.iter()
+            .filter(|d| {
+                d.kind == crate::backend::WindowKind::Dialog
+                    && d.window != window
+                    && !d.hidden
+                    && !d.minimized
+            })
+            .filter(|d| {
+                (pid != 0 && d.pid == pid)
+                    || self
+                        .be()
+                        .owner_chain(d.window)
+                        .is_ok_and(|c| c.contains(&window))
+            })
+            .filter(|d| {
+                self.check_not_protected(d.window).is_ok() && self.check_allowed(d.window).is_ok()
+            })
+            .take(3)
+            .map(|d| (d.window, d.title.clone()))
+            .collect()
     }
 
     /// `fast.do_snapshot`: the trimmed, compact listing a model reads. The bool is the wake hint.

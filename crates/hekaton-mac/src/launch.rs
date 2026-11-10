@@ -163,6 +163,19 @@ fn bundle_id_of_path(path: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The bundle id inside a resolved `.app`, so an allowlist entry written as a bundle id matches a
+/// name the app was opened by.
+pub(crate) fn target_bundle_names(target: &AppTarget) -> Vec<String> {
+    match target {
+        AppTarget::Shortcut(p) | AppTarget::Executable(p) | AppTarget::Other(p)
+            if p.trim_end_matches('/').ends_with(".app") =>
+        {
+            bundle_id_of_path(p).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Start something.
 pub(crate) fn launch(spec: &LaunchSpec) -> BackendResult<LaunchOutcome> {
     let args = split_args(&spec.args);

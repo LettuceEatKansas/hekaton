@@ -4,7 +4,9 @@
 //! into plain text: one line saying what happened, then a fresh numbered list. The design is in
 //! `docs/SIMPLE-MODE.md`. Platform neutral: no OS code here.
 
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+
+use regex::Regex;
 
 use serde_json::{Map, Value, json};
 
@@ -343,6 +345,64 @@ impl Simple {
         }
     }
 
+    /// The label a `press` or `type` could not choose between, when the daemon's error says that.
+    /// The server then reads the screen filtered by the label and hands the result to
+    /// [`Simple::with_candidates`], so the reply can name numbers `press` accepts.
+    pub fn ambiguous_label(&self, call: &Call, reply: &Reply) -> Option<String> {
+        if !reply.is_error || !matches!(call.tool.as_str(), "press" | "type") {
+            return None;
+        }
+        let text = reply_text(reply);
+        let rest = &text[text.find(" matches for ")? + " matches for ".len()..];
+        let label = &rest[..rest.find(", ambiguous")?];
+        let label = label.trim().trim_matches(['\'', '"']);
+        (!label.is_empty()).then(|| label.to_string())
+    }
+
+    /// The `computer` arguments for the read that lists the items matching `label`, numbered as
+    /// `look` numbers them.
+    pub fn candidates_call(label: &str) -> Map<String, Value> {
+        look_args(None, Some(label.to_string()), ACT_ITEMS)
+    }
+
+    /// The error for an ambiguous label: the items that match it, with the numbers `press` takes
+    /// right now (from the read just made), and a `Next:` line that says to use one. `None` when the
+    /// read found no numbered item (the match was drawn text), so the plain error stands.
+    pub fn with_candidates(&self, call: &Call, label: &str, list: &Reply) -> Option<Reply> {
+        if list.is_error {
+            return None;
+        }
+        let want = label.to_lowercase();
+        let items: Vec<String> = reply_text(list)
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| l.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .filter(|l| l.to_lowercase().contains(&want))
+            .take(8)
+            .map(|l| l.chars().take(160).collect())
+            .collect();
+        let first = items
+            .first()
+            .and_then(|l| l.split_whitespace().next())
+            .map(str::to_string)?;
+        let use_it = if call.tool == "type" {
+            format!(
+                "call type again with into set to one of those numbers, for example into {first}"
+            )
+        } else {
+            format!("call press with target set to one of those numbers, for example press {first}")
+        };
+        let mut out = format!(
+            "{} items match '{label}'. These numbers work now:\n{}\nNext: {use_it}.",
+            items.len(),
+            simplify(&items.join("\n"), self.profile)
+        );
+        if let Some(n) = call.note.as_deref() {
+            out = out.replace("\nNext:", &format!("\n{n}\nNext:"));
+        }
+        Some(Reply::error(out))
+    }
+
     /// The reply for a call that needs no fresh list, or `Err(outcome)` when the step worked and a
     /// list should follow (send [`list_call`], then [`Simple::with_list`]).
     pub fn finish(&self, call: &Call, reply: Reply) -> Result<Reply, String> {
@@ -352,17 +412,23 @@ impl Simple {
         match call.kind {
             Kind::Look => Ok(Reply {
                 blocks: vec![Block::Text(with_note(
-                    shape_list(&reply_text(&reply), LOOK_ITEMS, LOOK_CHARS),
+                    simplify(
+                        &shape_list(&reply_text(&reply), LOOK_ITEMS, LOOK_CHARS),
+                        self.profile,
+                    ),
                     call.note.as_deref(),
                 ))],
                 is_error: false,
             }),
             Kind::Plain => {
+                let profile = self.profile;
                 let blocks = reply
                     .blocks
                     .into_iter()
-                    .filter(|b| {
-                        self.profile == Profile::SimpleVision || matches!(b, Block::Text(_))
+                    .filter(|b| profile == Profile::SimpleVision || matches!(b, Block::Text(_)))
+                    .map(|b| match b {
+                        Block::Text(t) => Block::Text(simplify(&t, profile)),
+                        other => other,
                     })
                     .collect();
                 Ok(Reply {
@@ -370,7 +436,7 @@ impl Simple {
                     is_error: false,
                 })
             }
-            Kind::Act => Err(outcome_line(&reply_text(&reply))),
+            Kind::Act => Err(simplify(&outcome_line(&reply_text(&reply)), self.profile)),
         }
     }
 
@@ -380,7 +446,10 @@ impl Simple {
         let tail = if list.is_error {
             "(could not list the screen)\nNext: call look.".to_string()
         } else {
-            shape_list(&reply_text(list), ACT_ITEMS, ACT_CHARS)
+            simplify(
+                &shape_list(&reply_text(list), ACT_ITEMS, ACT_CHARS),
+                self.profile,
+            )
         };
         let head = with_note(outcome.to_string(), call.note.as_deref());
         Reply {
@@ -700,39 +769,194 @@ fn outcome_line(text: &str) -> String {
     out
 }
 
-/// What to do next, for an error the daemon worded.
-fn next_for(text: &str) -> &'static str {
+/// What to do next, for an error the daemon worded. Always an exact call a simple tool can make.
+fn next_for(text: &str, profile: Profile) -> String {
     let lower = text.to_lowercase();
-    if lower.contains("no element")
-        || lower.contains("page changed since read")
-        || lower.contains("stale")
-    {
-        "Next: call look, then press the new number."
-    } else if lower.contains("ambiguous") {
-        "Next: call look, then press the number of the one you mean, or press a longer label."
-    } else if text.contains(REFUSED) {
-        "Next: ask the owner for the code, then call approve with code set to it."
-    } else if lower.contains("no text on screen matches") {
-        "Next: call look, then press the number of the item you want."
+    let see = if profile == Profile::SimpleVision {
+        "look or screenshot"
     } else {
-        "Next: call look to see the screen, then choose the next step."
+        "look"
+    };
+    if lower.contains("in the latest list")
+        || lower.contains("page changed since")
+        || lower.contains("stale")
+        || lower.contains("the list was made")
+    {
+        "Next: call look, then press the new number.".into()
+    } else if lower.contains("ambiguous") || lower.contains("items match") {
+        "Next: call look, then press the number of the one you mean, or press a longer label."
+            .into()
+    } else if text.contains(REFUSED) {
+        "Next: ask the owner for the code, then call approve with code set to it.".into()
+    } else if lower.contains("no text on screen matches") {
+        "Next: call look, then press the number of the item you want.".into()
+    } else if lower.contains("did not appear within") || lower.contains("showed no window") {
+        "Next: call wait with seconds set to 10, then call look. Do not repeat the step that started it."
+            .into()
+    } else if lower.contains("did not navigate") || lower.contains("no browser window came") {
+        format!("Next: call {see} to check the browser. Only call open again if nothing loaded.")
+    } else if lower.contains("outside the") && lower.contains("picture") {
+        if profile == Profile::SimpleVision {
+            "Next: call screenshot, then click_at with a point inside the picture.".into()
+        } else {
+            "Next: call look to see the screen, then choose the next step.".into()
+        }
+    } else if lower.contains("refused") || lower.contains("may not") {
+        "Next: the owner limits this task, so do not retry this step. Call look, then choose another step."
+            .into()
+    } else if lower.contains("needs a window") || lower.contains("no window matches") {
+        "Next: call look to see the front window, or call open with the app name.".into()
+    } else {
+        format!("Next: call {see} to see the screen, then choose the next step.")
     }
 }
 
-fn error_reply(reply: &Reply, note: Option<&str>, _profile: Profile) -> Reply {
-    let text = reply_text(reply);
-    let text = text.trim_end();
+fn error_reply(reply: &Reply, note: Option<&str>, profile: Profile) -> Reply {
+    let text = simplify(reply_text(reply).trim_end(), profile);
     let has_next = text.lines().any(|l| l.trim_start().starts_with("Next:"));
-    let mut out = text.to_string();
+    let mut out = text.clone();
     if let Some(n) = note {
         out.push('\n');
         out.push_str(n);
     }
     if !has_next {
         out.push('\n');
-        out.push_str(next_for(text));
+        out.push_str(&next_for(&text, profile));
     }
     Reply::error(out)
+}
+
+/// Phrases the daemon words for the full tool, and what a simple-mode user does instead. The first
+/// matching rule wins its text; `{see}` is `look` (or `look or screenshot` with pictures).
+const HINTS: &[(&str, &str)] = &[
+    (
+        r"call wait_for\('window:<expected title>', timeout=30\) or windows\(\) in a moment",
+        "call wait with seconds set to 10, then call look",
+    ),
+    (
+        r"zoom or find_text first to see what is actually there",
+        "call look, or read_text, to see what is actually there",
+    ),
+    (
+        r"screenshot to see what the browser did",
+        "call {see} to see what the browser did",
+    ),
+    (
+        r"list_windows or screenshot shows where it went",
+        "{see} shows where it went",
+    ),
+    (
+        r"list_windows shows where it went",
+        "{see} shows where it went",
+    ),
+    (
+        r"list_windows shows what is open",
+        "look shows the front window",
+    ),
+    (r"look at the screenshot", "call {see}"),
+    (
+        r"no element (\d+) in the last read of that window; read it first",
+        "no element $1 in the latest list; call look first",
+    ),
+    (
+        r"page changed since read:",
+        "the list was made before the screen changed:",
+    ),
+    (r"; read again", "; call look again"),
+    (
+        r"an element number from read, e\.g\.",
+        "an item number from look, e.g.",
+    ),
+    (
+        r"wait_for_text: no new (.+?) appeared",
+        "wait: no new $1 appeared",
+    ),
+    (r"wait_for_text: ", "wait: "),
+    (r"wait_for_file: ", "wait: "),
+    (
+        r"or read_page/read_text for content",
+        "or read_text for content",
+    ),
+    (
+        r"\(accessibility tree looks empty:[^)]*\)",
+        "(nothing listed yet: the app may still be loading; call wait, then call look)",
+    ),
+    (
+        r"\(this app exposes no clickable elements[^)]*\)",
+        "(this app lists nothing to press: it draws its own screen. Use read_text for its words.)",
+    ),
+    (
+        r"coordinate (\[[^\]]*\]|\S+) is outside the (\d+x\d+) screenshot",
+        "that point is outside the $2 picture",
+    ),
+    (
+        r"Pass nth to pick one",
+        "Press a longer label, or call look and press a number",
+    ),
+    (r"@\[-?\d+, -?\d+\]", ""),
+    (
+        r"ambiguous window (.+?); use a wN ref from windows",
+        "ambiguous window $1; give more of its title",
+    ),
+    (
+        r"Use a wN ref, or all=true",
+        "Give more of the window title",
+    ),
+    (r"so pass window=\.\.\.", "so call open with an app name"),
+    (
+        r"\(truncated, (\d+) more; pass filter= to narrow\)",
+        "($1 more not shown; call look with filter set to the words you want)",
+    ),
+];
+
+/// Names that exist only in the full tool, last resort for any text a rule above did not catch.
+const WORDS: &[(&str, &str)] = &[
+    (
+        r"\bwait_for_text\b|\bwait_for_file\b|\bwait_for\b\(?",
+        "wait",
+    ),
+    (r"\blist_windows\b|\bwindows\(\)", "look"),
+    (r"\bread_page\b|\bfind_text\b", "read_text"),
+    (r"\bclick_text\b", "press"),
+    (r"\bopen_app\b", "open"),
+    (r"\bfile_dialog\b", "type"),
+    (r"\bsnapshot\b|\bzoom\b|\bscreenshot\b", "{see}"),
+    (r"\bnth\b", "number"),
+    (r"\bcoordinates\b", "positions"),
+    (r"\bcoordinate\b", "position"),
+];
+
+static HINT_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    HINTS
+        .iter()
+        .map(|(p, r)| (Regex::new(p).expect("hint rule"), *r))
+        .collect()
+});
+static WORD_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    WORDS
+        .iter()
+        .map(|(p, r)| (Regex::new(p).expect("word rule"), *r))
+        .collect()
+});
+
+/// `text` with every phrase and tool name that only the full tool has put into the simple tools'
+/// words. Known hints are rewritten into a call the simple profile has; any other full-tool name
+/// is swapped for the nearest simple tool.
+pub fn simplify(text: &str, profile: Profile) -> String {
+    let see = if profile == Profile::SimpleVision {
+        "screenshot"
+    } else {
+        "look"
+    };
+    // a picture tool exists only with pictures
+    let fill = |r: &str| r.replace("{see}", see);
+    let mut out = text.to_string();
+    for (re, rep) in HINT_RULES.iter().chain(WORD_RULES.iter()) {
+        if re.is_match(&out) {
+            out = re.replace_all(&out, fill(rep).as_str()).into_owned();
+        }
+    }
+    out
 }
 
 fn truncated_count(line: &str) -> Option<usize> {
@@ -743,32 +967,58 @@ fn truncated_count(line: &str) -> Option<usize> {
 /// The `read` text cut to `max_items` numbered items and `max_chars` characters, with a line saying
 /// how many more exist.
 pub fn shape_list(text: &str, max_items: usize, max_chars: usize) -> String {
-    let (mut head, mut items, mut tail) = (Vec::new(), Vec::new(), Vec::new());
+    // Items come in groups, each under an optional heading ("Dialog: ..." lists first, then
+    // "Window:"). A heading is kept only when an item under it is shown.
+    let (mut head, mut tail) = (Vec::new(), Vec::new());
+    let mut groups: Vec<(Option<&str>, Vec<&str>)> = vec![(None, Vec::new())];
     let mut elsewhere = 0usize;
     for line in text.lines().map(str::trim_end).filter(|l| !l.is_empty()) {
         if line.starts_with("window ") {
             head.push(line);
+        } else if line.starts_with("Dialog:") || line == "Window:" {
+            groups.push((Some(line), Vec::new()));
         } else if line.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            items.push(line);
+            if let Some(g) = groups.last_mut() {
+                g.1.push(line);
+            }
         } else if let Some(more) = truncated_count(line) {
             elsewhere += more;
         } else {
             tail.push(line);
         }
     }
+    let total: usize = groups.iter().map(|g| g.1.len()).sum();
     let mut out: Vec<String> = head.iter().map(|l| (*l).to_string()).collect();
     let mut used: usize = out.iter().map(|l| l.chars().count() + 1).sum();
     let mut shown = 0;
-    for line in &items {
-        let cost = line.chars().count() + 1;
-        if shown >= max_items || used + cost > max_chars {
-            break;
+    let mut dialog_shown = false;
+    'groups: for (heading, items) in &groups {
+        let mut opened = false;
+        for line in items {
+            let cost = line.chars().count() + 1;
+            let head_cost = match heading {
+                Some(h) if !opened => h.chars().count() + 1,
+                _ => 0,
+            };
+            if shown >= max_items || used + cost + head_cost > max_chars {
+                break 'groups;
+            }
+            if let Some(h) = heading
+                && !opened
+            {
+                dialog_shown |= h.starts_with("Dialog:");
+                if dialog_shown {
+                    out.push((*h).to_string());
+                    used += head_cost;
+                }
+            }
+            opened = true;
+            out.push((*line).to_string());
+            used += cost;
+            shown += 1;
         }
-        out.push((*line).to_string());
-        used += cost;
-        shown += 1;
     }
-    let hidden = items.len() - shown + elsewhere;
+    let hidden = total - shown + elsewhere;
     if hidden > 0 {
         out.push(format!(
             "({hidden} more not shown; call look with filter set to the words you want)"
