@@ -189,6 +189,7 @@ impl CallOpts {
             saved_paths: Default::default(),
             private_output: Default::default(),
             input_follows: Default::default(),
+            types_next: Default::default(),
             copied_text: Default::default(),
             deadline: Some(c.clock.now().saturating_add(budget)),
             max_chars: args
@@ -219,6 +220,7 @@ impl CallOpts {
             saved_paths: Default::default(),
             private_output: Default::default(),
             input_follows: Default::default(),
+            types_next: Default::default(),
             copied_text: Default::default(),
             deadline: None,
             max_chars: None,
@@ -598,6 +600,12 @@ impl Ctx<'_> {
             self.o
                 .input_follows
                 .store(input_follows, std::sync::atomic::Ordering::Relaxed);
+            self.o.types_next.store(
+                items
+                    .get(i + 1)
+                    .is_some_and(|n| n.step.get("action").and_then(Value::as_str) == Some("type")),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             let notes_before_step = notes.len();
             let events_before_step = if asking { self.be().input_events() } else { 0 };
             if !item.header.is_empty() {
@@ -1016,6 +1024,8 @@ impl Computer {
     /// fields. Never fails: a refusal or an error comes back as `ok: false`. Python
     /// `_execute_tool(path="computer", ...)`.
     pub fn execute(&self, args: &Value, who: &Caller) -> ToolOutcome {
+        let aliased = crate::actions::resolve_aliases(args);
+        let args = &aliased;
         crate::prof::reset();
         self.idle.touch(self.clock.as_ref());
         if args.get("action").and_then(Value::as_str) == Some("status")

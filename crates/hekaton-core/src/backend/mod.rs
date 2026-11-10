@@ -222,6 +222,19 @@ pub trait Backend: Send + Sync {
     /// Replaces `computer.py:_uwp_app_name`.
     fn hosted_app(&self, window: WindowRef) -> BackendResult<Option<String>>;
 
+    /// Other names the app that owns `window` goes by besides `WindowInfo::app` (macOS: its display
+    /// name, such as "Brave Browser"). Used only to compare against an `only_apps` entry for
+    /// equality. Empty when the backend knows no other name.
+    fn app_names(&self, _window: WindowRef) -> BackendResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    /// Other names for what a launch name resolved to (macOS: the bundle id inside an `.app`). The
+    /// core adds the file names it can read from the target itself. Empty by default.
+    fn target_names(&self, _target: &AppTarget) -> Vec<String> {
+        Vec::new()
+    }
+
     /// A small dialog's title plus its static text lines, for reporting what a popup asks.
     ///
     /// Replaces `computer.py:_window_text`.

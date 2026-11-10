@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Verification form</title></head>
+<body>
+<h1>Verification form</h1>
+<p><label for="ref">Reference value</label> <input id="ref" type="text"></p>
+<p><button id="verify" type="button">Verify</button></p>
+<p id="result" role="status"></p>
+<script>
+var SALT="s9-willow";
+function code(s){var h=7;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))%1000003;}return "K"+("000000"+h).slice(-6);}
+document.getElementById("verify").onclick=function(){
+var v=document.getElementById("ref").value.trim(),r=document.getElementById("result");
+if(!v){r.textContent="Enter the reference value.";return;}
+r.textContent="Verified. Confirmation code: "+code(["link",v].join("|")+"|"+SALT);};
+</script>
+</body></html>

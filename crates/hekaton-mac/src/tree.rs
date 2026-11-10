@@ -197,6 +197,7 @@ pub(crate) fn make_element(id: ElementId, props: &Props, window_rect: Option<Rec
         state,
         affordances,
         children: Vec::new(),
+        in_dialog: false,
     }
 }
 
@@ -224,6 +225,8 @@ struct Node {
     kept: bool,
     /// The element is a web view or inside one: the page, not the browser's own chrome.
     web: bool,
+    /// The element is a dialog, sheet or alert: it and everything under it is marked `in_dialog`.
+    dialog: bool,
     kids: Vec<Node>,
 }
 
@@ -384,26 +387,40 @@ impl Walk<'_> {
             ax,
             kept,
             web: web || self.web_depth > 0,
+            dialog: crate::roles::is_dialog_like(
+                &props.role,
+                props.subrole.as_deref(),
+                props.role_description.as_deref(),
+            ),
             kids,
         })
     }
 }
 
 /// Kept elements in document order, each with whether it belongs to a web page.
-fn collect_flat(node: Node, reg: &Registry, window: WindowRef, out: &mut Vec<(Element, bool)>) {
+fn collect_flat(
+    node: Node,
+    reg: &Registry,
+    window: WindowRef,
+    in_dialog: bool,
+    out: &mut Vec<(Element, bool)>,
+) {
     let Node {
         mut el,
         ax,
         kept,
         web,
+        dialog,
         kids,
     } = node;
+    let in_dialog = in_dialog || dialog;
     if kept {
         el.id = reg.insert(ax, Some(window));
+        el.in_dialog = in_dialog;
         out.push((el, web));
     }
     for k in kids {
-        collect_flat(k, reg, window, out);
+        collect_flat(k, reg, window, in_dialog, out);
     }
 }
 
@@ -473,7 +490,7 @@ fn walk_window(
     if limits.flatten {
         let mut flat = Vec::new();
         for k in kids {
-            collect_flat(k, reg, window, &mut flat);
+            collect_flat(k, reg, window, false, &mut flat);
         }
         // The page first, then the browser's own chrome (tab strip, toolbar): a model reading a
         // browser wants the page, and Brave lists every open tab as a radio button (2026-10-30), which

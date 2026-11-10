@@ -29,6 +29,10 @@ pub(crate) struct UiaElem {
     pub has_value: bool,
     /// A kind a person presses (button, link, menu item, tab, ...), not static text.
     pub actionable: bool,
+    /// A text field.
+    pub editable: bool,
+    /// Part of a browser's own tab strip or toolbar, not of the page.
+    pub chrome: bool,
 }
 
 /// The kinds click_text prefers when a word matches both body text and a control: things a click
@@ -59,6 +63,10 @@ pub(crate) struct Cand {
     /// Known to be a control (an accessibility button, link, menu item, ...). OCR and document-text
     /// hits are never known to be.
     pub actionable: bool,
+    /// Known to be a text field.
+    pub editable: bool,
+    /// Known to belong to a browser's own tab strip, toolbar or bookmarks bar, not to the page.
+    pub chrome: bool,
 }
 
 /// A label or query as the words it carries: case folded, whitespace runs as one space, a trailing
@@ -72,27 +80,36 @@ pub(crate) fn words_of(s: &str) -> String {
     t.trim_end_matches([':', '.']).trim_end().to_string()
 }
 
-/// Which candidates a click_text with no `nth` may choose between. Controls first, whatever found
-/// them (2026-10-30 unattended run: a common word matched body text and a link and click_text
-/// refused). Without a control, a label that is exactly the words asked for beats one that only
-/// contains them inside a longer sentence (2026-10-30 later run: "Check All" matched an instruction
-/// sentence and the real link, both read off the screen, where nothing says which is the link, and it
-/// still refused). Several controls stay ambiguous, as before. Indexes into `cands`, so the numbers
-/// `nth` takes stay the same.
-pub(crate) fn click_choices(cands: &[Cand], query: &str) -> Vec<usize> {
-    let actionable: Vec<usize> = (0..cands.len()).filter(|&i| cands[i].actionable).collect();
-    if !actionable.is_empty() {
-        return actionable;
-    }
+/// Which candidates a click_text with no `nth` may choose between. The rules narrow the list one
+/// after the other, and a rule that would leave nothing is skipped:
+///
+/// 1. When the click is meant to type (`typing`), a text field beats everything.
+/// 2. A label that is exactly the words asked for (case, spacing, a trailing colon ignored) beats one
+///    that only contains them ("Save" is not "Save as type:"; "OK" is not "Bookmark this tab").
+/// 3. A control (button, link, field, checkbox, radio, menu item) beats plain text.
+/// 4. The page beats the browser's own tab strip, toolbar and bookmarks bar.
+///
+/// Earlier history: 2026-10-30 a common word matched body text and a link and click_text refused;
+/// "Check All" matched an instruction sentence and the real link. 2026-11-09 a small local model hit
+/// "Save" on "Save as type:", "OK" on the bookmark star, and "Full name" on a caption instead of the
+/// field. Several candidates left after all four rules stay ambiguous. Indexes into `cands`, so the
+/// numbers `nth` takes stay the same.
+pub(crate) fn click_choices(cands: &[Cand], query: &str, typing: bool) -> Vec<usize> {
     let q = words_of(query);
-    let exact: Vec<usize> = (0..cands.len())
-        .filter(|&i| words_of(&cands[i].label) == q)
-        .collect();
-    if exact.is_empty() {
-        (0..cands.len()).collect()
-    } else {
-        exact
+    let mut idx: Vec<usize> = (0..cands.len()).collect();
+    let mut narrow = |keep: &dyn Fn(&Cand) -> bool| {
+        let kept: Vec<usize> = idx.iter().copied().filter(|&i| keep(&cands[i])).collect();
+        if !kept.is_empty() {
+            idx = kept;
+        }
+    };
+    if typing {
+        narrow(&|c| c.editable);
     }
+    narrow(&|c| words_of(&c.label) == q);
+    narrow(&|c| c.actionable || c.editable);
+    narrow(&|c| !c.chrome);
+    idx
 }
 
 /// Drop a candidate with the same label at the same spot as an earlier one. 2026-10-28 Mac stress
@@ -136,7 +153,7 @@ pub(crate) struct RowItem {
     pub label: String,
 }
 
-fn keep(e: &Element, out: &mut Vec<UiaElem>) {
+fn keep(e: &Element, chrome: bool, out: &mut Vec<UiaElem>) {
     let name = e.name.trim();
     let Some(rect) = e.rect.filter(|r| !r.is_empty()) else {
         return;
@@ -150,6 +167,8 @@ fn keep(e: &Element, out: &mut Vec<UiaElem>) {
         value: e.value.clone(),
         has_value: e.value.is_some() || e.affordances.contains(&crate::backend::Affordance::Value),
         actionable: is_actionable(&e.role),
+        editable: e.role == Role::Edit,
+        chrome,
     });
 }
 
@@ -335,9 +354,11 @@ impl Ctx<'_> {
             return Vec::new();
         };
         let mut out = Vec::new();
-        keep(&tree.root, &mut out);
-        for e in &tree.root.children {
-            keep(e, &mut out);
+        keep(&tree.root, false, &mut out);
+        // the page's items come first; what follows is the browser's own tabs, toolbar and bookmarks
+        let page = tree.web_items.unwrap_or(usize::MAX);
+        for (i, e) in tree.root.children.iter().enumerate() {
+            keep(e, i >= page, &mut out);
         }
         out
     }
@@ -435,6 +456,12 @@ impl Ctx<'_> {
     /// sees it), then UIA element names in the foreground window, then OCR words if UIA found
     /// nothing. Python `_locate_text`.
     pub(crate) fn locate_text(&self, query: &str) -> StepResult<Vec<Cand>> {
+        self.locate_text_for(query, false)
+    }
+
+    /// [`Self::locate_text`]. With `typing` (the click is the first half of a click-then-type), a
+    /// caption that is plain text and sits just before a text field stands for that field too.
+    pub(crate) fn locate_text_for(&self, query: &str, typing: bool) -> StepResult<Vec<Cand>> {
         let q = query.trim().to_lowercase();
         if q.is_empty() {
             return Ok(Vec::new());
@@ -474,6 +501,8 @@ impl Ctx<'_> {
                         source: "menu",
                         label: m.name.clone(),
                         actionable: true,
+                        editable: false,
+                        chrome: false,
                     }
                 })
                 .collect();
@@ -481,26 +510,54 @@ impl Ctx<'_> {
                 return Ok(cands);
             }
         }
-        let cands: Vec<Cand> = self
-            .uia_elements(self.fg_root(), None)
-            .into_iter()
-            .filter(|e| e.name.to_lowercase().contains(&q))
+        let elems = self.uia_elements(self.fg_root(), None);
+        let visible = |e: &UiaElem| {
+            let c = e.rect.center();
             // scoped: the title bar is not in view
-            .filter(|e| {
-                let c = e.rect.center();
-                self.in_view(f64::from(c.x), f64::from(c.y))
-            })
-            .map(|e| {
-                let c = e.rect.center();
-                Cand {
-                    x: c.x,
-                    y: c.y,
-                    source: "uia",
-                    label: e.name,
-                    actionable: e.actionable,
-                }
-            })
+            self.in_view(f64::from(c.x), f64::from(c.y))
+        };
+        let cand_of = |e: &UiaElem| {
+            let c = e.rect.center();
+            Cand {
+                x: c.x,
+                y: c.y,
+                source: "uia",
+                label: e.name.clone(),
+                actionable: e.actionable,
+                editable: e.editable,
+                chrome: e.chrome,
+            }
+        };
+        let mut cands: Vec<Cand> = elems
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&q))
+            .filter(|e| visible(e))
+            .map(cand_of)
             .collect();
+        if typing {
+            // a caption labels the next field in the tree ("Full name" above an edit named by its
+            // placeholder): the field is what a person types into
+            for (i, e) in elems.iter().enumerate() {
+                if e.editable || !e.name.to_lowercase().contains(&q) || !visible(e) {
+                    continue;
+                }
+                if let Some(f) = elems
+                    .iter()
+                    .skip(i + 1)
+                    .take(3)
+                    .find(|f| f.editable && visible(f))
+                {
+                    let c = cand_of(f);
+                    if !cands.contains(&c) {
+                        cands.push(Cand {
+                            // the caption's words, so the field is as exact as the caption was
+                            label: e.name.clone(),
+                            ..c
+                        });
+                    }
+                }
+            }
+        }
         let cands = one_per_spot(cands);
         if !cands.is_empty() {
             return Ok(cands);
@@ -520,6 +577,8 @@ impl Ctx<'_> {
                     source: "uia",
                     label: query.trim().to_string(),
                     actionable: false,
+                    editable: false,
+                    chrome: false,
                 }
             })
             .collect();
@@ -555,6 +614,8 @@ impl Ctx<'_> {
                     source: "ocr",
                     label: word.to_string(),
                     actionable: false,
+                    editable: false,
+                    chrome: false,
                 });
             }
         }
@@ -566,11 +627,12 @@ impl Ctx<'_> {
     /// rather than exposed to accessibility, so OCR is asked too and its exact-label lines join the
     /// list, after the tree's matches. 2026-10-30: "Check All" was clicked as the sentence around it.
     pub(crate) fn locate_click_text(&self, query: &str) -> StepResult<Vec<Cand>> {
-        let mut cands = self.locate_text(query)?;
+        let typing = self.o.types_next.load(std::sync::atomic::Ordering::Relaxed);
+        let mut cands = self.locate_text_for(query, typing)?;
         let q = words_of(query);
         let settled = cands
             .iter()
-            .any(|c| c.actionable || words_of(&c.label) == q);
+            .any(|c| c.actionable || c.editable || words_of(&c.label) == q);
         if cands.is_empty() || settled || cands.iter().any(|c| c.source != "uia") {
             return Ok(cands);
         }

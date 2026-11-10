@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Contact card</title></head>
+<body>
+<h1>Contact card</h1>
+<p><label for="name">Full name</label> <input id="name" type="text"></p>
+<p><label for="email">Email address</label> <input id="email" type="email"></p>
+<p><button id="save" type="button">Save</button></p>
+<p id="result" role="status"></p>
+<script>
+var SALT="s4-ember";
+function code(s){var h=7;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))%1000003;}return "K"+("000000"+h).slice(-6);}
+document.getElementById("save").onclick=function(){
+var n=document.getElementById("name").value.trim(),e=document.getElementById("email").value.trim();
+var r=document.getElementById("result");
+if(!n||!e){r.textContent="Please fill both fields.";return;}
+r.textContent="Saved. Confirmation code: "+code(["form",n,e].join("|")+"|"+SALT);};
+</script>
+</body></html>

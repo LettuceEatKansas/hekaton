@@ -1163,6 +1163,43 @@ fn open_url_in_an_already_front_browser_waits_for_the_title_to_change() {
     assert!(note.contains("Example Domain - Brave"), "{note}");
 }
 
+// 2026-11-09: the page opened as a tab of a browser window that was NOT in front, and the title of
+// that window changed. That is a success, not "did not navigate".
+#[test]
+fn open_url_succeeds_when_a_background_browser_window_shows_the_page() {
+    let d = Desk::new();
+    let b = d.add("New Tab - Brave", "brave.exe", "Chrome_WidgetWin_1");
+    let t = d.add("terminal", "terminal.exe", "t");
+    d.kit.fake.set_foreground(Some(t));
+    d.kit.fake.set_launch_hook(move |fake, _| {
+        fake.update_window(b, |i| i.title = "Example Domain - Brave".into());
+    });
+    let note = d
+        .kit
+        .ctx(json!({}))
+        .open_url("https://example.com", 8.0)
+        .unwrap();
+    assert!(note.contains("Example Domain - Brave"), "{note}");
+}
+
+// ... or when another window of the browser came to the front with the page showing.
+#[test]
+fn open_url_succeeds_when_another_browser_window_comes_to_the_front() {
+    let d = Desk::new();
+    let a = d.add("One - Brave", "brave.exe", "Chrome_WidgetWin_1");
+    let b = d.add("Two - Brave", "brave.exe", "Chrome_WidgetWin_1");
+    d.kit.fake.set_foreground(Some(b));
+    d.kit
+        .fake
+        .set_launch_hook(move |fake, _| fake.set_foreground(Some(a)));
+    let note = d
+        .kit
+        .ctx(json!({}))
+        .open_url("https://example.com", 8.0)
+        .unwrap();
+    assert!(note.contains("One - Brave"), "{note}");
+}
+
 // A browser in front whose title never changes did not navigate: that is an error that says so, and
 // the error names the title it still shows.
 #[test]

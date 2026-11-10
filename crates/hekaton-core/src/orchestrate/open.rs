@@ -495,13 +495,31 @@ impl Ctx<'_> {
 
         let before_pids: BTreeSet<u32> = wins.iter().map(|w| w.pid).collect();
         let before_windows: BTreeSet<WindowRef> = wins.iter().map(|w| w.window).collect();
+        // A web address handed to a browser through `open_app` ("brave https://x", "file:///x.html")
+        // normally opens as a TAB of a window that already exists, so no new window or process shows
+        // up. For those launches a browser window that now shows another page counts as success.
+        let opens_page = app_stripped.split_whitespace().any(|t| {
+            let t = t.trim_matches('"').to_lowercase();
+            super::shortcuts::is_url(&t) || t.starts_with("file://")
+        });
+        let before_titles: std::collections::HashMap<WindowRef, String> =
+            wins.iter().map(|w| (w.window, w.title.clone())).collect();
+        let fg0 = self.fg_root();
 
         // 2026-09-19: focus a running instance before launching another. Launching Notepad while it
         // runs restores its whole old session (every tab, unsaved ones included) and the new window
         // can vanish again, so a following "type" lands somewhere unknown. Only for a bare app name:
         // "explorer C:\path" still launches because the argument matters. reuse=False forces a
         // launch.
-        if reuse && !app_stripped.contains(char::is_whitespace) {
+        // A name of several words ("Brave Browser") counts as bare when the backend resolves the whole
+        // text to an installed app on macOS; with arguments it would not.
+        let bare_name = !app_stripped.contains(char::is_whitespace)
+            || (!cfg!(windows)
+                && matches!(
+                    self.be().resolve_app(&app_stripped).ok().flatten(),
+                    Some(AppTarget::Shortcut(_) | AppTarget::Packaged(_))
+                ));
+        if reuse && bare_name {
             let lower = app_stripped.to_lowercase();
             let stem = removesuffix_exe(&basename(known_exe(&lower).unwrap_or(&app_stripped)));
             let alias = TITLE_ALIASES
@@ -519,7 +537,14 @@ impl Ctx<'_> {
             // new window that never comes (2026-10-28 Holo demo). Match the bundle id's last part.
             let proc_is = |p: &str| {
                 let p = removesuffix_exe(p);
-                p == stem || (!cfg!(windows) && p.rsplit('.').next() == Some(stem.as_str()))
+                let p = p.to_lowercase();
+                // a display name of several words ("Brave Browser") is the tail of the bundle id
+                // (com.brave.browser)
+                p == stem
+                    || (!cfg!(windows)
+                        && (p.rsplit('.').next() == Some(stem.as_str())
+                            || (stem.contains(' ')
+                                && p.ends_with(&format!(".{}", stem.replace(' ', "."))))))
             };
             // Store apps (Calculator) run under ApplicationFrameHost, so match the title too.
             let same: Vec<&WindowLine> = wins
@@ -624,6 +649,15 @@ impl Ctx<'_> {
             // 2026-10-28: 50 ms polls (listing windows costs ~2 ms); 200 ms wasted ~100 ms per launch.
             self.sleep(0.05);
             let wins2 = self.c.window_refs().list(false)?;
+            if opens_page && let Some(page) = self.browser_page_changed(&wins2, &before_titles, fg0)
+            {
+                let t = self.raise_browser(page, &wins2)?;
+                return Ok(format!(
+                    "ok opened the page in {} ({})",
+                    t.label(),
+                    t.process
+                ));
+            }
             for w in wins2 {
                 // Explorer reuses one process for every window, so a new PID never appears. Accept a
                 // new window handle from a known app process as well.

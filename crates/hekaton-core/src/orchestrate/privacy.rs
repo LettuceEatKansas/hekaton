@@ -109,7 +109,7 @@ impl Ctx<'_> {
             return false;
         }
         if super::guard::SHELL.contains(&name.as_str())
-            || self.o.only_apps.contains(&name)
+            || self.entry_equals_any(&super::guard::name_forms(&name))
             || self.allows_bundle_name(&name)
         {
             return false;

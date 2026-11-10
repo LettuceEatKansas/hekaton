@@ -1315,7 +1315,7 @@ fn click_text_with_two_matches_lists_them_and_nth_picks_one() {
     app_with(
         &kit,
         &[
-            ("Save", Role::Button, Rect::new(10, 10, 50, 30)),
+            ("Save File", Role::Button, Rect::new(10, 10, 50, 30)),
             ("Save As", Role::Button, Rect::new(60, 40, 100, 60)),
         ],
     );
@@ -1323,7 +1323,7 @@ fn click_text_with_two_matches_lists_them_and_nth_picks_one() {
     assert!(matches!(err, StepError::Target(_)));
     assert_eq!(
         err.message(),
-        "2 matches for 'save', ambiguous: 1: 'Save'@[30, 20], 2: 'Save As'@[80, 50]. Pass nth to pick one"
+        "2 matches for 'save', ambiguous: 1: 'Save File'@[30, 20], 2: 'Save As'@[80, 50]. Pass nth to pick one"
     );
     kit.step(json!({"action": "click_text", "text": "save", "nth": 2}))
         .unwrap();
@@ -1395,14 +1395,14 @@ fn click_text_stays_ambiguous_between_two_controls() {
         &kit,
         &[
             ("Next steps", Role::Text, Rect::new(10, 10, 50, 30)),
-            ("Next", Role::Button, Rect::new(60, 40, 100, 60)),
+            ("Next up", Role::Button, Rect::new(60, 40, 100, 60)),
             ("Next page", Role::Hyperlink, Rect::new(110, 70, 150, 90)),
         ],
     );
     let err = err_of(kit.step(json!({"action": "click_text", "text": "next"})));
     assert_eq!(
         err.message(),
-        "2 matches for 'next', ambiguous: 2: 'Next'@[80, 50], 3: 'Next page'@[130, 80]. Pass nth to pick one"
+        "2 matches for 'next', ambiguous: 2: 'Next up'@[80, 50], 3: 'Next page'@[130, 80]. Pass nth to pick one"
     );
 }
 
@@ -2371,4 +2371,135 @@ fn a_plain_allow_is_clicked_but_lasting_grants_and_tainted_prompts_are_not() {
         tainted.message()
     );
     assert_eq!(clicks(&kit).len(), 1);
+}
+
+#[test]
+fn click_and_hover_work_as_actions_alone_and_in_a_batch() {
+    let kit = Kit::new();
+    for payload in [
+        json!({"action": "click", "coordinate": [5, 5]}),
+        json!({"action": "hover", "coordinate": [6, 6]}),
+        json!({"actions": [
+            {"action": "hover", "coordinate": [7, 7]},
+            {"action": "click", "coordinate": [8, 8]}
+        ]}),
+    ] {
+        let out = kit.computer.execute(&payload, &kit.who);
+        let said = format!("{:?} {:?}", out.result, out.error);
+        assert!(out.ok, "{payload}: {said}");
+        assert!(!said.contains("unknown action"), "{said}");
+    }
+}
+
+// ---- 2026-11-09: read lists open dialogs, sheets and alerts first, marked, with numbers press takes.
+
+fn button(id: &str, name: &str, y: i32) -> Element {
+    let mut b = Element::new(id, Role::Button, name).at(Rect::new(10, y, 90, y + 20));
+    b.affordances.push(crate::backend::Affordance::Invoke);
+    b
+}
+
+#[test]
+fn read_lists_a_dialog_window_of_the_app_first_and_its_numbers_press() {
+    let kit = Kit::new();
+    let main = kit.front("Doc", "editor.exe", 50);
+    let dlg = {
+        let mut i = crate::backend::WindowInfo::basic(
+            "Save as",
+            "editor.exe",
+            50,
+            Rect::from_xywh(5, 5, 60, 60),
+        );
+        i.kind = crate::backend::WindowKind::Dialog;
+        kit.fake.add_window(i)
+    };
+    kit.fake.set_tree(
+        main,
+        Element::new("root", Role::Window, "Doc")
+            .with_child(button("b_new", "New", 10))
+            .with_child(button("b_open", "Open", 40)),
+    );
+    kit.fake.set_tree(
+        dlg,
+        Element::new("droot", Role::Window, "Save as")
+            .with_child(button("b_save", "Save", 10))
+            .with_child(button("b_cancel", "Cancel", 40)),
+    );
+    let (out, _) = kit.step(json!({"action": "read", "text": "Doc"})).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or(usize::MAX)
+    };
+    assert!(
+        at("Dialog: 'Save as'") < at("\"Save\"") && at("\"Save\"") < at("Window:"),
+        "{out}"
+    );
+    assert!(at("Window:") < at("\"New\""), "{out}");
+    // the dialog's numbers follow the window's, and press takes them
+    assert!(
+        out.contains("2 Button \"Save\"") && out.contains("0 Button \"New\""),
+        "{out}"
+    );
+    kit.step(json!({"action": "press", "text": "2"})).unwrap();
+    assert_eq!(kit.fake.performed().len(), 1);
+    // no dialog: no heading
+    let kit2 = Kit::new();
+    let w2 = kit2.front("Doc", "editor.exe", 50);
+    kit2.fake.set_tree(
+        w2,
+        Element::new("root", Role::Window, "Doc").with_child(button("b", "New", 10)),
+    );
+    let (plain, _) = kit2.step(json!({"action": "read", "text": "Doc"})).unwrap();
+    assert!(
+        !plain.contains("Dialog:") && !plain.contains("Window:"),
+        "{plain}"
+    );
+}
+
+#[test]
+fn read_lists_a_sheet_inside_the_window_first_with_its_own_numbers() {
+    let kit = Kit::new();
+    let w = kit.front("Doc", "editor.exe", 50);
+    let mut sheet_ok = button("b_ok", "Replace", 40);
+    sheet_ok.in_dialog = true;
+    kit.fake.set_tree(
+        w,
+        Element::new("root", Role::Window, "Doc")
+            .with_child(button("b_new", "New", 10))
+            .with_child(sheet_ok),
+    );
+    let (out, _) = kit.step(json!({"action": "read", "text": "Doc"})).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or(usize::MAX)
+    };
+    assert!(
+        at("Dialog:") < at("Replace") && at("Replace") < at("Window:") && at("Window:") < at("New"),
+        "{out}"
+    );
+    assert!(out.contains("1 Button \"Replace\""), "{out}");
+    kit.step(json!({"action": "press", "text": "1"})).unwrap();
+}
+
+// 2026-11-09: "scrolled down 30" for an amount of 100 said nothing about the cap.
+#[test]
+fn scroll_says_when_the_amount_was_capped() {
+    let kit = Kit::new();
+    let (note, _) = kit
+        .step(json!({"action": "scroll", "scroll_direction": "down", "scroll_amount": 100}))
+        .unwrap();
+    assert!(
+        note.starts_with("scrolled down 30 (capped: 100 was asked") && note.contains("at most 30"),
+        "{note}"
+    );
+    let (note, _) = kit
+        .step(json!({"action": "scroll", "scroll_direction": "up", "scroll_amount": 30}))
+        .unwrap();
+    assert_eq!(note, "scrolled up 30");
 }

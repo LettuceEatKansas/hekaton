@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Five questions</title></head>
+<body>
+<h1>Five questions</h1>
+<fieldset><legend>Favorite color</legend>
+<input type="radio" id="q1-red" name="q1" value="red"> <label for="q1-red">Red</label>
+<input type="radio" id="q1-green" name="q1" value="green"> <label for="q1-green">Green</label>
+<input type="radio" id="q1-blue" name="q1" value="blue"> <label for="q1-blue">Blue</label>
+</fieldset>
+<fieldset><legend>Pet</legend>
+<input type="radio" id="q2-cat" name="q2" value="cat"> <label for="q2-cat">Cat</label>
+<input type="radio" id="q2-dog" name="q2" value="dog"> <label for="q2-dog">Dog</label>
+<input type="radio" id="q2-fish" name="q2" value="fish"> <label for="q2-fish">Fish</label>
+</fieldset>
+<fieldset><legend>Season</legend>
+<input type="radio" id="q3-spring" name="q3" value="spring"> <label for="q3-spring">Spring</label>
+<input type="radio" id="q3-summer" name="q3" value="summer"> <label for="q3-summer">Summer</label>
+<input type="radio" id="q3-autumn" name="q3" value="autumn"> <label for="q3-autumn">Autumn</label>
+<input type="radio" id="q3-winter" name="q3" value="winter"> <label for="q3-winter">Winter</label>
+</fieldset>
+<fieldset><legend>Drink</legend>
+<input type="radio" id="q4-tea" name="q4" value="tea"> <label for="q4-tea">Tea</label>
+<input type="radio" id="q4-coffee" name="q4" value="coffee"> <label for="q4-coffee">Coffee</label>
+<input type="radio" id="q4-water" name="q4" value="water"> <label for="q4-water">Water</label>
+</fieldset>
+<fieldset><legend>Transport</legend>
+<input type="radio" id="q5-bike" name="q5" value="bike"> <label for="q5-bike">Bike</label>
+<input type="radio" id="q5-train" name="q5" value="train"> <label for="q5-train">Train</label>
+<input type="radio" id="q5-car" name="q5" value="car"> <label for="q5-car">Car</label>
+</fieldset>
+<p><button id="submit" type="button">Submit answers</button></p>
+<p id="result" role="status"></p>
+<script>
+var SALT="s7-granite";
+function code(s){var h=7;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))%1000003;}return "K"+("000000"+h).slice(-6);}
+document.getElementById("submit").onclick=function(){
+var v=[],r=document.getElementById("result");
+for(var i=1;i<=5;i++){var el=document.querySelector('input[name="q'+i+'"]:checked');if(!el){r.textContent="Answer all five questions.";return;}v.push(el.value);}
+r.textContent="Submitted. Confirmation code: "+code(["quiz"].concat(v).join("|")+"|"+SALT);};
+</script>
+</body></html>

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Sales table</title></head>
+<body>
+<h1>Sales table</h1>
+<table border="1"><caption>Quarterly sales</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Q1</th><th scope="col">Q2</th><th scope="col">Total</th></tr></thead>
+<tbody>
+<tr><td>Alice</td><td>North</td><td>310.00</td><td>295.25</td><td>605.25</td></tr>
+<tr><td>Dan</td><td>South</td><td>120.50</td><td>99.00</td><td>219.50</td></tr>
+<tr><td>Dana</td><td>East</td><td>402.75</td><td>440.00</td><td>842.75</td></tr>
+<tr><td>Danielle</td><td>West</td><td>77.00</td><td>150.00</td><td>227.00</td></tr>
+<tr><td>Evan</td><td>North</td><td>210.00</td><td>188.10</td><td>398.10</td></tr>
+</tbody></table>
+<script>
+function code(s){var h=7;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))%1000003;}return "K"+("000000"+h).slice(-6);}
+
+</script>
+</body></html>

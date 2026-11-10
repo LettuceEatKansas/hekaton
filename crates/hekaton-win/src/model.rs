@@ -164,6 +164,7 @@ pub(crate) fn element_from_props(id: ElementId, p: &Props) -> Element {
         state,
         affordances,
         children: Vec::new(),
+        in_dialog: false,
     }
 }
 

@@ -34,6 +34,7 @@ pub mod request;
 pub mod safety;
 pub mod scale;
 pub mod settle;
+pub mod simple;
 pub mod state;
 pub mod textutil;
 pub mod token;

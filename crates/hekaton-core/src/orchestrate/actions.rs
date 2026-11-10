@@ -633,7 +633,8 @@ impl Ctx<'_> {
         }
         let nth_arg = get(step, "nth");
         // no nth: controls beat static text, and only several controls stay ambiguous
-        let choices = super::find::click_choices(&cands, text);
+        let typing = self.o.types_next.load(std::sync::atomic::Ordering::Relaxed);
+        let choices = super::find::click_choices(&cands, text, typing);
         if nth_arg.is_none() && choices.len() > 1 {
             let labels = choices
                 .iter()
@@ -1187,11 +1188,11 @@ impl Ctx<'_> {
                 } else {
                     "down".to_string()
                 };
-                let amount = match scroll_amount {
+                let asked = match scroll_amount {
                     Some(n) if n != 0 => n,
                     _ => int_or(step, "scroll_amount", 3)?,
-                }
-                .clamp(1, 30) as u32;
+                };
+                let amount = asked.clamp(1, 30) as u32;
                 self.with_modifiers(text, || {
                     let Some(dir) = ScrollDirection::parse(&direction) else {
                         // Python moved the pointer first, then refused the direction
@@ -1207,7 +1208,16 @@ impl Ctx<'_> {
                         })
                         .map_err(StepError::from)
                 })?;
-                Ok(format!("scrolled {direction} {amount}"))
+                Ok(if i64::from(amount) == asked {
+                    format!("scrolled {direction} {amount}")
+                } else {
+                    // 2026-11-09: "scrolled down 30" for an amount of 100 left the caller thinking
+                    // it had scrolled 100
+                    format!(
+                        "scrolled {direction} {amount} (capped: {asked} was asked, one scroll is at \
+                         most 30; scroll again for more)"
+                    )
+                })
             }
             _ => {
                 self.host_at(Point { x, y })?;

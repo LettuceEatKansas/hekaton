@@ -581,3 +581,67 @@ fn pictures_hide_apps_outside_only_apps_and_password_managers_always() {
     assert_ne!(px(&shot, 50, 50), grey, "the allowed app in front");
     assert_eq!(px(&shot, 305, 5), grey, "mail outside notepad");
 }
+
+// ---- 2026-11-09: an allowlist entry equals ANY identifier of the app (display name, process name
+// with or without .exe, bundle id); equality only.
+
+fn allowed_by(only: &[&str], kit: &Kit, w: WindowRef) -> Result<(), StepError> {
+    kit.ctx(json!({ "only_apps": only })).check_allowed(w)
+}
+
+#[test]
+fn an_entry_matches_a_window_by_bundle_id_display_name_or_process_name() {
+    let kit = Kit::new();
+    // the real log line: allowed "brave browser", window of com.brave.browser
+    let brave = add(&kit, "Page", "com.brave.browser", 10, "AXWindow");
+    allowed_by(&["brave browser"], &kit, brave).unwrap_err();
+    kit.fake.set_app_names(brave, &["Brave Browser"]);
+    allowed_by(&["brave browser"], &kit, brave).unwrap();
+    allowed_by(&["Brave Browser"], &kit, brave).unwrap();
+    allowed_by(&["com.brave.browser"], &kit, brave).unwrap();
+    // Windows style: the process name with and without .exe
+    let note = add(&kit, "n", "Notepad.exe", 11, "Notepad");
+    allowed_by(&["notepad.exe"], &kit, note).unwrap();
+    allowed_by(&["notepad"], &kit, note).unwrap();
+}
+
+#[test]
+fn a_near_miss_is_still_refused() {
+    let kit = Kit::new();
+    let helper = add(&kit, "h", "Brave Browser Helper Thing", 12, "AXWindow");
+    kit.fake
+        .set_app_names(helper, &["Brave Browser Helper Thing"]);
+    let e = refused(allowed_by(&["brave browser"], &kit, helper));
+    assert!(e.message().contains("may not touch"), "{e}");
+    let other = add(&kit, "o", "com.other.browser", 13, "AXWindow");
+    kit.fake.set_app_names(other, &["Other Browser"]);
+    refused(allowed_by(&["brave browser"], &kit, other));
+    // no prefix and no substring either way
+    let b = add(&kit, "b", "com.brave.browser", 14, "AXWindow");
+    kit.fake.set_app_names(b, &["Brave Browser"]);
+    refused(allowed_by(&["brave"], &kit, b));
+    refused(allowed_by(&["brave browser helper"], &kit, b));
+}
+
+#[test]
+fn open_app_resolves_the_name_before_the_allowlist_check() {
+    let kit = Kit::new();
+    kit.fake.set_app(
+        "brave",
+        crate::backend::AppTarget::Shortcut("/Applications/Brave Browser.app".into()),
+    );
+    kit.fake
+        .set_target_names("/Applications/Brave Browser.app", &["com.brave.browser"]);
+    // the real log line: 'Brave' under allowed "brave browser"
+    let ok = |entry: &str, name: &str| {
+        kit.ctx(json!({ "only_apps": [entry] }))
+            .check_launch_allowed(name)
+    };
+    ok("brave browser", "Brave").unwrap();
+    ok("com.brave.browser", "Brave").unwrap();
+    // near misses stay refused
+    ok("brave browser helper", "Brave").unwrap_err();
+    ok("com.other.browser", "Brave").unwrap_err();
+    ok("brave browser", "Brav").unwrap_err();
+    ok("brave browser", "Safari").unwrap_err();
+}

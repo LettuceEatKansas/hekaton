@@ -63,6 +63,23 @@ On Windows, the command is `C:\\Users\\you\\AppData\\Local\\Programs\\Hekaton\\h
 
 **An AI agent installing Hekaton for its user** runs the install line above for that operating system. It then tells the user about the two macOS permission switches and `hekaton acknowledge`, because only a person can do those.
 
+## Simple mode for small models
+
+The full `computer` tool has about 50 action names and many optional parameters, which small local models often get wrong. Simple mode serves the same hands as nine small, strict, text-only tools (`look`, `read_text`, `press`, `type`, `key`, `open`, `scroll`, `wait`, `approve`). Every call is translated into an ordinary `computer` call, so approval, `only_apps` and the audit log work exactly as before. Pick it with a profile:
+
+```json
+{
+  "mcpServers": {
+    "hekaton": {
+      "command": "/Users/you/Applications/hekaton.app/Contents/MacOS/hekaton",
+      "args": ["mcp", "--profile", "simple"]
+    }
+  }
+}
+```
+
+`--profile simple-vision` adds `screenshot` and `click_at`. A client that cannot pass arguments can set `HEKATON_MCP_PROFILE=simple` instead; the flag wins. With no profile, nothing changes. The design and acceptance criteria are in [docs/SIMPLE-MODE.md](docs/SIMPLE-MODE.md).
+
 ## Safety
 
 - Nothing acts until the owner has run `hekaton acknowledge` once.

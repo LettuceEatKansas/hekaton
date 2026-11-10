@@ -1110,3 +1110,60 @@ fn split_launch_keeps_a_spaced_app_name_whole() {
         ("notepad".to_string(), "notes.txt".to_string())
     );
 }
+
+// ---- 2026-11-09: a web address through open_app lands as a tab, with no new window or process.
+
+fn brave_with_title(kit: &Kit, title: &str) -> WindowRef {
+    let w = app_window(kit, title, "brave.exe", 77);
+    kit.fake
+        .update_window(w, |i| i.class = "Chrome_WidgetWin_1".into());
+    kit.fake.set_foreground(Some(w));
+    w
+}
+
+#[test]
+fn a_page_launch_that_retitles_a_browser_window_is_a_success() {
+    for target in ["brave https://example.com", "brave file:///tmp/a.html"] {
+        let kit = Kit::new();
+        let w = brave_with_title(&kit, "New Tab - Brave");
+        kit.fake.set_app(
+            "brave",
+            AppTarget::Executable("C:\\Brave\\brave.exe".into()),
+        );
+        kit.fake.set_launch_hook(move |fake, _| {
+            fake.update_window(w, |i| i.title = "Example - Brave".into());
+        });
+        let out = do_open(&kit, target, 2.0, true, true).unwrap();
+        assert!(
+            out.contains("opened the page") && out.contains("Example - Brave"),
+            "{out}"
+        );
+    }
+}
+
+#[test]
+fn a_page_launch_that_changes_nothing_is_still_a_failure() {
+    let kit = Kit::new();
+    brave_with_title(&kit, "New Tab - Brave");
+    kit.fake.set_app(
+        "brave",
+        AppTarget::Executable("C:\\Brave\\brave.exe".into()),
+    );
+    let e = do_open(&kit, "brave https://example.com", 0.5, true, true).unwrap_err();
+    assert!(e.message().contains("showed no window"), "{e}");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_display_name_of_two_words_finds_the_running_bundle() {
+    let kit = Kit::new();
+    let w = app_window(&kit, "Page", "com.brave.browser", 78);
+    kit.fake.set_app(
+        "brave browser",
+        AppTarget::Shortcut("/Applications/Brave Browser.app".into()),
+    );
+    let out = do_open(&kit, "Brave Browser", 0.5, true, true).unwrap();
+    assert!(out.contains("already running"), "{out}");
+    assert_eq!(kit.fake.foreground_window().unwrap(), Some(w));
+    assert!(kit.fake.launches().is_empty());
+}

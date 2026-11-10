@@ -1,0 +1,108 @@
+{
+  "name": "model-ab",
+  "tasks": [
+    {
+      "id": "read-order",
+      "prompt": "Open {fixtures}/order.html in the web browser and tell me the order number shown on the page.",
+      "check": {
+        "answer_contains": [
+          "ORD-48213"
+        ]
+      }
+    },
+    {
+      "id": "form-save",
+      "prompt": "Open {fixtures}/form-save.html in the web browser. Enter the full name Ada Lovelace and the email address ada@example.org, then press Save. Report the confirmation code shown on the page.",
+      "check": {
+        "answer_contains": [
+          "K899150"
+        ]
+      }
+    },
+    {
+      "id": "radio-quiz",
+      "prompt": "Open {fixtures}/quiz.html in the web browser. Answer the five questions like this: Favorite color Blue, Pet Fish, Season Winter, Drink Tea, Transport Train. Then press Submit answers and report the confirmation code shown on the page.",
+      "check": {
+        "answer_contains": [
+          "K035591"
+        ]
+      }
+    },
+    {
+      "id": "long-bottom",
+      "prompt": "Open {fixtures}/long.html in the web browser. It is a long page. Scroll to the very bottom and report the last word of the closing line.",
+      "check": {
+        "answer_contains": [
+          "lighthouse"
+        ]
+      }
+    },
+    {
+      "id": "timed-dialog",
+      "prompt": "Open {fixtures}/dialog.html in the web browser. A notice dialog appears a few seconds after the page loads. Press its OK button and report the text that is revealed afterwards.",
+      "check": {
+        "answer_contains": [
+          "amber tide seven"
+        ]
+      }
+    },
+    {
+      "id": "select-check",
+      "prompt": "Open {fixtures}/options.html in the web browser. Choose the size Large, tick the Gift wrap checkbox, press Place order, and report the confirmation code shown on the page.",
+      "check": {
+        "answer_contains": [
+          "K711266"
+        ]
+      }
+    },
+    {
+      "id": "calc-mul",
+      "app": {
+        "macos": "Calculator",
+        "windows": "Calculator"
+      },
+      "prompt": "Open the {app} app and work out 1234 * 56 with it. Report the result as digits only, with no separators.",
+      "check": {
+        "answer_contains": [
+          "69104"
+        ]
+      }
+    },
+    {
+      "id": "editor-save",
+      "app": {
+        "macos": "TextEdit",
+        "windows": "Notepad"
+      },
+      "hint": {
+        "macos": "TextEdit starts in rich text mode: switch to plain text first (Format menu, Make Plain Text, or shift+cmd+t) so the file is saved as plain text.",
+        "windows": "Save with ctrl+s and type the full path in the file name box."
+      },
+      "prompt": "Open {app}, type the single line: benchmark note 42 and save the document as {tmp}/note.txt (the full path, plain text). {hint} When the file is saved, call done.",
+      "check": {
+        "file_contains": {
+          "path": "{tmp}/note.txt",
+          "text": "benchmark note 42"
+        }
+      }
+    },
+    {
+      "id": "copy-between",
+      "prompt": "Open {fixtures}/link-a.html in the web browser and read the reference value on it. Then open {fixtures}/link-b.html, type that reference value into the Reference value field, press Verify, and report the confirmation code shown on the page.",
+      "check": {
+        "answer_contains": [
+          "K429302"
+        ]
+      }
+    },
+    {
+      "id": "table-lookup",
+      "prompt": "Open {fixtures}/table.html in the web browser. Find the row for Dana (not Dan, not Danielle) and report the number in its Total column.",
+      "check": {
+        "answer_contains": [
+          "842.75"
+        ]
+      }
+    }
+  ]
+}
